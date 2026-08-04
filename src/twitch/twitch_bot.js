@@ -8,7 +8,7 @@ export class TwitchBot {
         this.botId = botId;
         this.channelIdMap = channelIdMap || {};
         this.botUsername = String(botUsername || '').toLowerCase();
-
+console.log('[TwitchBot] Joining channels:', this.channels);this.channels = channels;
         this.client = new tmi.client({
             connection: {
                 reconnect: true,
