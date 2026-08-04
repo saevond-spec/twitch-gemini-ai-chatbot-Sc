@@ -911,4 +911,611 @@ app.listen(3000, () => {
     } catch (error) {
         console.error('[Startup] Twitch bootstrap failed:', error);
     }
+})();// ============================================================
+// SWEATYCLANKER WEB ROUTES
+// index.js - Part 3
+// ============================================================
+
+
+
+async function addMediaEntry(entry){
+
+    await storage.addMediaEntry(entry);
+
+
+    broadcastWs({
+
+        type:"media",
+
+        entry
+
+    });
+
+}
+
+
+
+
+
+app.ws("/ws", ()=>{
+
+    console.log(
+        "[WebSocket] Client connected"
+    );
+
+});
+
+
+
+
+// ============================================================
+// TWITCH AUTH
+// ============================================================
+
+
+function getRequestOrigin(req){
+
+    return `${req.protocol}://${req.get("host")}`;
+
+}
+
+
+
+
+function getRedirectUri(req){
+
+    return `${getRequestOrigin(req)}/auth/callback`;
+
+}
+
+
+
+
+
+function buildTwitchAuthUrl(req){
+
+
+    if(!process.env.TWITCH_CLIENT_ID){
+
+        throw new Error(
+            "Missing TWITCH_CLIENT_ID"
+        );
+
+    }
+
+
+
+    const scopes = [
+
+        "chat:read",
+
+        "chat:edit",
+
+        "user:bot",
+
+        "user:read:chat",
+
+        "user:write:chat"
+
+    ];
+
+
+
+    const url =
+        new URL(
+            "https://id.twitch.tv/oauth2/authorize"
+        );
+
+
+
+    url.searchParams.set(
+
+        "response_type",
+
+        "code"
+
+    );
+
+
+
+    url.searchParams.set(
+
+        "client_id",
+
+        process.env.TWITCH_CLIENT_ID
+
+    );
+
+
+
+    url.searchParams.set(
+
+        "redirect_uri",
+
+        getRedirectUri(req)
+
+    );
+
+
+
+    url.searchParams.set(
+
+        "scope",
+
+        scopes.join(" ")
+
+    );
+
+
+
+    return url.toString();
+
+
+}
+
+
+
+
+
+app.get(
+"/auth/login",
+(req,res)=>{
+
+
+    try{
+
+        res.redirect(
+            buildTwitchAuthUrl(req)
+        );
+
+
+    }
+    catch(error){
+
+        console.error(
+            error
+        );
+
+
+        res.status(500)
+        .send(error.message);
+
+    }
+
+
+});
+
+
+
+
+
+
+app.get(
+"/auth/callback",
+async(req,res)=>{
+
+
+    const code =
+        req.query.code;
+
+
+
+    if(!code){
+
+        return res
+        .status(400)
+        .send(
+            "Missing Twitch code"
+        );
+
+    }
+
+
+
+    try{
+
+
+        await exchangeCodeForTokens(
+
+            String(code),
+
+            getRedirectUri(req),
+
+            TWITCH_USERNAME
+
+        );
+
+
+
+        await initializeTwitchRuntime();
+
+
+
+        res.send(`
+
+        <html>
+
+        <body>
+
+        <h1>
+        SweatyClanker Connected ✅
+        </h1>
+
+        <p>
+        Twitch authorization completed.
+        </p>
+
+        <a href="/">
+        Dashboard
+        </a>
+
+
+        </body>
+
+        </html>
+
+        `);
+
+
+    }
+    catch(error){
+
+
+        console.error(
+            "[AUTH ERROR]",
+            error
+        );
+
+
+        res
+        .status(500)
+        .send(
+            error.message
+        );
+
+
+    }
+
+
+
+});
+
+
+
+
+
+// ============================================================
+// API ROUTES
+// ============================================================
+
+
+app.get(
+"/auth/status",
+(_req,res)=>{
+
+
+    res.json({
+
+        authorized:
+            isAuthorized(),
+
+        connected:
+            !!bot
+
+    });
+
+
+});
+
+
+
+
+
+app.get(
+"/api/channels",
+(_req,res)=>{
+
+
+    res.json(
+
+        JOIN_CHANNELS
+
+    );
+
+
+});
+
+
+
+
+
+app.get(
+"/api/channel-ids",
+(_req,res)=>{
+
+
+    res.json(
+
+        channelIdMap
+
+    );
+
+
+});
+
+
+
+
+
+app.get(
+"/api/chat/:channel",
+async(req,res)=>{
+
+
+    let channel =
+        req.params.channel;
+
+
+
+    if(
+        !channel.startsWith("#")
+    ){
+
+        channel =
+            "#" + channel;
+
+    }
+
+
+
+    const logs =
+        await storage.getChatLog(
+            channel
+        );
+
+
+
+    res.json(logs);
+
+
+});
+
+
+
+
+
+app.get(
+"/api/media",
+async(_req,res)=>{
+
+
+    const media =
+        await storage.getMediaLog();
+
+
+
+    res.json(media);
+
+
+});
+
+
+
+
+
+// ============================================================
+// GEMINI TEST ENDPOINT
+// ============================================================
+
+
+app.get(
+"/gemini/:text",
+async(req,res)=>{
+
+
+    if(!sweatyOps){
+
+        return res
+        .status(503)
+        .send(
+            "SweatyClanker not ready"
+        );
+
+    }
+
+
+
+    try{
+
+
+        const response =
+            await sweatyOps.make_gemini_call(
+
+                req.params.text
+
+            );
+
+
+
+        res.send(response);
+
+
+
+    }
+    catch(error){
+
+
+        console.error(error);
+
+
+
+        res
+        .status(500)
+        .send(
+            "Gemini failed"
+        );
+
+
+    }
+
+
+});
+
+
+
+
+
+// ============================================================
+// HOME PAGE
+// ============================================================
+
+
+app.get(
+"/",
+(req,res)=>{
+
+
+    if(!isAuthorized()){
+
+
+        return res.send(`
+
+        <html>
+
+        <body>
+
+        <h1>
+        SweatyClanker Setup
+        </h1>
+
+
+        <p>
+        Twitch authorization required.
+        </p>
+
+
+        <a href="/auth/login">
+
+        Connect Twitch
+
+        </a>
+
+
+        </body>
+
+        </html>
+
+
+        `);
+
+
+    }
+
+
+
+
+
+    res.render(
+
+        "pages/index",
+
+        {
+
+            twitchAuthorized:true,
+
+            twitchConnected:
+                !!bot,
+
+            storageConfigured:
+                storage.configured
+
+        }
+
+    );
+
+
+});
+
+
+
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+
+app.listen(
+3000,
+()=>{
+
+
+    console.log(`
+
+================================================
+
+ SweatyClanker Server Online
+
+ Port: 3000
+
+================================================
+
+`);
+
+});
+
+
+
+
+// ============================================================
+// BOOTSTRAP
+// ============================================================
+
+
+(async()=>{
+
+
+    try{
+
+
+        const ready =
+            await loadTokens();
+
+
+
+        if(ready){
+
+
+            await initializeTwitchRuntime();
+
+
+        }
+        else{
+
+
+            console.log(
+
+            "[Startup] Waiting for Twitch login"
+
+            );
+
+
+        }
+
+
+    }
+    catch(error){
+
+
+        console.error(
+
+            "[Startup Failure]",
+
+            error
+
+        );
+
+
+    }
+
+
 })();
