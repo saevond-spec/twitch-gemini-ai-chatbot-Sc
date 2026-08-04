@@ -2,7 +2,7 @@ import express from 'express';
 import expressWs from 'express-ws';
 import fs from 'fs';
 import { job } from './utils/keep_alive.js';
-import { AIOperations } from './ai/operations.js';
+import AIOperations from './ai/operations.js';
 import { TwitchBot } from './twitch/twitch_bot.js';
 import EmoteHandler from './twitch/emote_handler.js';
 import MediaProcessor from './media/media_processor.js';
