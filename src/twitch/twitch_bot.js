@@ -8,7 +8,9 @@ export class TwitchBot {
         this.botId = botId;
         this.channelIdMap = channelIdMap || {};
         this.botUsername = String(botUsername || '').toLowerCase();
-console.log('[TwitchBot] Joining channels:', this.channels);this.channels = channels;
+
+        console.log('[TwitchBot] Joining channels:', this.channels);
+
         this.client = new tmi.client({
             connection: {
                 reconnect: true,
@@ -24,6 +26,26 @@ console.log('[TwitchBot] Joining channels:', this.channels);this.channels = chan
             channels: this.channels
         });
 
+        this.client.on('join', (channel, username, self) => {
+            if (self) {
+                console.log(`[TwitchBot] Joined ${channel}`);
+            }
+        });
+
+        this.client.on('connected', (address, port) => {
+            console.log(`[TwitchBot] Connected to ${address}:${port}`);
+        });
+
+        this.client.on('disconnected', (reason) => {
+            console.log(`[TwitchBot] Disconnected: ${reason}`);
+        });
+
+        this.client.on('message', (channel, userstate, message, self) => {
+            if (!self) {
+                console.log(`[TwitchBot] Message in ${channel} from ${userstate.username}: ${message}`);
+            }
+        });
+
         this.messageBuffers = new Map();
         this.maxBufferSize = 1000;
 
@@ -37,16 +59,22 @@ console.log('[TwitchBot] Joining channels:', this.channels);this.channels = chan
     async connect(onConnected, onDisconnected) {
         try {
             await getUserToken();
+
+            console.log('[TwitchBot] Connecting...');
             await this.client.connect();
-            if (onConnected) onConnected();
+
+            if (onConnected) {
+                onConnected();
+            }
         } catch (error) {
             console.error('[TwitchBot] Connection failed:', error);
-            if (onDisconnected) onDisconnected(error);
+
+            if (onDisconnected) {
+                onDisconnected(error);
+            }
         }
     }
-this.client.on('join', (channel, username, self) => {
-    if (self) console.log(`[TwitchBot] Joined ${channel}`);
-});
+
     onMessage(callback) {
         this.client.on('message', callback);
     }
@@ -72,10 +100,23 @@ this.client.on('join', (channel, username, self) => {
                 throw new Error('Bot ID is missing');
             }
 
-            await sendChatMessage(broadcasterId, this.botId, message);
-            this.addMessageToBuffer(channel, this.botUsername, message);
+            await sendChatMessage(
+                broadcasterId,
+                this.botId,
+                message
+            );
+
+            this.addMessageToBuffer(
+                channel,
+                this.botUsername,
+                message
+            );
+
         } catch (error) {
-            console.error('[TwitchBot] Failed to send message:', error.message || error);
+            console.error(
+                '[TwitchBot] Failed to send message:',
+                error.message || error
+            );
         }
     }
 
@@ -85,6 +126,7 @@ this.client.on('join', (channel, username, self) => {
         }
 
         const buffer = this.messageBuffers.get(channel);
+
         const entry = {
             username,
             message,
@@ -107,16 +149,29 @@ this.client.on('join', (channel, username, self) => {
 
     getRecentMessages(channel, count = 10, commandNames = []) {
         const buffer = this.messageBuffers.get(channel);
-        if (!buffer) return [];
+
+        if (!buffer) {
+            return [];
+        }
 
         return buffer
             .slice(-count)
             .filter(entry => {
-                const message = String(entry.message || '').toLowerCase().trim();
-                const isCommand = commandNames.some(cmd => message.startsWith(cmd));
-                const isMe = String(entry.username || '').toLowerCase() === this.botUsername;
+                const message = String(entry.message || '')
+                    .toLowerCase()
+                    .trim();
+
+                const isCommand = commandNames.some(cmd =>
+                    message.startsWith(cmd)
+                );
+
+                const isMe =
+                    String(entry.username || '').toLowerCase() === this.botUsername;
+
                 return !isCommand && !isMe;
             })
-            .map(entry => `${entry.username}: ${entry.message}`);
+            .map(entry =>
+                `${entry.username}: ${entry.message}`
+            );
     }
 }
