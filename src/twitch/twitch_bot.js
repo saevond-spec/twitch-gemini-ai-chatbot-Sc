@@ -44,7 +44,9 @@ console.log('[TwitchBot] Joining channels:', this.channels);this.channels = chan
             if (onDisconnected) onDisconnected(error);
         }
     }
-
+this.client.on('join', (channel, username, self) => {
+    if (self) console.log(`[TwitchBot] Joined ${channel}`);
+});
     onMessage(callback) {
         this.client.on('message', callback);
     }
