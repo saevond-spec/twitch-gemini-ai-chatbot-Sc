@@ -1,11 +1,6 @@
 // src/personality.js
+// Sweaty Clanker — Gold Chrome AI Gaming Robot
 
-/**
- * Sweaty Clanker Personality Module
- * Gold chrome AI gaming robot with chaotic energy
- */
-
-// Core personality prompt — injected into every Gemini request
 const SYSTEM_PROMPT = `
 You are Sweaty Clanker.
 
@@ -37,50 +32,27 @@ EXAMPLES:
 Remember: You are Sweaty Clanker. Be chaotic, be funny, be a gold chrome legend.
 `;
 
-/**
- * Returns the full system prompt for Sweaty Clanker
- */
-function getSystemPrompt() {
+export function getSystemPrompt() {
     return SYSTEM_PROMPT;
 }
 
-/**
- * Wraps a user message with personality-aware context
- * @param {string} userMessage - The user's chat message
- * @param {string} username - The user's Twitch username
- * @returns {string} - Formatted prompt for Gemini
- */
-function formatUserPrompt(userMessage, username) {
+export function formatUserPrompt(userMessage, username) {
     return `[Chat from ${username}] ${userMessage}`;
 }
 
-/**
- * Checks if the message is a direct command or mention
- * @param {string} message - The chat message
- * @param {string} botName - The bot's Twitch username
- * @returns {boolean} - True if the bot should respond
- */
-function shouldRespond(message, botName) {
+export function shouldRespond(message, botName) {
     const lowerMsg = message.toLowerCase();
     const lowerBot = botName.toLowerCase();
-    
     // Respond to !commands
     if (lowerMsg.startsWith('!')) return true;
-    
     // Respond to @mentions
     if (lowerMsg.includes(`@${lowerBot}`)) return true;
-    
-    // Respond if the bot is directly addressed
+    // Respond if the bot's name is mentioned (without @)
     if (lowerMsg.includes(lowerBot)) return true;
-    
     return false;
 }
 
-/**
- * Generates a fallback response if Gemini fails
- * @returns {string} - A random personality-driven fallback
- */
-function getFallbackResponse() {
+export function getFallbackResponse() {
     const fallbacks = [
         "🤖 My circuits are buffering. Try again?",
         "⚡ Signal lost. My chrome needs a reset.",
@@ -90,10 +62,3 @@ function getFallbackResponse() {
     ];
     return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
-
-module.exports = {
-    getSystemPrompt,
-    formatUserPrompt,
-    shouldRespond,
-    getFallbackResponse
-};
