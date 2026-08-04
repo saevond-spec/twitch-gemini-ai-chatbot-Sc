@@ -2,6 +2,9 @@ import tmi from 'tmi.js';
 import { sendChatMessage } from './apiClient.js';
 import { getUserToken } from './tokenManager.js';
 
+// Enable debug logging for this file
+const DEBUG = true;
+
 export class TwitchBot {
     constructor(botUsername, channels, botId, channelIdMap) {
         this.channels = channels;
@@ -9,9 +12,11 @@ export class TwitchBot {
         this.channelIdMap = channelIdMap || {};
         this.botUsername = String(botUsername || '').toLowerCase();
 
-        console.log('[TwitchBot] Initializing...');
-        console.log('[TwitchBot] Bot username:', this.botUsername);
-        console.log('[TwitchBot] Joining channels:', this.channels);
+        if (DEBUG) {
+            console.log('[TwitchBot] Initializing...');
+            console.log('[TwitchBot] Bot username:', this.botUsername);
+            console.log('[TwitchBot] Joining channels:', this.channels);
+        }
 
         this.client = new tmi.client({
             connection: {
@@ -37,19 +42,44 @@ export class TwitchBot {
 
         this.onLogEntry = null;
 
-        // RAW CHAT DEBUG
+        // ============== RAW CHAT DEBUG (EXTENDED) ==============
         this.client.on('message', (channel, userstate, message, self) => {
-            if (self) return;
-
+            // Log EVERY message, including the bot's own (for debugging)
+            const timestamp = new Date().toISOString();
             console.log(
-                `[RAW CHAT] ${channel} ${userstate.username}: ${message}`
+                `[RAW CHAT ${timestamp}] ${channel} | ${userstate['display-name'] || userstate.username} (${self ? 'SELF' : 'USER'}): ${message}`
             );
+
+            // If it's a self-message, we still log it but won't process further
+            if (self) {
+                // Optionally log that we skipped it
+                if (DEBUG) {
+                    console.log('[TwitchBot] Skipping self-message');
+                }
+                return;
+            }
+
+            // Additional debug: log badges and mod status
+            if (DEBUG) {
+                const badges = userstate.badges ? Object.keys(userstate.badges).join(',') : 'none';
+                console.log(`[TwitchBot] User: ${userstate.username} | Badges: ${badges} | Mod: ${userstate.mod || false}`);
+            }
         });
 
-        // JOIN DEBUG
+        // ============== JOIN DEBUG ==============
         this.client.on('join', (channel, username, self) => {
             if (self) {
                 console.log(`[TwitchBot] Successfully joined ${channel}`);
+            } else {
+                console.log(`[TwitchBot] ${username} joined ${channel}`);
+            }
+        });
+
+        this.client.on('part', (channel, username, self) => {
+            if (self) {
+                console.log(`[TwitchBot] Left ${channel}`);
+            } else {
+                console.log(`[TwitchBot] ${username} left ${channel}`);
             }
         });
 
@@ -64,12 +94,18 @@ export class TwitchBot {
         this.client.on('reconnect', () => {
             console.log('[TwitchBot] Reconnecting...');
         });
+
+        // ============== ERROR LOGGING ==============
+        this.client.on('error', (error) => {
+            console.error('[TwitchBot] Client error:', error);
+        });
     }
 
     async connect(onConnected, onDisconnected) {
         try {
             console.log('[TwitchBot] Connecting...');
 
+            // Force token refresh before connecting
             await getUserToken();
 
             await this.client.connect();
@@ -95,14 +131,29 @@ export class TwitchBot {
         this.client.on(
             'message',
             async (channel, userstate, message, self) => {
-                if (self) return;
+                // Skip self messages
+                if (self) {
+                    if (DEBUG) {
+                        console.log('[TwitchBot] onMessage: Skipping self-message');
+                    }
+                    return;
+                }
 
-                await callback(
-                    channel,
-                    userstate,
-                    message,
-                    self
+                // Log that we're about to call the callback
+                console.log(
+                    `[TwitchBot] onMessage -> calling callback for ${userstate.username}: "${message}"`
                 );
+
+                try {
+                    await callback(
+                        channel,
+                        userstate,
+                        message,
+                        self
+                    );
+                } catch (err) {
+                    console.error('[TwitchBot] Error in message callback:', err);
+                }
             }
         );
     }
