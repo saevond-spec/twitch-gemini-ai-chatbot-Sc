@@ -164,7 +164,7 @@ export class TwitchClient {
         }
       });
 
-      // ---- Message and other events (unchanged) ----
+      // ---- Message and other events ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
         this.emit('message', channel, user, message, false);
