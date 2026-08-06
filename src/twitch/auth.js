@@ -12,7 +12,7 @@ const TOKEN_FILE = './tokens.json';
 let currentToken = null;
 let refreshTimer = null;
 
-// Simplified, validated scopes
+// VALID SCOPES – removed invalid "channel:manage:shoutouts" and "channel:read:guest_star"
 const SCOPES = [
   'chat:read', 'chat:edit',
   'user:bot', 'user:read:chat', 'user:write:chat',
