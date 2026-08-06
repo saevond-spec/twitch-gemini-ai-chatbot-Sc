@@ -5,11 +5,11 @@ import { getAccessToken } from './auth.js';
 import { createLogger } from '../logger/index.js';
 import { RateLimiter } from '../utils/rateLimiter.js';
 import { ReconnectStateMachine } from '../state/reconnectState.js';
+import { metrics } from '../utils/metrics.js';
 
 const log = createLogger('IRC');
 
 export class TwitchClient {
-  // Static counter for active client instances
   static _activeClients = 0;
 
   constructor() {
@@ -26,9 +26,12 @@ export class TwitchClient {
 
     this._disconnecting = false;
     this._reconnectAttempt = 0;
-    this._maxReconnectAttempts = 20;    // increased from 10
-    this._state = 'idle';                // idle, connecting, connected, disconnecting, reconnecting, failed
+    this._maxReconnectAttempts = 20;
+    this._state = 'idle';
+    this._lastPing = 0;
+    this._reconnectTimer = null;
 
+    // ---- Custom reconnect state machine (now the ONLY controller) ----
     this.stateMachine = new ReconnectStateMachine({
       maxAttempts: this._maxReconnectAttempts,
       baseDelay: 1000,
@@ -37,6 +40,7 @@ export class TwitchClient {
     });
 
     this.stateMachine.on('reconnecting', (attempt) => {
+      metrics.ircReconnects.inc();
       this._reconnectAttempt = attempt;
       this._state = 'reconnecting';
       log.info(`Reconnect attempt ${attempt} (state: ${this._state})`);
@@ -50,13 +54,19 @@ export class TwitchClient {
       this.emit('disconnected', 'Max attempts');
     });
 
-    // Increment active clients counter
     TwitchClient._activeClients++;
     log.debug(`Active IRC clients: ${TwitchClient._activeClients}`);
   }
 
   connect() {
     return new Promise((resolve, reject) => {
+      // Prevent concurrent connect attempts
+      if (this._state === 'connecting') {
+        log.warn('Connection already in progress');
+        reject(new Error('Connection already in progress'));
+        return;
+      }
+
       if (this.client) {
         log.warn('Client already exists, disconnecting first');
         this.disconnect();
@@ -69,23 +79,45 @@ export class TwitchClient {
         return;
       }
 
+      // Cancel any pending reconnect timer from our state machine
+      if (this._reconnectTimer) {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+      }
+
       this._state = 'connecting';
       log.info(`Connecting to Twitch IRC... (state: ${this._state}, attempt: ${this._reconnectAttempt})`);
       this.stateMachine.reset();
 
-      // Create tmi client with debug enabled temporarily
+      // ---- Create tmi client with internal reconnect DISABLED ----
       this.client = new tmi.Client({
-        options: { debug: true }, // enable debug logs
+        options: { debug: true }, // temporary for close codes
         identity: {
           username: config.twitch.username,
           password: `oauth:${token}`,
         },
         channels: this.channels,
-        connection: { reconnect: true, secure: true },
+        // ⬇️ CRITICAL FIX: disable tmi's internal reconnect
+        connection: { reconnect: false, secure: true },
       });
 
-      // ---- Standard tmi event handlers ----
+      // ---- Ping/Pong heartbeat logging ----
+      this.client.on('ping', () => {
+        this._lastPing = Date.now();
+        log.debug('PING received from Twitch');
+      });
+      this.client.on('pong', (latency) => {
+        const measured = Date.now() - this._lastPing;
+        log.debug(`PONG received, latency: ${measured}ms`);
+      });
+
+      // ---- Connected ----
       this.client.on('connected', (addr, port) => {
+        // Clear any reconnect timer from state machine
+        if (this.stateMachine._timer) {
+          clearTimeout(this.stateMachine._timer);
+          this.stateMachine._timer = null;
+        }
         this.connected = true;
         this._state = 'connected';
         this._reconnectAttempt = 0;
@@ -93,7 +125,7 @@ export class TwitchClient {
         log.info(`✅ Connected to ${addr}:${port} (state: ${this._state})`);
         this.emit('connected', addr, port);
 
-        // ---- Attach WebSocket close/error listeners for detailed codes ----
+        // Attach WebSocket close/error listeners for detailed codes
         if (this.client && this.client.ws) {
           this.client.ws.on('close', (code, reason) => {
             const reasonStr = reason ? reason.toString() : 'no reason';
@@ -110,23 +142,29 @@ export class TwitchClient {
         resolve();
       });
 
+      // ---- Disconnected ----
       this.client.on('disconnected', (reason) => {
         this.connected = false;
         this._state = 'disconnected';
         log.warn(`Disconnected: ${reason} (state: ${this._state})`);
         this.emit('disconnected', reason);
+        // Only trigger our state machine if we didn't initiate the disconnect
         if (!this._disconnecting) {
           this.stateMachine.disconnected();
         }
       });
 
+      // ---- tmi's internal reconnect event (won't fire because reconnect:false, but keep as safety) ----
       this.client.on('reconnect', () => {
         this._state = 'reconnecting';
         log.warn('Received RECONNECT from Twitch (state: reconnecting)');
-        this.stateMachine.disconnected();
+        // Trigger our state machine to handle it
+        if (!this._disconnecting) {
+          this.stateMachine.disconnected();
+        }
       });
 
-      // ---- Message and other events ----
+      // ---- Message and other events (unchanged) ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
         this.emit('message', channel, user, message, false);
@@ -150,7 +188,7 @@ export class TwitchClient {
         this.emit('whisper', from, user, message);
       });
 
-      // Connection timeout (fallback if tmi doesn't connect)
+      // Connection timeout fallback
       const timeout = setTimeout(() => {
         if (!this.connected) {
           this._state = 'failed';
@@ -173,6 +211,10 @@ export class TwitchClient {
     this._state = 'disconnecting';
     log.info(`Disconnecting IRC (state: ${this._state})`);
     this.stateMachine.reset();
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this.client) {
       this.client.disconnect();
       this.client = null;
@@ -187,6 +229,14 @@ export class TwitchClient {
     if (this._disconnecting) {
       log.debug('Reconnect aborted – disconnecting in progress');
       return;
+    }
+    if (this.connected || this._state === 'connected') {
+      log.debug('Already connected, skipping reconnect');
+      return;
+    }
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
     }
     log.info(`Attempting reconnect (attempt ${this._reconnectAttempt})`);
     try {
