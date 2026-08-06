@@ -140,10 +140,9 @@ app.get('/metrics', async (req, res) => {
   res.send(await getMetrics());
 });
 
-// ---- Auth ----
+// ---- AUTH ROUTES ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-  // Valid scopes (space-separated)
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators channel:read:subscriptions channel:read:redemptions channel:manage:predictions channel:manage:polls bits:read channel:read:hype_train channel:manage:raids channel:read:goals`;
   res.redirect(url);
 });
