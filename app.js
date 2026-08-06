@@ -1,3 +1,4 @@
+// src/app.js – Full version with instrumented message pipeline
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -229,88 +230,17 @@ async function loadCustomCommandsIntoMemory() {
   customCommands = await loadCustomCommands();
 }
 
-async function initializeBot() {
-  if (botInitialized) {
-    log.warn('Bot already initialized, skipping duplicate call');
-    return;
-  }
-  botInitialized = true;
-  log.info('Starting bot initialization...');
-  if (!isAuthorized()) {
-    log.warn('No valid token; bot not starting');
-    return;
-  }
-  log.info('Initializing DeepSeek client...');
-  deepseek = new DeepSeekClient();
-  log.info('DeepSeek client ready');
-  log.info('Initializing moderation...');
-  moderation = new Moderation(config.moderation);
-  log.info('Loading custom commands...');
-  await loadCustomCommandsIntoMemory();
-  log.info('Starting BullMQ workers...');
-  const queueNames = Object.keys(jobHandlers);
-  for (const q of queueNames) {
-    const worker = startWorker(q, jobHandlers[q], 1);
-    workers.push(worker);
-  }
-  log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
-  log.info('Loading plugins...');
-  await loadPlugins(bus, config);
-  const twitchClient = global.twitchClient;
-  if (twitchClient) {
-    log.info('Initializing message queue...');
-    messageQueue = new MessageQueue(twitchClient);
-    log.info('Message queue initialized');
-  }
-  if (config.eventsub.secret) {
-    try {
-      log.info('Connecting to EventSub...');
-      eventSubClient = new EventSubClient();
-      await eventSubClient.connect();
-      log.info('EventSub client connected');
-    } catch (err) {
-      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
-    }
-  } else {
-    log.info('EventSub secret not set – skipping EventSub');
-  }
-  bus.on('twitch.message', async (...args) => {
-    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
-  });
-  bus.on('twitch.usernotice', async (...args) => {
-    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
-  });
-  bus.on('twitch.clearchat', async (...args) => {
-    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
-  });
-  bus.on('twitch.send', ({ channel, message }) => {
-    try {
-      if (messageQueue) messageQueue.enqueue(channel, message);
-      else twitchClient?.say(channel, message);
-    } catch (err) { log.error('Error in twitch.send handler', err); }
-  });
-  if (AUTO_WELCOME) {
-    bus.on('twitch.join', async (...args) => {
-      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
-    });
-  }
-  bus.on('twitch.ready', () => {
-    log.info('Twitch client is ready. Starting auto-messages...');
-    startAutoMessages();
-  });
-  log.info('Bot initialization complete');
-  broadcast({ type: 'ready' });
-}
-
-// ====== MAIN MESSAGE HANDLER (with incoming log) ======
+// =====================================================
+//  MESSAGE HANDLER – defined BEFORE initializeBot
+// =====================================================
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
   promMetrics.messagesReceived.inc();
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
 
-  // --- INCOMING LOG (info level) ---
-  log.info(`IN: ${username} @ ${channel}: ${message}`);
+  // This log will appear for every chat message
+  log.info(`📩 IN: ${username} @ ${channel}: ${message}`);
 
   await ConversationStore.updateLastActivity(channel);
   if (config.twitch.ignoredUsers.includes(login)) return;
@@ -327,9 +257,10 @@ async function handleMessage({ channel, user, message, self }) {
 
   const lowerMsg = message.trim().toLowerCase();
 
-  // Custom commands
+  // ---- CUSTOM COMMANDS ----
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
   if (cmdKey) {
+    log.info(`🔧 Custom command matched: ${cmdKey}`);
     const cmd = customCommands.get(cmdKey);
     const hasPermission = cmd.role === 'all' ||
       (cmd.role === 'moderator' && (user.mod || user.badges?.broadcaster)) ||
@@ -348,9 +279,10 @@ async function handleMessage({ channel, user, message, self }) {
     }
   }
 
-  // Built-in commands
+  // ---- BUILT-IN COMMANDS ----
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
+    log.info(`⚡ Built-in command matched: ${builtinKey}`);
     const cmd = builtins.get(builtinKey);
     const cooldownKey = `${channel}:${login}`;
     if (!cooldown.check(cooldownKey)) return;
@@ -363,7 +295,7 @@ async function handleMessage({ channel, user, message, self }) {
     return;
   }
 
-  // Media generation
+  // ---- MEDIA GENERATION ----
   const mediaCommands = {
     [config.media.imageCommand]: { type: 'image', handler: pollinations.generateImage.bind(pollinations) },
     [config.media.videoCommand]: { type: 'video', handler: pollinations.generateVideo.bind(pollinations) },
@@ -372,6 +304,7 @@ async function handleMessage({ channel, user, message, self }) {
   };
   for (const [cmd, { type, handler }] of Object.entries(mediaCommands)) {
     if (lowerMsg.startsWith(cmd)) {
+      log.info(`🎨 Media command matched: ${cmd}`);
       const prompt = message.slice(cmd.length).trim();
       if (!prompt) {
         const response = `Usage: ${cmd} <description>`;
@@ -403,9 +336,12 @@ async function handleMessage({ channel, user, message, self }) {
     }
   }
 
-  // AI chat
+  // ---- AI CHAT ----
   const shouldReply = shouldRespond(message, config.twitch.username);
-  if (!shouldReply) return;
+  if (!shouldReply) {
+    log.debug(`Skipping AI: no mention/greeting`);
+    return;
+  }
 
   const cooldownKey = `${channel}:${login}`;
   if (!cooldown.check(cooldownKey)) return;
@@ -425,6 +361,7 @@ async function handleMessage({ channel, user, message, self }) {
   ];
 
   try {
+    log.info(`🤖 Sending to DeepSeek (brain: ${brainName})`);
     const start = Date.now();
     const reply = await deepseek.chat(messages, { temperature, maxTokens });
     const latency = Date.now() - start;
@@ -500,10 +437,107 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
+// =====================================================
+//  BOT INITIALIZATION
+// =====================================================
+async function initializeBot() {
+  if (botInitialized) {
+    log.warn('Bot already initialized, skipping duplicate call');
+    return;
+  }
+  botInitialized = true;
+
+  log.info('Starting bot initialization...');
+  if (!isAuthorized()) {
+    log.warn('No valid token; bot not starting');
+    return;
+  }
+
+  log.info('Initializing DeepSeek client...');
+  deepseek = new DeepSeekClient();
+  log.info('DeepSeek client ready');
+
+  log.info('Initializing moderation...');
+  moderation = new Moderation(config.moderation);
+
+  log.info('Loading custom commands...');
+  await loadCustomCommandsIntoMemory();
+
+  log.info('Starting BullMQ workers...');
+  const queueNames = Object.keys(jobHandlers);
+  for (const q of queueNames) {
+    const worker = startWorker(q, jobHandlers[q], 1);
+    workers.push(worker);
+  }
+  log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
+
+  // ---- REGISTER BUS LISTENERS BEFORE PLUGINS (CRITICAL) ----
+  bus.on('twitch.message', async (...args) => {
+    log.info('🔊 BUS: twitch.message event received');
+    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
+  });
+
+  bus.on('twitch.usernotice', async (...args) => {
+    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
+  });
+
+  bus.on('twitch.clearchat', async (...args) => {
+    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
+  });
+
+  bus.on('twitch.send', ({ channel, message }) => {
+    try {
+      if (messageQueue) messageQueue.enqueue(channel, message);
+      else twitchClient?.say(channel, message);
+    } catch (err) { log.error('Error in twitch.send handler', err); }
+  });
+
+  if (AUTO_WELCOME) {
+    bus.on('twitch.join', async (...args) => {
+      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
+    });
+  }
+
+  // ---- LOAD PLUGINS (IRC CONNECTS HERE) ----
+  log.info('Loading plugins...');
+  await loadPlugins(bus, config);
+
+  const twitchClient = global.twitchClient;
+  if (twitchClient) {
+    log.info('Initializing message queue...');
+    messageQueue = new MessageQueue(twitchClient);
+    log.info('Message queue initialized');
+  }
+
+  // ---- EVENTSUB (optional) ----
+  if (config.eventsub.secret) {
+    try {
+      log.info('Connecting to EventSub...');
+      eventSubClient = new EventSubClient();
+      await eventSubClient.connect();
+      log.info('EventSub client connected');
+    } catch (err) {
+      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
+    }
+  } else {
+    log.info('EventSub secret not set – skipping EventSub');
+  }
+
+  bus.on('twitch.ready', () => {
+    log.info('Twitch client is ready. Starting auto-messages...');
+    startAutoMessages();
+  });
+
+  log.info('Bot initialization complete');
+  broadcast({ type: 'ready' });
+}
+
+// ---- Root route ----
 app.get('/', (req, res) => {
   res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
 });
 
+// ---- Startup ----
 async function bootstrap() {
   log.info('🚀 Starting SweatyClanker v3...');
   log.info('🔌 Connecting to Redis...');
@@ -531,6 +565,7 @@ async function bootstrap() {
   });
 }
 
+// ---- Shutdown ----
 async function shutdown() {
   log.info('Shutting down gracefully...');
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
