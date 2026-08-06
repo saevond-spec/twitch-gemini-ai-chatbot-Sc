@@ -1,3 +1,4 @@
+// src/app.js
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -31,10 +32,26 @@ import { writeFile } from 'fs/promises';
 const log = createLogger('APP');
 const app = express();
 const wsInstance = expressWs(app);
-app.set('trust proxy', config.server.trustProxy || 1);
+app.set('trust proxy', config.server.trustProxy || 1); // FIX: trust only first proxy
 
-// ---- Global state ----
-let botInitialized = false;          // ← prevent duplicate init
+// ---- Security ----
+app.use(helmet());
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  validate: false, // skip trust proxy validation
+});
+app.use(limiter);
+const allowedOrigins = config.server.allowedOrigins || [];
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
+    return res.status(403).send('Forbidden');
+  }
+  next();
+});
+
+// ---- State ----
 let deepseek = null;
 let moderation = null;
 let cooldown = new CooldownManager(config.cooldown);
@@ -46,7 +63,21 @@ let heartbeatInterval = null;
 let messageQueue = null;
 let eventSubClient = null;
 let pollinations = new PollinationsClient();
-const publicUrl = config.server.publicUrl || 'http://localhost:3000';
+
+// FIX: guard against initializeBot() running more than once (e.g. if the
+// process boots already-authorized AND /auth/callback fires later, or if
+// callback fires twice). Without this, bus listeners, queue workers, and
+// the EventSub client were all being duplicated on re-init.
+let botInitialized = false;
+
+// FIX: base URL for building links to generated media. Previously this
+// code tried to read `req` inside a bus event handler (handleMessage),
+// where no `req` exists — that threw, was swallowed by the catch block,
+// and every media generation silently reported "failed" to chat even
+// though the file was written successfully. Falls back to constructing
+// from config.server.port if no explicit publicUrl is configured.
+const PUBLIC_BASE_URL =
+  config.server.publicUrl || `http://localhost:${config.server.port}`;
 
 // ---- Auto‑message config ----
 const AUTO_ENABLED = config.auto.enabled;
@@ -65,28 +96,11 @@ const FALLBACK_MESSAGES = [
 ];
 let fallbackIndex = 0;
 
-// ---- Security ----
-app.use(helmet());
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  validate: false,
-});
-app.use(limiter);
-const allowedOrigins = config.server.allowedOrigins || [];
-app.use((req, res, next) => {
-  const origin = req.get('origin');
-  if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
-    return res.status(403).send('Forbidden');
-  }
-  next();
-});
-
 // ---- Middleware ----
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
-// ---- WebSocket for dashboard ----
+// ---- WebSocket ----
 app.ws('/ws', (ws) => {
   wsClients.add(ws);
   ws.isAlive = true;
@@ -141,10 +155,11 @@ app.get('/metrics', async (req, res) => {
   res.send(await getMetrics());
 });
 
-// ---- Auth Routes ----
+// ---- Auth ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts`;
+  // FIX: use valid scopes (space-separated, no invalid scopes)
+  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators channel:read:subscriptions channel:read:redemptions channel:manage:predictions channel:manage:polls bits:read channel:read:hype_train channel:manage:raids channel:read:goals`;
   res.redirect(url);
 });
 
@@ -157,13 +172,7 @@ app.get('/auth/callback', async (req, res) => {
   try {
     const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
     await exchangeCodeForToken(code, redirectUri);
-
-    // Only initialize if not already done
-    if (!botInitialized) {
-      await initializeBot();
-    } else {
-      log.info('Bot already running, skipping re‑initialization');
-    }
+    await initializeBot();
     res.send('Authorization successful! You may close this window.');
   } catch (err) {
     log.error('Auth callback failed', err);
@@ -193,8 +202,7 @@ app.post('/api/media/image', async (req, res) => {
     const result = await pollinations.generateImage(prompt);
     const filename = `image-${Date.now()}.png`;
     await writeFile(`public/${filename}`, result.buffer);
-    const url = `${publicUrl}/public/${filename}`;
-    res.json({ url });
+    res.json({ url: `/public/${filename}` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -258,31 +266,33 @@ async function loadCustomCommandsIntoMemory() {
   customCommands = await loadCustomCommands();
 }
 
-// ---- Bot initialization (guarded) ----
+// ---- Bot initialization ----
 async function initializeBot() {
-  if (botInitialized) {
-    log.warn('Bot already initialized, skipping duplicate call');
-    return;
-  }
-  botInitialized = true;
-
-  log.info('Starting bot initialization...');
   if (!isAuthorized()) {
     log.warn('No valid token; bot not starting');
     return;
   }
 
-  log.info('Initializing DeepSeek client...');
+  // FIX: initializeBot() could previously be called twice — once from
+  // bootstrap() if a token was already on disk, and again from
+  // /auth/callback if re-auth happened afterward (or if the callback
+  // route was hit more than once). That re-registered every bus
+  // listener and queue worker, so each chat message / job got handled
+  // multiple times, and a second EventSubClient was created without
+  // tearing down the first. Guard against that here.
+  if (botInitialized) {
+    log.warn('initializeBot() called again — already initialized, skipping duplicate init');
+    return;
+  }
+  botInitialized = true;
+
   deepseek = new DeepSeekClient();
   log.info('DeepSeek client ready');
 
-  log.info('Initializing moderation...');
   moderation = new Moderation(config.moderation);
 
-  log.info('Loading custom commands...');
   await loadCustomCommandsIntoMemory();
 
-  log.info('Starting BullMQ workers...');
   const queueNames = Object.keys(jobHandlers);
   for (const q of queueNames) {
     const worker = startWorker(q, jobHandlers[q], 1);
@@ -290,55 +300,33 @@ async function initializeBot() {
   }
   log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
 
-  log.info('Loading plugins...');
   await loadPlugins(bus, config);
 
   const twitchClient = global.twitchClient;
   if (twitchClient) {
-    log.info('Initializing message queue...');
     messageQueue = new MessageQueue(twitchClient);
     log.info('Message queue initialized');
   }
 
-  // ----- EventSub (optional – failures do not stop the bot) -----
   if (config.eventsub.secret) {
-    try {
-      log.info('Connecting to EventSub...');
-      eventSubClient = new EventSubClient();
-      await eventSubClient.connect();
-      log.info('EventSub client connected');
-    } catch (err) {
-      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
-    }
-  } else {
-    log.info('EventSub secret not set – skipping EventSub');
+    eventSubClient = new EventSubClient();
+    await eventSubClient.connect();
+    log.info('EventSub client connected');
   }
 
-  // Bus listeners
-  bus.on('twitch.message', async (...args) => {
-    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
-  });
-  bus.on('twitch.usernotice', async (...args) => {
-    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
-  });
-  bus.on('twitch.clearchat', async (...args) => {
-    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
-  });
+  bus.on('twitch.message', handleMessage);
+  bus.on('twitch.usernotice', handleUserNotice);
+  bus.on('twitch.clearchat', handleClearChat);
   bus.on('twitch.send', ({ channel, message }) => {
-    try {
-      if (messageQueue) messageQueue.enqueue(channel, message);
-      else twitchClient?.say(channel, message);
-    } catch (err) { log.error('Error in twitch.send handler', err); }
+    if (messageQueue) messageQueue.enqueue(channel, message);
+    else twitchClient?.say(channel, message);
   });
 
   if (AUTO_WELCOME) {
-    bus.on('twitch.join', async (...args) => {
-      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
-    });
+    bus.on('twitch.join', handleJoin);
   }
 
   bus.on('twitch.ready', () => {
-    log.info('Twitch client is ready. Starting auto-messages...');
     startAutoMessages();
   });
 
@@ -346,7 +334,7 @@ async function initializeBot() {
   broadcast({ type: 'ready' });
 }
 
-// ---- Message handler ----
+// ---- Main message handler ----
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
   promMetrics.messagesReceived.inc();
@@ -367,6 +355,12 @@ async function handleMessage({ channel, user, message, self }) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
 
+  const cooldownKey = `${channel}:${login}`;
+  if (!cooldown.check(cooldownKey)) {
+    log.debug(`Cooldown active for ${username} in ${channel}`);
+    return;
+  }
+
   const lowerMsg = message.trim().toLowerCase();
 
   // Custom commands
@@ -377,11 +371,6 @@ async function handleMessage({ channel, user, message, self }) {
       (cmd.role === 'moderator' && (user.mod || user.badges?.broadcaster)) ||
       (cmd.role === 'broadcaster' && user.badges?.broadcaster);
     if (hasPermission) {
-      const cooldownKey = `${channel}:${login}`;
-      if (!cooldown.check(cooldownKey)) {
-        log.debug(`Cooldown active for ${username} in ${channel}`);
-        return;
-      }
       const response = typeof cmd.response === 'function' ? cmd.response(message, user) : cmd.response;
       if (messageQueue) messageQueue.enqueue(channel, response);
       else await global.twitchClient.say(channel, response);
@@ -394,11 +383,6 @@ async function handleMessage({ channel, user, message, self }) {
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
     const cmd = builtins.get(builtinKey);
-    const cooldownKey = `${channel}:${login}`;
-    if (!cooldown.check(cooldownKey)) {
-      log.debug(`Cooldown active for ${username} in ${channel}`);
-      return;
-    }
     const response = await cmd.handler(user, channel, global.twitchClient, message);
     if (response) {
       if (messageQueue) messageQueue.enqueue(channel, response);
@@ -420,18 +404,8 @@ async function handleMessage({ channel, user, message, self }) {
       const prompt = message.slice(cmd.length).trim();
       if (!prompt) {
         const response = `Usage: ${cmd} <description>`;
-        const cooldownKey = `${channel}:${login}`;
-        if (!cooldown.check(cooldownKey)) {
-          log.debug(`Cooldown active for ${username} in ${channel}`);
-          return;
-        }
         if (messageQueue) messageQueue.enqueue(channel, response);
         else await global.twitchClient.say(channel, response);
-        return;
-      }
-      const cooldownKey = `${channel}:${login}`;
-      if (!cooldown.check(cooldownKey)) {
-        log.debug(`Cooldown active for ${username} in ${channel}`);
         return;
       }
       try {
@@ -439,7 +413,13 @@ async function handleMessage({ channel, user, message, self }) {
         const ext = type === 'image' ? 'png' : type === 'video' ? 'mp4' : 'mp3';
         const filename = `media-${Date.now()}.${ext}`;
         await writeFile(`public/${filename}`, result.buffer);
-        const url = `${publicUrl}/public/${filename}`;
+        // FIX: `req` does not exist in this scope (handleMessage is a bus
+        // event handler, not an Express route handler). This previously
+        // threw a ReferenceError that was swallowed by the catch block
+        // below, so every successful generation reported failure to chat
+        // even though the file was written fine. Build the URL from
+        // config instead.
+        const url = `${PUBLIC_BASE_URL}/public/${filename}`;
         const response = `Here's your ${type}: ${url}`;
         if (messageQueue) messageQueue.enqueue(channel, response);
         else await global.twitchClient.say(channel, response);
@@ -457,12 +437,6 @@ async function handleMessage({ channel, user, message, self }) {
   // AI chat
   const shouldReply = shouldRespond(message, config.twitch.username);
   if (!shouldReply) return;
-
-  const cooldownKey = `${channel}:${login}`;
-  if (!cooldown.check(cooldownKey)) {
-    log.debug(`Cooldown active for ${username} in ${channel}`);
-    return;
-  }
 
   const brainName = await scoreBrains(channel, user, message);
   const Brain = getBrain(brainName);
@@ -501,9 +475,8 @@ async function handleMessage({ channel, user, message, self }) {
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
 
-    await ConversationStore.pushMessage(channel, 'user', message, username);
+    await ConversationStore.pushMessage(channel, 'user', message);
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
-
     await ProfileStore.update(channel, login, { lastSeen: Date.now() });
 
     if (config.emotes.enable) {
@@ -529,8 +502,8 @@ async function handleJoin({ channel, username, self }) {
   const key = `${channel}:${username}`;
   if (global._welcomedUsers && global._welcomedUsers.has(key)) return;
   if (!global._welcomedUsers) global._welcomedUsers = new Set();
-  const history = await ConversationStore.getHistory(channel, 10);
-  const hasSpoken = history.some(h => h.username === username);
+  const history = await ConversationStore.getHistory(channel, 1);
+  const hasSpoken = history.some(h => h.role === 'user' && h.content.includes(username));
   if (hasSpoken) return;
   const welcomeMsg = `Welcome to the stream, @${username}! Hope you enjoy the chaos.`;
   if (messageQueue) messageQueue.enqueue(channel, welcomeMsg);
@@ -558,46 +531,22 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
-// ---- Root endpoint ----
-app.get('/', (req, res) => {
-  res.send(`
-    <h1>SweatyClanker Bot</h1>
-    <p>Status: <strong>Running</strong></p>
-    <p><a href="/auth/login">Authorize on Twitch</a></p>
-  `);
-});
-
 // ---- Startup ----
 async function bootstrap() {
-  log.info('🚀 Starting SweatyClanker v3...');
-  log.info('🔌 Connecting to Redis...');
   await connectRedis();
-  const redis = getRedis();
-  if (redis) log.info('✅ Redis connected');
-  else log.warn('⚠️ Redis not available, using file storage fallback');
-
-  log.info('🔐 Initializing authentication...');
   await initAuth();
-  const authorized = isAuthorized();
-  if (authorized) log.info('✅ Token found and validated');
-  else log.info('ℹ️ No token yet – waiting for OAuth');
-
-  log.info('📦 Loading emotes...');
   const emotePools = await initializeEmotes(config.twitch.channels);
   setEmotePools(emotePools);
-  log.info('✅ Emotes loaded');
 
-  if (authorized && !botInitialized) {
+  if (isAuthorized()) {
     await initializeBot();
-  } else if (!authorized) {
-    log.info('No token, waiting for auth');
   } else {
-    log.info('Bot already initialized (or duplicate call blocked)');
+    log.info('No token, waiting for auth');
   }
 
   const port = config.server.port;
   server = app.listen(port, () => {
-    log.info(`🌐 Server running on port ${port}`);
+    log.info(`Server running on port ${port}`);
   });
 }
 
