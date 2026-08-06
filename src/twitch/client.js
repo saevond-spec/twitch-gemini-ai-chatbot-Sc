@@ -1,4 +1,3 @@
-// src/twitch/client.js
 import tmi from 'tmi.js';
 import { config } from '../config/index.js';
 import { getAccessToken } from './auth.js';
@@ -8,8 +7,6 @@ import { ReconnectStateMachine } from '../state/reconnectState.js';
 import { metrics } from '../utils/metrics.js';
 
 const log = createLogger('IRC');
-
-// Conditionally enable tmi debug based on LOG_LEVEL
 const debugMode = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
 
 export class TwitchClient {
@@ -89,7 +86,6 @@ export class TwitchClient {
       log.info(`Connecting to Twitch IRC... (state: ${this._state}, attempt: ${this._reconnectAttempt})`);
       this.stateMachine.reset();
 
-      // Create tmi client with conditional debug
       this.client = new tmi.Client({
         options: { debug: debugMode },
         identity: {
@@ -100,7 +96,6 @@ export class TwitchClient {
         connection: { reconnect: false, secure: true },
       });
 
-      // ---- Ping/Pong heartbeat ----
       this.client.on('ping', () => {
         this._lastPing = Date.now();
         log.debug('PING received from Twitch');
@@ -110,7 +105,6 @@ export class TwitchClient {
         log.debug(`PONG received, latency: ${measured}ms`);
       });
 
-      // ---- Connected ----
       this.client.on('connected', (addr, port) => {
         if (this.stateMachine._timer) {
           clearTimeout(this.stateMachine._timer);
@@ -139,7 +133,6 @@ export class TwitchClient {
         resolve();
       });
 
-      // ---- Disconnected ----
       this.client.on('disconnected', (reason) => {
         this.connected = false;
         this._state = 'disconnected';
@@ -150,7 +143,6 @@ export class TwitchClient {
         }
       });
 
-      // ---- tmi's internal reconnect event (won't fire because reconnect:false, but keep as safety) ----
       this.client.on('reconnect', () => {
         this._state = 'reconnecting';
         log.warn('Received RECONNECT from Twitch (state: reconnecting)');
@@ -159,7 +151,6 @@ export class TwitchClient {
         }
       });
 
-      // ---- Message and other events ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
         this.emit('message', channel, user, message, false);
@@ -242,6 +233,7 @@ export class TwitchClient {
     }
   }
 
+  // ====== SAY (OUTGOING LOG at info level) ======
   async say(channel, message) {
     if (!this.connected || !this.client) {
       log.warn('Cannot send message, not connected');
@@ -250,7 +242,8 @@ export class TwitchClient {
     await this.rateLimiter.wait(channel);
     try {
       await this.client.say(channel, message);
-      log.debug(`Sent to ${channel}: ${message}`);
+      // Outgoing log (info level)
+      log.info(`OUT: ${channel}: ${message}`);
       return true;
     } catch (err) {
       log.error(`Failed to send message to ${channel}`, err);
