@@ -2270,6 +2270,7 @@ export function buildUserPrompt(message, username, history = []) {
 }
 `,
 
+  // ---- BUILTINS (FIXED) ----
   'src/commands/builtins.js': `
 import { registerBuiltin } from './index.js';
 import { brains, defaultBrain } from '../brains/index.js';
@@ -2288,7 +2289,7 @@ registerBuiltin('!uptime', async (user, channel, client) => {
 }, 'Shows bot uptime');
 
 registerBuiltin('!bot', async () => {
-  return 'I'm SweatyClanker, a multi‑brain AI bot powered by DeepSeek!';
+  return "I'm SweatyClanker, a multi‑brain AI bot powered by DeepSeek!";
 }, 'About the bot');
 
 registerBuiltin('!about', async () => {
