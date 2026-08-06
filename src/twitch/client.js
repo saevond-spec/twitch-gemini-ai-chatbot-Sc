@@ -1,3 +1,4 @@
+// src/twitch/client.js
 import tmi from 'tmi.js';
 import { config } from '../config/index.js';
 import { getAccessToken } from './auth.js';
@@ -151,8 +152,10 @@ export class TwitchClient {
         }
       });
 
+      // ---- MESSAGE HANDLER WITH LOG ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
+        log.info(`📡 RAW IRC: ${user.username} @ ${channel}: ${message}`);
         this.emit('message', channel, user, message, false);
       });
 
@@ -233,7 +236,6 @@ export class TwitchClient {
     }
   }
 
-  // ====== SAY (OUTGOING LOG at info level) ======
   async say(channel, message) {
     if (!this.connected || !this.client) {
       log.warn('Cannot send message, not connected');
@@ -242,8 +244,7 @@ export class TwitchClient {
     await this.rateLimiter.wait(channel);
     try {
       await this.client.say(channel, message);
-      // Outgoing log (info level)
-      log.info(`OUT: ${channel}: ${message}`);
+      log.info(`📤 OUT: ${channel}: ${message}`);
       return true;
     } catch (err) {
       log.error(`Failed to send message to ${channel}`, err);
