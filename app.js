@@ -1,4 +1,4 @@
-// src/app.js – Full version with instrumented message pipeline
+// src/app.js – SweatyClanker v3 (Fixed Listener Order)
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -64,6 +64,7 @@ const FALLBACK_MESSAGES = [
 ];
 let fallbackIndex = 0;
 
+// ---- Security ----
 app.use(helmet());
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
 app.use(limiter);
@@ -79,6 +80,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
+// ---- WebSocket for dashboard ----
 app.ws('/ws', (ws) => {
   wsClients.add(ws);
   ws.isAlive = true;
@@ -99,6 +101,7 @@ function broadcast(data) {
   }
 }
 
+// ---- Health endpoints ----
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
 app.get('/readyz', async (req, res) => {
@@ -127,6 +130,7 @@ app.get('/metrics', async (req, res) => {
   res.send(await getMetrics());
 });
 
+// ---- Auth routes ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts`;
@@ -148,6 +152,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
+// ---- API routes ----
 app.post('/api/commands', async (req, res) => {
   const { name, response, role } = req.body;
   if (!name || !response) return res.status(400).json({ error: 'Missing fields' });
@@ -176,6 +181,7 @@ app.post('/api/media/image', async (req, res) => {
   }
 });
 
+// ---- Auto‑message generation ----
 async function generateSpontaneousMessage(channel) {
   if (!deepseek || !AUTO_USE_DEEPSEEK) {
     const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
@@ -231,7 +237,7 @@ async function loadCustomCommandsIntoMemory() {
 }
 
 // =====================================================
-//  MESSAGE HANDLER – defined BEFORE initializeBot
+//  MESSAGE HANDLER (defined before initialization)
 // =====================================================
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
@@ -239,7 +245,6 @@ async function handleMessage({ channel, user, message, self }) {
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
 
-  // This log will appear for every chat message
   log.info(`📩 IN: ${username} @ ${channel}: ${message}`);
 
   await ConversationStore.updateLastActivity(channel);
@@ -279,7 +284,7 @@ async function handleMessage({ channel, user, message, self }) {
     }
   }
 
-  // ---- BUILT-IN COMMANDS ----
+  // ---- BUILT‑IN COMMANDS ----
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
     log.info(`⚡ Built-in command matched: ${builtinKey}`);
@@ -403,6 +408,7 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
+// ---- Other handlers (join, usernotice, clearchat) ----
 async function handleJoin({ channel, username, self }) {
   if (self) return;
   const key = `${channel}:${username}`;
@@ -437,6 +443,11 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
+// ---- Root ----
+app.get('/', (req, res) => {
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
+});
+
 // =====================================================
 //  BOT INITIALIZATION
 // =====================================================
@@ -453,6 +464,7 @@ async function initializeBot() {
     return;
   }
 
+  // ---- Init components ----
   log.info('Initializing DeepSeek client...');
   deepseek = new DeepSeekClient();
   log.info('DeepSeek client ready');
@@ -471,7 +483,8 @@ async function initializeBot() {
   }
   log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
 
-  // ---- REGISTER BUS LISTENERS BEFORE PLUGINS (CRITICAL) ----
+  // ---- ✅ CRITICAL: Register bus listeners BEFORE loading plugins ----
+  // This ensures messages are captured as soon as IRC connects.
   bus.on('twitch.message', async (...args) => {
     log.info('🔊 BUS: twitch.message event received');
     try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
@@ -480,25 +493,22 @@ async function initializeBot() {
   bus.on('twitch.usernotice', async (...args) => {
     try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
   });
-
   bus.on('twitch.clearchat', async (...args) => {
     try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
   });
-
   bus.on('twitch.send', ({ channel, message }) => {
     try {
       if (messageQueue) messageQueue.enqueue(channel, message);
       else twitchClient?.say(channel, message);
     } catch (err) { log.error('Error in twitch.send handler', err); }
   });
-
   if (AUTO_WELCOME) {
     bus.on('twitch.join', async (...args) => {
       try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
     });
   }
 
-  // ---- LOAD PLUGINS (IRC CONNECTS HERE) ----
+  // ---- Load plugins (IRC connects here) ----
   log.info('Loading plugins...');
   await loadPlugins(bus, config);
 
@@ -509,7 +519,7 @@ async function initializeBot() {
     log.info('Message queue initialized');
   }
 
-  // ---- EVENTSUB (optional) ----
+  // ---- EventSub (optional) ----
   if (config.eventsub.secret) {
     try {
       log.info('Connecting to EventSub...');
@@ -532,12 +542,9 @@ async function initializeBot() {
   broadcast({ type: 'ready' });
 }
 
-// ---- Root route ----
-app.get('/', (req, res) => {
-  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
-});
-
-// ---- Startup ----
+// =====================================================
+//  STARTUP & SHUTDOWN
+// =====================================================
 async function bootstrap() {
   log.info('🚀 Starting SweatyClanker v3...');
   log.info('🔌 Connecting to Redis...');
@@ -545,27 +552,30 @@ async function bootstrap() {
   const redis = getRedis();
   if (redis) log.info('✅ Redis connected');
   else log.warn('⚠️ Redis not available, using file storage fallback');
+
   log.info('🔐 Initializing authentication...');
   await initAuth();
   const authorized = isAuthorized();
   if (authorized) log.info('✅ Token found and validated');
   else log.info('ℹ️ No token yet – waiting for OAuth');
+
   log.info('📦 Loading emotes...');
   const emotePools = await initializeEmotes(config.twitch.channels);
   setEmotePools(emotePools);
   log.info('✅ Emotes loaded');
+
   if (authorized && !botInitialized) {
     await initializeBot();
   } else if (!authorized) {
     log.info('No token, waiting for auth');
   }
+
   const port = config.server.port;
   server = app.listen(port, () => {
     log.info(`🌐 Server running on port ${port}`);
   });
 }
 
-// ---- Shutdown ----
 async function shutdown() {
   log.info('Shutting down gracefully...');
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
