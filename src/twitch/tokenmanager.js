@@ -53,6 +53,7 @@ function requireClientCredentials() {
  */
 export function initTokenManager(storageInstance) {
   storage = storageInstance;
+  console.log('[TokenManager] Storage instance set, configured =', storage?.configured);
 }
 
 /**
@@ -61,26 +62,34 @@ export function initTokenManager(storageInstance) {
  * @returns {Promise<boolean>} True if a valid token was obtained.
  */
 export async function loadTokens() {
+  console.log('[TokenManager] loadTokens() called');
+  console.log('[TokenManager] storage.configured =', storage?.configured);
+
   // Try Redis first
   if (storage?.configured) {
     try {
+      console.log('[TokenManager] Attempting to load tokens from Redis...');
       const stored = await storage.getTokens();
+      console.log('[TokenManager] getTokens result:', stored ? 'data received' : 'null/undefined');
       if (stored?.refreshToken) {
-        console.log('[TokenManager] Loaded refresh token from Redis');
+        console.log('[TokenManager] Loaded refresh token from Redis (first 10 chars):', stored.refreshToken.substring(0, 10) + '...');
         refreshToken = stored.refreshToken;
         try {
           await refreshAccessToken();
+          console.log('[TokenManager] Successfully refreshed token from stored refresh token');
           return true;
         } catch (err) {
           console.error('[TokenManager] Stored refresh token is invalid:', err.message);
-          // refreshAccessToken now only clears refreshToken on invalid_grant,
-          // but we'll clear it here anyway to avoid retrying a dead token.
           refreshToken = null;
         }
+      } else {
+        console.log('[TokenManager] No refresh token found in Redis (stored object missing refreshToken)');
       }
     } catch (err) {
       console.error('[TokenManager] Failed to load tokens from Redis:', err.message);
     }
+  } else {
+    console.log('[TokenManager] Storage not configured or disabled – skipping Redis load');
   }
 
   // Fallback: bootstrap from env var
@@ -89,6 +98,7 @@ export async function loadTokens() {
     refreshToken = process.env.TWITCH_REFRESH_TOKEN;
     try {
       await refreshAccessToken();
+      console.log('[TokenManager] Successfully refreshed token from env var');
       return true;
     } catch (err) {
       console.error('[TokenManager] Env var refresh token is invalid:', err.message);
@@ -165,6 +175,7 @@ export async function exchangeCodeForTokens(code, redirectUri, expectedUsername)
   refreshToken = data.refresh_token;
   tokenExpiration = Date.now() + data.expires_in * 1000;
 
+  console.log('[TokenManager] About to persist tokens after exchange...');
   await persistTokens();
   console.log('[TokenManager] Authorization complete. Tokens stored.');
 
@@ -299,13 +310,11 @@ async function refreshAccessToken() {
         }
 
         // For any other error (5xx, network, timeout), leave the existing token in place.
-        // The caller can decide to retry later.
         console.warn('[TokenManager] Refresh attempt failed (transient?):', data.message || JSON.stringify(data));
         throw new Error(data.message || `Refresh failed with status ${response.status}`);
       }
 
       accessToken = data.access_token;
-      // Twitch may rotate refresh tokens; if a new one is returned, use it.
       refreshToken = data.refresh_token || refreshToken;
       tokenExpiration = Date.now() + data.expires_in * 1000;
 
@@ -325,10 +334,16 @@ async function refreshAccessToken() {
  * Persist current tokens to Redis for survival across restarts.
  */
 async function persistTokens() {
-  if (!storage?.configured) return;
+  console.log('[TokenManager] persistTokens called, storage.configured =', storage?.configured);
+  if (!storage?.configured) {
+    console.log('[TokenManager] Storage not configured, skipping persist');
+    return;
+  }
 
   try {
+    console.log('[TokenManager] Attempting to store tokens in Redis...');
     await storage.setTokens(accessToken, refreshToken, tokenExpiration);
+    console.log('[TokenManager] Tokens stored successfully');
   } catch (err) {
     console.error('[TokenManager] Failed to persist tokens to Redis:', err.message);
   }
