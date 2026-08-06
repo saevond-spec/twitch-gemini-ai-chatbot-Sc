@@ -110,6 +110,15 @@ function broadcast(data) {
   }
 }
 
+// ---- Root ----
+app.get('/', (req, res) => {
+  res.send(`
+    <h1>SweatyClanker Bot</h1>
+    <p>Status: <strong>Running</strong></p>
+    <p><a href="/auth/login">Authorize on Twitch</a></p>
+  `);
+});
+
 // ---- Health ----
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
@@ -140,7 +149,7 @@ app.get('/metrics', async (req, res) => {
   res.send(await getMetrics());
 });
 
-// ---- AUTH ROUTES ----
+// ---- Auth ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators channel:read:subscriptions channel:read:redemptions channel:manage:predictions channel:manage:polls bits:read channel:read:hype_train channel:manage:raids channel:read:goals`;
