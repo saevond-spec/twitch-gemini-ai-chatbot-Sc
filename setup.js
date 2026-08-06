@@ -1,6 +1,5 @@
 // ============================================================
-// SETUP SCRIPT – SweatyClanker v3 (Full Feature Set)
-// Generates all files for a production-ready Twitch AI bot.
+// SETUP SCRIPT – SweatyClanker v3 (Final, Priority Fixes)
 // ============================================================
 import fs from 'fs';
 import path from 'path';
@@ -18,7 +17,7 @@ TWITCH_CLIENT_ID=your_twitch_app_client_id
 TWITCH_CLIENT_SECRET=your_twitch_app_secret
 JOIN_CHANNELS=channel1,channel2
 
-# DeepSeek (only AI provider)
+# DeepSeek
 DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_MODEL=deepseek-chat
 AI_HISTORY_LENGTH=5
@@ -81,6 +80,7 @@ custom_commands.txt
 .DS_Store
 `,
 
+  // ---- package.json (scripts: postinstall, start) ----
   'package.json': JSON.stringify({
     name: 'sweatyclanker-v3',
     version: '3.0.0',
@@ -88,7 +88,7 @@ custom_commands.txt
     description: 'Full-featured AI streaming platform with EventSub, media generation, moderation, and more',
     main: 'src/app.js',
     scripts: {
-      prestart: 'node setup.js',
+      postinstall: 'node setup.js', // runs once during build
       start: 'node src/app.js',
       dev: 'nodemon src/app.js',
       test: 'node --test',
@@ -165,7 +165,7 @@ export function getFallbackResponse() {
 }
 `,
 
-  // ---- CONFIG (with validation) – FIXED: .unknown(true) ----
+  // ---- CONFIG (trustProxy: 1) ----
   'src/config/index.js': `
 import dotenv from 'dotenv';
 import Joi from 'joi';
@@ -210,7 +210,7 @@ const schema = Joi.object({
   ALLOWED_ORIGINS: Joi.string().allow('').default(''),
   EVENTSUB_SECRET: Joi.string().required(),
   EVENTSUB_WSS_URL: Joi.string().uri().default('wss://eventsub.wss.twitch.tv'),
-}).unknown(true); // <-- THIS FIXES THE VALIDATION ERROR
+}).unknown(true);
 
 const { error, value: validated } = schema.validate(process.env, { abortEarly: false });
 if (error) {
@@ -269,7 +269,7 @@ export const config = {
   },
   server: {
     port: env.PORT || 3000,
-    trustProxy: true,
+    trustProxy: 1, // FIX: trust only the first proxy (Render)
     allowedOrigins: env.ALLOWED_ORIGINS ? env.ALLOWED_ORIGINS.split(',') : [],
   },
   eventsub: {
@@ -357,7 +357,7 @@ export async function writeJSON(filePath, data) {
 }
 `,
 
-  // ---- TWITCH AUTH (expanded scopes) ----
+  // ---- TWITCH AUTH ----
   'src/twitch/auth.js': `
 import axios from 'axios';
 import { config } from '../config/index.js';
@@ -489,7 +489,7 @@ export function isAuthorized() {
 }
 `,
 
-  // ---- TWITCH IRC CLIENT (with reconnect state machine) ----
+  // ---- TWITCH IRC CLIENT ----
   'src/twitch/client.js': `
 import tmi from 'tmi.js';
 import { config } from '../config/index.js';
@@ -755,7 +755,7 @@ export class CircuitBreaker {
 }
 `,
 
-  // ---- AI CLIENT + SAFEGUARDS ----
+  // ---- AI CLIENT ----
   'src/ai/client.js': `
 import axios from 'axios';
 import { config } from '../config/index.js';
@@ -906,7 +906,7 @@ export function validateAIResponse(response, expectedFormat = 'text') {
 }
 `,
 
-  // ---- PERSISTENT CONVERSATION STORE ----
+  // ---- MEMORY ----
   'src/memory/conversationStore.js': `
 import { getRedis } from '../storage/redis.js';
 import { createLogger } from '../logger/index.js';
@@ -944,7 +944,6 @@ export class ConversationStore {
 }
 `,
 
-  // ---- VIEWER PROFILE STORE ----
   'src/memory/profileStore.js': `
 import { getRedis } from '../storage/redis.js';
 const TTL_SECONDS = 2592000; // 30 days
@@ -1038,7 +1037,7 @@ export class MessageQueue {
 }
 `,
 
-  // ---- TWITCH HELIX CLIENT (for EventSub) ----
+  // ---- TWITCH HELIX ----
   'src/twitch/helix.js': `
 import axios from 'axios';
 import { getAccessToken } from './auth.js';
@@ -1078,7 +1077,6 @@ export class HelixClient {
       throw err;
     }
   }
-  // Convenience methods
   async subscribeFollow(broadcasterId) {
     return this.createEventSubSubscription('channel.follow', '2', { broadcaster_user_id: broadcasterId, moderator_user_id: broadcasterId }, { method: 'websocket', session_id: global._eventsubSessionId });
   }
@@ -1118,7 +1116,7 @@ export class HelixClient {
 }
 `,
 
-  // ---- EVENTSUB CLIENT ----
+  // ---- EVENTSUB ----
   'src/twitch/eventsub.js': `
 import WebSocket from 'ws';
 import { createLogger } from '../logger/index.js';
@@ -1286,7 +1284,7 @@ export class EventSubClient {
 }
 `,
 
-  // ---- MODERATION (Rule Engine) ----
+  // ---- MODERATION ----
   'src/moderation/index.js': `
 export class Moderation {
   constructor(config) {
@@ -1323,7 +1321,7 @@ export class Moderation {
 }
 `,
 
-  // ---- CUSTOM COMMANDS (Redis-backed) ----
+  // ---- COMMANDS ----
   'src/commands/index.js': `
 import { getRedis } from '../storage/redis.js';
 import { createLogger } from '../logger/index.js';
@@ -1369,7 +1367,7 @@ export async function deleteCustomCommand(name) {
 }
 `,
 
-  // ---- MEDIA GENERATION (Pollinations) ----
+  // ---- MEDIA ----
   'src/media/providers.js': `
 import axios from 'axios';
 import { createLogger } from '../logger/index.js';
@@ -1382,20 +1380,16 @@ export class PollinationsClient {
     return { buffer: response.data, mimeType: 'image/png' };
   }
   async generateVideo(prompt) {
-    // Pollinations video endpoint – may return a video stream
     const url = \`https://video.pollinations.ai/prompt/\${encodeURIComponent(prompt)}\`;
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     return { buffer: response.data, mimeType: 'video/mp4' };
   }
   async generateAudio(prompt) {
-    // Using a TTS service (for demo, we use a placeholder)
-    // In production, you could use a real TTS API
     const url = \`https://pollinations.ai/audio?text=\${encodeURIComponent(prompt)}\`;
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     return { buffer: response.data, mimeType: 'audio/mpeg' };
   }
   async generateMusic(prompt) {
-    // Similar to audio, but for music generation
     const url = \`https://pollinations.ai/music?prompt=\${encodeURIComponent(prompt)}\`;
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     return { buffer: response.data, mimeType: 'audio/mpeg' };
@@ -1403,7 +1397,7 @@ export class PollinationsClient {
 }
 `,
 
-  // ---- APP.JS (integrates everything) ----
+  // ---- APP.JS (trustProxy set to 1, rate limiter validate: false) ----
   'src/app.js': `
 import express from 'express';
 import expressWs from 'express-ws';
@@ -1438,11 +1432,15 @@ import { writeFile } from 'fs/promises';
 const log = createLogger('APP');
 const app = express();
 const wsInstance = expressWs(app);
-app.set('trust proxy', config.server.trustProxy);
+app.set('trust proxy', config.server.trustProxy); // now 1
 
 // ---- Security ----
 app.use(helmet());
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  validate: false, // bypass trust proxy validation
+});
 app.use(limiter);
 const allowedOrigins = config.server.allowedOrigins || [];
 app.use((req, res, next) => {
@@ -1453,7 +1451,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// State
+// ---- State ----
 let deepseek = null;
 let moderation = null;
 let cooldown = new CooldownManager(config.cooldown);
@@ -1466,7 +1464,7 @@ let messageQueue = null;
 let eventSubClient = null;
 let pollinations = new PollinationsClient();
 
-// Auto‑message config
+// ---- Auto‑message config ----
 const AUTO_ENABLED = config.auto.enabled;
 const AUTO_INTERVAL = config.auto.interval * 1000;
 const AUTO_USE_DEEPSEEK = config.auto.useDeepSeek;
@@ -1483,11 +1481,11 @@ const FALLBACK_MESSAGES = [
 ];
 let fallbackIndex = 0;
 
-// Middleware
+// ---- Middleware ----
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
-// WebSocket with heartbeat
+// ---- WebSocket ----
 app.ws('/ws', (ws) => {
   wsClients.add(ws);
   ws.isAlive = true;
@@ -1512,7 +1510,7 @@ function broadcast(data) {
   }
 }
 
-// Health
+// ---- Health ----
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
 app.get('/readyz', async (req, res) => {
@@ -1536,13 +1534,13 @@ app.get('/readyz', async (req, res) => {
   });
 });
 
-// Metrics
+// ---- Metrics ----
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(await getMetrics());
 });
 
-// Auth
+// ---- Auth ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = \`\${req.protocol}://\${req.get('host')}/auth/callback\`;
   const url = \`https://id.twitch.tv/oauth2/authorize?client_id=\${config.twitch.clientId}&redirect_uri=\${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read+chat:edit+user:bot+moderation:read+channel:manage:moderators+channel:read:subscriptions+channel:read:redemptions+channel:manage:predictions+channel:manage:polls+bits:read+channel:read:hype_train+channel:manage:raids+channel:read:goals+channel:read:guest_star+channel:manage:shoutouts\`;
@@ -1566,7 +1564,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// ---- Custom Commands API (for management) ----
+// ---- API routes ----
 app.post('/api/commands', async (req, res) => {
   const { name, response, role } = req.body;
   if (!name || !response) return res.status(400).json({ error: 'Missing fields' });
@@ -1581,7 +1579,6 @@ app.delete('/api/commands/:name', async (req, res) => {
   res.json({ success: true });
 });
 
-// ---- Media Generation Routes (for dashboard) ----
 app.post('/api/media/image', async (req, res) => {
   const { prompt } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Prompt required' });
@@ -1594,7 +1591,6 @@ app.post('/api/media/image', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// Add similar for video, audio, music...
 
 // ---- Auto‑message generation ----
 async function generateSpontaneousMessage(channel) {
@@ -1668,7 +1664,6 @@ async function initializeBot() {
 
   await loadCustomCommandsIntoMemory();
 
-  // Start BullMQ workers
   const queueNames = Object.keys(jobHandlers);
   for (const q of queueNames) {
     const worker = startWorker(q, jobHandlers[q], 1);
@@ -1684,14 +1679,12 @@ async function initializeBot() {
     log.info('Message queue initialized');
   }
 
-  // EventSub
   if (config.eventsub.secret) {
     eventSubClient = new EventSubClient();
     await eventSubClient.connect();
     log.info('EventSub client connected');
   }
 
-  // Register bus listeners
   bus.on('twitch.message', handleMessage);
   bus.on('twitch.usernotice', handleUserNotice);
   bus.on('twitch.clearchat', handleClearChat);
@@ -1741,7 +1734,7 @@ async function handleMessage({ channel, user, message, self }) {
 
   const lowerMsg = message.trim().toLowerCase();
 
-  // ---- Custom Commands ----
+  // Custom commands
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
   if (cmdKey) {
     const cmd = customCommands.get(cmdKey);
@@ -1757,7 +1750,7 @@ async function handleMessage({ channel, user, message, self }) {
     }
   }
 
-  // ---- Built-in Commands ----
+  // Built-in commands
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
     const cmd = builtins.get(builtinKey);
@@ -1770,7 +1763,7 @@ async function handleMessage({ channel, user, message, self }) {
     return;
   }
 
-  // ---- Media Generation Commands ----
+  // Media generation
   const mediaCommands = {
     [config.media.imageCommand]: { type: 'image', handler: pollinations.generateImage.bind(pollinations) },
     [config.media.videoCommand]: { type: 'video', handler: pollinations.generateVideo.bind(pollinations) },
@@ -1806,7 +1799,7 @@ async function handleMessage({ channel, user, message, self }) {
     }
   }
 
-  // ---- AI Chat ----
+  // AI chat
   const shouldReply = shouldRespond(message, config.twitch.username);
   if (!shouldReply) return;
 
@@ -1886,7 +1879,6 @@ async function handleJoin({ channel, username, self }) {
 }
 
 async function handleUserNotice({ channel, user, msg, tags }) {
-  // For raids, subs, etc.
   if (tags['msg-id'] === 'raid') {
     const from = tags['display-name'] || 'someone';
     const reply = \`Thanks for the raid, \${from}! PogChamp\`;
@@ -1968,7 +1960,7 @@ bootstrap().catch(err => {
 });
 `,
 
-  // ---- PLACEHOLDER FILES (needed for imports) ----
+  // ---- PLACEHOLDER FILES ----
   'src/twitch/emotes.js': `
 import { createLogger } from '../logger/index.js';
 const log = createLogger('EMOTES');
@@ -2270,7 +2262,7 @@ export function buildUserPrompt(message, username, history = []) {
 }
 `,
 
-  // ---- BUILTINS (FIXED) ----
+  // ---- BUILTINS ----
   'src/commands/builtins.js': `
 import { registerBuiltin } from './index.js';
 import { brains, defaultBrain } from '../brains/index.js';
