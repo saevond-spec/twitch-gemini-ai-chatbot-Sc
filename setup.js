@@ -1,5 +1,5 @@
 // ============================================================
-// SETUP SCRIPT – SweatyClanker v3 (Final, Priority Fixes)
+// SETUP SCRIPT – SweatyClanker v3 (Final, Production)
 // ============================================================
 import fs from 'fs';
 import path from 'path';
@@ -165,59 +165,116 @@ export function getFallbackResponse() {
 }
 `,
 
-  // ---- CONFIG (trustProxy: 1) ----
+  // ---- CONFIG (with detailed validation) ----
   'src/config/index.js': `
 import dotenv from 'dotenv';
 import Joi from 'joi';
+import { createLogger } from '../logger/index.js';
 dotenv.config();
 
-const schema = Joi.object({
-  TWITCH_USERNAME: Joi.string().required(),
-  TWITCH_CLIENT_ID: Joi.string().required(),
-  TWITCH_CLIENT_SECRET: Joi.string().required(),
-  JOIN_CHANNELS: Joi.string().required(),
-  DEEPSEEK_API_KEY: Joi.string().required(),
-  DEEPSEEK_MODEL: Joi.string().default('deepseek-chat'),
-  AI_HISTORY_LENGTH: Joi.number().integer().min(1).default(5),
-  AI_TEMPERATURE: Joi.number().min(0).max(1).default(0.7),
-  AI_MAX_TOKENS: Joi.number().integer().min(100).default(1024),
-  AI_TIMEOUT_MS: Joi.number().integer().default(10000),
-  AI_MAX_RETRIES: Joi.number().integer().default(3),
-  AI_CIRCUIT_BREAKER_THRESHOLD: Joi.number().integer().default(5),
-  REDIS_URL: Joi.string().uri().allow(''),
-  COOLDOWN_DURATION: Joi.number().integer().default(1),
-  USER_COOLDOWN: Joi.number().integer().default(5),
-  MAX_REPEAT_MESSAGES: Joi.number().integer().default(3),
-  MAX_CAPS_RATIO: Joi.number().min(0).max(1).default(0.7),
-  ALLOW_LINKS: Joi.boolean().default(false),
-  ENABLE_EMOTE_APPENDING: Joi.boolean().default(true),
-  EMOTE_APPEND_EXCLUDE_PREFIXES: Joi.string().allow('').default(''),
-  ENABLE_7TV_EMOTES: Joi.boolean().default(true),
-  ENABLE_BTTV_EMOTES: Joi.boolean().default(true),
-  ENABLE_FFZ_EMOTES: Joi.boolean().default(false),
-  AUTO_MESSAGE_ENABLED: Joi.boolean().default(true),
-  AUTO_MESSAGE_INTERVAL: Joi.number().integer().default(300),
-  AUTO_USE_DEEPSEEK: Joi.boolean().default(true),
-  AUTO_QUIET_THRESHOLD: Joi.number().integer().default(600),
-  AUTO_WELCOME: Joi.boolean().default(true),
-  IMAGE_COMMAND_NAME: Joi.string().default('!image'),
-  VIDEO_COMMAND_NAME: Joi.string().default('!video'),
-  TTS_COMMAND_NAME: Joi.string().default('!tts'),
-  MUSIC_COMMAND_NAME: Joi.string().default('!song'),
-  PORT: Joi.number().integer().default(3000),
-  LOG_LEVEL: Joi.string().valid('error','warn','info','debug').default('info'),
-  IGNORED_USERNAMES: Joi.string().allow('').default(''),
-  ALLOWED_ORIGINS: Joi.string().allow('').default(''),
-  EVENTSUB_SECRET: Joi.string().required(),
-  EVENTSUB_WSS_URL: Joi.string().uri().default('wss://eventsub.wss.twitch.tv'),
-}).unknown(true);
+const log = createLogger('CONFIG');
 
-const { error, value: validated } = schema.validate(process.env, { abortEarly: false });
-if (error) {
-  console.error('[FATAL] Configuration validation failed:', error.details.map(d => d.message).join(', '));
+// Define required variables and their descriptions
+const requiredVars = {
+  TWITCH_USERNAME: 'Twitch bot account name',
+  TWITCH_CLIENT_ID: 'Twitch application Client ID',
+  TWITCH_CLIENT_SECRET: 'Twitch application Client Secret',
+  JOIN_CHANNELS: 'Comma-separated list of channels to join',
+  DEEPSEEK_API_KEY: 'DeepSeek API key',
+  EVENTSUB_SECRET: 'Secret for EventSub WebSocket verification',
+};
+
+// Check each required variable and log a clear error if missing
+const missing = Object.keys(requiredVars).filter(key => !process.env[key]);
+if (missing.length) {
+  log.error('Missing required environment variables:');
+  missing.forEach(key => {
+    log.error(\`  - \${key}: \${requiredVars[key]}\`);
+  });
+  log.error('Please set these variables in your environment and restart.');
   process.exit(1);
 }
-const env = validated;
+
+// Optional variables (with defaults)
+const optional = {
+  DEEPSEEK_MODEL: 'deepseek-chat',
+  AI_HISTORY_LENGTH: 5,
+  AI_TEMPERATURE: 0.7,
+  AI_MAX_TOKENS: 1024,
+  AI_TIMEOUT_MS: 10000,
+  AI_MAX_RETRIES: 3,
+  AI_CIRCUIT_BREAKER_THRESHOLD: 5,
+  REDIS_URL: '',
+  COOLDOWN_DURATION: 1,
+  USER_COOLDOWN: 5,
+  MAX_REPEAT_MESSAGES: 3,
+  MAX_CAPS_RATIO: 0.7,
+  ALLOW_LINKS: 'false',
+  ENABLE_EMOTE_APPENDING: 'true',
+  EMOTE_APPEND_EXCLUDE_PREFIXES: '',
+  ENABLE_7TV_EMOTES: 'true',
+  ENABLE_BTTV_EMOTES: 'true',
+  ENABLE_FFZ_EMOTES: 'false',
+  AUTO_MESSAGE_ENABLED: 'true',
+  AUTO_MESSAGE_INTERVAL: 300,
+  AUTO_USE_DEEPSEEK: 'true',
+  AUTO_QUIET_THRESHOLD: 600,
+  AUTO_WELCOME: 'true',
+  IMAGE_COMMAND_NAME: '!image',
+  VIDEO_COMMAND_NAME: '!video',
+  TTS_COMMAND_NAME: '!tts',
+  MUSIC_COMMAND_NAME: '!song',
+  PORT: 3000,
+  LOG_LEVEL: 'info',
+  IGNORED_USERNAMES: '',
+  ALLOWED_ORIGINS: '',
+  EVENTSUB_WSS_URL: 'wss://eventsub.wss.twitch.tv',
+};
+
+// Merge with environment
+const env = { ...optional };
+for (const [key, def] of Object.entries(optional)) {
+  env[key] = process.env[key] ?? def;
+}
+// Override with required (already checked)
+for (const key of Object.keys(requiredVars)) {
+  env[key] = process.env[key];
+}
+
+// Additional type conversions
+const convert = {
+  AI_HISTORY_LENGTH: Number,
+  AI_TEMPERATURE: Number,
+  AI_MAX_TOKENS: Number,
+  AI_TIMEOUT_MS: Number,
+  AI_MAX_RETRIES: Number,
+  AI_CIRCUIT_BREAKER_THRESHOLD: Number,
+  COOLDOWN_DURATION: Number,
+  USER_COOLDOWN: Number,
+  MAX_REPEAT_MESSAGES: Number,
+  MAX_CAPS_RATIO: Number,
+  AUTO_MESSAGE_INTERVAL: Number,
+  AUTO_QUIET_THRESHOLD: Number,
+  PORT: Number,
+  ALLOW_LINKS: Boolean,
+  ENABLE_EMOTE_APPENDING: Boolean,
+  ENABLE_7TV_EMOTES: Boolean,
+  ENABLE_BTTV_EMOTES: Boolean,
+  ENABLE_FFZ_EMOTES: Boolean,
+  AUTO_MESSAGE_ENABLED: Boolean,
+  AUTO_USE_DEEPSEEK: Boolean,
+  AUTO_WELCOME: Boolean,
+};
+
+for (const [key, fn] of Object.entries(convert)) {
+  if (env[key] !== undefined) {
+    if (typeof env[key] === 'string' && (env[key].toLowerCase() === 'true' || env[key].toLowerCase() === 'false')) {
+      env[key] = env[key].toLowerCase() === 'true';
+    } else {
+      env[key] = fn(env[key]);
+    }
+  }
+}
 
 export const config = {
   twitch: {
@@ -269,7 +326,7 @@ export const config = {
   },
   server: {
     port: env.PORT || 3000,
-    trustProxy: 1, // FIX: trust only the first proxy (Render)
+    trustProxy: 1, // Render's first proxy
     allowedOrigins: env.ALLOWED_ORIGINS ? env.ALLOWED_ORIGINS.split(',') : [],
   },
   eventsub: {
@@ -277,6 +334,8 @@ export const config = {
     wssUrl: env.EVENTSUB_WSS_URL || 'wss://eventsub.wss.twitch.tv',
   },
 };
+
+log.info('✅ Configuration validated successfully');
 `,
 
   // ---- LOGGER ----
@@ -357,18 +416,22 @@ export async function writeJSON(filePath, data) {
 }
 `,
 
-  // ---- TWITCH AUTH ----
+  // ---- TWITCH AUTH (corrected scopes) ----
   'src/twitch/auth.js': `
 import axios from 'axios';
 import { config } from '../config/index.js';
 import { getRedis } from '../storage/redis.js';
 import { readJSON, writeJSON } from '../storage/file.js';
 import { createLogger } from '../logger/index.js';
+
 const log = createLogger('AUTH');
 const TOKEN_KEY = 'twitch:oauth';
 const TOKEN_FILE = './tokens.json';
+
 let currentToken = null;
 let refreshTimer = null;
+
+// Corrected scopes (removed invalid scope)
 const SCOPES = [
   'chat:read', 'chat:edit',
   'user:bot', 'user:read:chat', 'user:write:chat',
@@ -376,9 +439,9 @@ const SCOPES = [
   'channel:read:subscriptions', 'channel:read:redemptions',
   'channel:manage:predictions', 'channel:manage:polls',
   'bits:read', 'channel:read:hype_train',
-  'channel:manage:raids', 'channel:read:goals',
-  'channel:read:guest_star', 'channel:manage:shoutouts'
+  'channel:manage:raids', 'channel:read:goals'
 ];
+
 async function loadStoredToken() {
   const redis = getRedis();
   if (redis) {
@@ -387,6 +450,7 @@ async function loadStoredToken() {
   }
   return readJSON(TOKEN_FILE, null);
 }
+
 async function saveToken(tokenData) {
   const redis = getRedis();
   if (redis) {
@@ -394,6 +458,7 @@ async function saveToken(tokenData) {
   }
   await writeJSON(TOKEN_FILE, tokenData);
 }
+
 export async function validateToken() {
   if (!currentToken) return false;
   try {
@@ -405,6 +470,7 @@ export async function validateToken() {
     return false;
   }
 }
+
 export async function initAuth() {
   const stored = await loadStoredToken();
   if (stored) {
@@ -422,6 +488,7 @@ export async function initAuth() {
   }
   return !!currentToken;
 }
+
 export async function exchangeCodeForToken(code, redirectUri) {
   const response = await axios.post(
     'https://id.twitch.tv/oauth2/token',
@@ -445,6 +512,7 @@ export async function exchangeCodeForToken(code, redirectUri) {
   log.info('Token exchanged successfully');
   return tokenData;
 }
+
 async function refreshToken() {
   if (!currentToken) return;
   try {
@@ -470,6 +538,7 @@ async function refreshToken() {
     log.error('Token refresh failed', err);
   }
 }
+
 function scheduleRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
   if (!currentToken || !currentToken.expires_at) return;
@@ -481,15 +550,17 @@ function scheduleRefresh() {
     scheduleRefresh();
   }, refreshAt);
 }
+
 export function getAccessToken() {
   return currentToken?.access_token || null;
 }
+
 export function isAuthorized() {
   return !!getAccessToken();
 }
 `,
 
-  // ---- TWITCH IRC CLIENT ----
+  // ---- TWITCH IRC CLIENT (with detailed logging) ----
   'src/twitch/client.js': `
 import tmi from 'tmi.js';
 import { config } from '../config/index.js';
@@ -526,6 +597,7 @@ export class TwitchClient {
       this.emit('disconnected', 'Max attempts');
     });
   }
+
   connect() {
     return new Promise((resolve, reject) => {
       if (this.client) {
@@ -537,6 +609,7 @@ export class TwitchClient {
         reject(new Error('No access token available'));
         return;
       }
+      log.info('Connecting to Twitch IRC...');
       this.stateMachine.reset();
       this.client = new tmi.Client({
         options: { debug: false },
@@ -550,7 +623,7 @@ export class TwitchClient {
       this.client.on('connected', (addr, port) => {
         this.connected = true;
         this.stateMachine.connected();
-        log.info(\`Connected to \${addr}:\${port}\`);
+        log.info(\`✅ Connected to \${addr}:\${port}\`);
         this.emit('connected', addr, port);
         resolve();
       });
@@ -598,6 +671,7 @@ export class TwitchClient {
       });
     });
   }
+
   disconnect() {
     this._disconnecting = true;
     this.stateMachine.reset();
@@ -608,6 +682,7 @@ export class TwitchClient {
     this.connected = false;
     this._disconnecting = false;
   }
+
   async reconnect() {
     if (this._disconnecting) return;
     try {
@@ -618,6 +693,7 @@ export class TwitchClient {
       this.stateMachine.failed();
     }
   }
+
   async say(channel, message) {
     if (!this.connected || !this.client) {
       log.warn('Cannot send message, not connected');
@@ -633,6 +709,7 @@ export class TwitchClient {
       return false;
     }
   }
+
   on(event, fn) {
     if (this.eventListeners[event]) this.eventListeners[event].push(fn);
   }
@@ -755,7 +832,7 @@ export class CircuitBreaker {
 }
 `,
 
-  // ---- AI CLIENT ----
+  // ---- AI CLIENT (with safeguards) ----
   'src/ai/client.js': `
 import axios from 'axios';
 import { config } from '../config/index.js';
@@ -1397,7 +1474,7 @@ export class PollinationsClient {
 }
 `,
 
-  // ---- APP.JS (trustProxy set to 1, rate limiter validate: false) ----
+  // ---- APP.JS (with verbose logging) ----
   'src/app.js': `
 import express from 'express';
 import expressWs from 'express-ws';
@@ -1432,14 +1509,14 @@ import { writeFile } from 'fs/promises';
 const log = createLogger('APP');
 const app = express();
 const wsInstance = expressWs(app);
-app.set('trust proxy', config.server.trustProxy); // now 1
+app.set('trust proxy', config.server.trustProxy || 1);
 
 // ---- Security ----
 app.use(helmet());
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  validate: false, // bypass trust proxy validation
+  validate: false,
 });
 app.use(limiter);
 const allowedOrigins = config.server.allowedOrigins || [];
@@ -1510,6 +1587,15 @@ function broadcast(data) {
   }
 }
 
+// ---- Root ----
+app.get('/', (req, res) => {
+  res.send(\`
+    <h1>SweatyClanker Bot</h1>
+    <p>Status: <strong>Running</strong></p>
+    <p><a href="/auth/login">Authorize on Twitch</a></p>
+  \`);
+});
+
 // ---- Health ----
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
@@ -1543,7 +1629,7 @@ app.get('/metrics', async (req, res) => {
 // ---- Auth ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = \`\${req.protocol}://\${req.get('host')}/auth/callback\`;
-  const url = \`https://id.twitch.tv/oauth2/authorize?client_id=\${config.twitch.clientId}&redirect_uri=\${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read+chat:edit+user:bot+moderation:read+channel:manage:moderators+channel:read:subscriptions+channel:read:redemptions+channel:manage:predictions+channel:manage:polls+bits:read+channel:read:hype_train+channel:manage:raids+channel:read:goals+channel:read:guest_star+channel:manage:shoutouts\`;
+  const url = \`https://id.twitch.tv/oauth2/authorize?client_id=\${config.twitch.clientId}&redirect_uri=\${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators channel:read:subscriptions channel:read:redemptions channel:manage:predictions channel:manage:polls bits:read channel:read:hype_train channel:manage:raids channel:read:goals\`;
   res.redirect(url);
 });
 
@@ -1652,18 +1738,23 @@ async function loadCustomCommandsIntoMemory() {
 
 // ---- Bot initialization ----
 async function initializeBot() {
+  log.info('Starting bot initialization...');
   if (!isAuthorized()) {
     log.warn('No valid token; bot not starting');
     return;
   }
 
+  log.info('Initializing DeepSeek client...');
   deepseek = new DeepSeekClient();
   log.info('DeepSeek client ready');
 
+  log.info('Initializing moderation...');
   moderation = new Moderation(config.moderation);
 
+  log.info('Loading custom commands...');
   await loadCustomCommandsIntoMemory();
 
+  log.info('Starting BullMQ workers...');
   const queueNames = Object.keys(jobHandlers);
   for (const q of queueNames) {
     const worker = startWorker(q, jobHandlers[q], 1);
@@ -1671,15 +1762,18 @@ async function initializeBot() {
   }
   log.info(\`Task queue workers started for: \${queueNames.join(', ')}\`);
 
+  log.info('Loading plugins...');
   await loadPlugins(bus, config);
 
   const twitchClient = global.twitchClient;
   if (twitchClient) {
+    log.info('Initializing message queue...');
     messageQueue = new MessageQueue(twitchClient);
     log.info('Message queue initialized');
   }
 
   if (config.eventsub.secret) {
+    log.info('Connecting to EventSub...');
     eventSubClient = new EventSubClient();
     await eventSubClient.connect();
     log.info('EventSub client connected');
@@ -1698,6 +1792,7 @@ async function initializeBot() {
   }
 
   bus.on('twitch.ready', () => {
+    log.info('Twitch client is ready. Starting auto-messages...');
     startAutoMessages();
   });
 
@@ -1898,12 +1993,25 @@ async function handleClearChat({ channel }) {
 
 // ---- Startup ----
 async function bootstrap() {
+  log.info('🚀 Starting SweatyClanker v3...');
+  log.info('🔌 Connecting to Redis...');
   await connectRedis();
+  const redis = getRedis();
+  if (redis) log.info('✅ Redis connected');
+  else log.warn('⚠️ Redis not available, using file storage fallback');
+
+  log.info('🔐 Initializing authentication...');
   await initAuth();
+  const authorized = isAuthorized();
+  if (authorized) log.info('✅ Token found and validated');
+  else log.info('ℹ️ No token yet – waiting for OAuth');
+
+  log.info('📦 Loading emotes...');
   const emotePools = await initializeEmotes(config.twitch.channels);
   setEmotePools(emotePools);
+  log.info('✅ Emotes loaded');
 
-  if (isAuthorized()) {
+  if (authorized) {
     await initializeBot();
   } else {
     log.info('No token, waiting for auth');
@@ -1911,7 +2019,7 @@ async function bootstrap() {
 
   const port = config.server.port;
   server = app.listen(port, () => {
-    log.info(\`Server running on port \${port}\`);
+    log.info(\`🌐 Server running on port \${port}\`);
   });
 }
 
