@@ -1,4 +1,3 @@
-// src/app.js
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -34,24 +33,7 @@ const app = express();
 const wsInstance = expressWs(app);
 app.set('trust proxy', config.server.trustProxy || 1);
 
-// ---- Security ----
-app.use(helmet());
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  validate: false,
-});
-app.use(limiter);
-const allowedOrigins = config.server.allowedOrigins || [];
-app.use((req, res, next) => {
-  const origin = req.get('origin');
-  if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
-    return res.status(403).send('Forbidden');
-  }
-  next();
-});
-
-// ---- State ----
+let botInitialized = false;
 let deepseek = null;
 let moderation = null;
 let cooldown = new CooldownManager(config.cooldown);
@@ -63,8 +45,8 @@ let heartbeatInterval = null;
 let messageQueue = null;
 let eventSubClient = null;
 let pollinations = new PollinationsClient();
+const publicUrl = config.server.publicUrl || 'http://localhost:3000';
 
-// ---- Auto‑message config ----
 const AUTO_ENABLED = config.auto.enabled;
 const AUTO_INTERVAL = config.auto.interval * 1000;
 const AUTO_USE_DEEPSEEK = config.auto.useDeepSeek;
@@ -81,11 +63,21 @@ const FALLBACK_MESSAGES = [
 ];
 let fallbackIndex = 0;
 
-// ---- Middleware ----
+app.use(helmet());
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
+app.use(limiter);
+const allowedOrigins = config.server.allowedOrigins || [];
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedOrigins.length && !allowedOrigins.includes(origin)) {
+    return res.status(403).send('Forbidden');
+  }
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
-// ---- WebSocket ----
 app.ws('/ws', (ws) => {
   wsClients.add(ws);
   ws.isAlive = true;
@@ -94,11 +86,7 @@ app.ws('/ws', (ws) => {
 });
 heartbeatInterval = setInterval(() => {
   for (const ws of wsClients) {
-    if (!ws.isAlive) {
-      ws.terminate();
-      wsClients.delete(ws);
-      continue;
-    }
+    if (!ws.isAlive) { ws.terminate(); wsClients.delete(ws); continue; }
     ws.isAlive = false;
     ws.ping();
   }
@@ -110,16 +98,6 @@ function broadcast(data) {
   }
 }
 
-// ---- Root ----
-app.get('/', (req, res) => {
-  res.send(`
-    <h1>SweatyClanker Bot</h1>
-    <p>Status: <strong>Running</strong></p>
-    <p><a href="/auth/login">Authorize on Twitch</a></p>
-  `);
-});
-
-// ---- Health ----
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
 app.get('/readyz', async (req, res) => {
@@ -143,29 +121,25 @@ app.get('/readyz', async (req, res) => {
   });
 });
 
-// ---- Metrics ----
 app.get('/metrics', async (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(await getMetrics());
 });
 
-// ---- Auth ----
 app.get('/auth/login', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators channel:read:subscriptions channel:read:redemptions channel:manage:predictions channel:manage:polls bits:read channel:read:hype_train channel:manage:raids channel:read:goals`;
+  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts`;
   res.redirect(url);
 });
 
 app.get('/auth/callback', async (req, res) => {
   const { code } = req.query;
-  if (!code) {
-    res.status(400).send('Missing code');
-    return;
-  }
+  if (!code) return res.status(400).send('Missing code');
   try {
     const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
     await exchangeCodeForToken(code, redirectUri);
-    await initializeBot();
+    if (!botInitialized) await initializeBot();
+    else log.info('Bot already running, skipping re‑initialization');
     res.send('Authorization successful! You may close this window.');
   } catch (err) {
     log.error('Auth callback failed', err);
@@ -173,7 +147,6 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// ---- API routes ----
 app.post('/api/commands', async (req, res) => {
   const { name, response, role } = req.body;
   if (!name || !response) return res.status(400).json({ error: 'Missing fields' });
@@ -195,20 +168,20 @@ app.post('/api/media/image', async (req, res) => {
     const result = await pollinations.generateImage(prompt);
     const filename = `image-${Date.now()}.png`;
     await writeFile(`public/${filename}`, result.buffer);
-    res.json({ url: `/public/${filename}` });
+    const url = `${publicUrl}/public/${filename}`;
+    res.json({ url });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ---- Auto‑message generation ----
 async function generateSpontaneousMessage(channel) {
   if (!deepseek || !AUTO_USE_DEEPSEEK) {
     const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
     fallbackIndex++;
     return msg;
   }
-  const systemPrompt = `You are SweatyClanker, a Twitch chatter. Say something spontaneous, fun, and engaging to the chat. Keep it short (1‑2 sentences).`;
+  const systemPrompt = `You are SweatyClanker, a Twitch chatter. Say something spontaneous, fun, and engaging to the chat. Keep it short.`;
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: 'Say something random to the chat.' }
@@ -243,11 +216,8 @@ function startAutoMessages() {
         const emote = getRandomEmote(channel);
         if (emote) finalMsg += ` ${emote}`;
       }
-      if (messageQueue) {
-        messageQueue.enqueue(channel, finalMsg);
-      } else {
-        await twitchClient.say(channel, finalMsg);
-      }
+      if (messageQueue) messageQueue.enqueue(channel, finalMsg);
+      else await twitchClient.say(channel, finalMsg);
       promMetrics.messagesSent.inc();
       await ConversationStore.pushMessage(channel, 'bot', finalMsg);
     }
@@ -259,70 +229,90 @@ async function loadCustomCommandsIntoMemory() {
   customCommands = await loadCustomCommands();
 }
 
-// ---- Bot initialization ----
 async function initializeBot() {
+  if (botInitialized) {
+    log.warn('Bot already initialized, skipping duplicate call');
+    return;
+  }
+  botInitialized = true;
+  log.info('Starting bot initialization...');
   if (!isAuthorized()) {
     log.warn('No valid token; bot not starting');
     return;
   }
-
+  log.info('Initializing DeepSeek client...');
   deepseek = new DeepSeekClient();
   log.info('DeepSeek client ready');
-
+  log.info('Initializing moderation...');
   moderation = new Moderation(config.moderation);
-
+  log.info('Loading custom commands...');
   await loadCustomCommandsIntoMemory();
-
+  log.info('Starting BullMQ workers...');
   const queueNames = Object.keys(jobHandlers);
   for (const q of queueNames) {
     const worker = startWorker(q, jobHandlers[q], 1);
     workers.push(worker);
   }
   log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
-
+  log.info('Loading plugins...');
   await loadPlugins(bus, config);
-
   const twitchClient = global.twitchClient;
   if (twitchClient) {
+    log.info('Initializing message queue...');
     messageQueue = new MessageQueue(twitchClient);
     log.info('Message queue initialized');
   }
-
   if (config.eventsub.secret) {
-    eventSubClient = new EventSubClient();
-    await eventSubClient.connect();
-    log.info('EventSub client connected');
+    try {
+      log.info('Connecting to EventSub...');
+      eventSubClient = new EventSubClient();
+      await eventSubClient.connect();
+      log.info('EventSub client connected');
+    } catch (err) {
+      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
+    }
+  } else {
+    log.info('EventSub secret not set – skipping EventSub');
   }
-
-  bus.on('twitch.message', handleMessage);
-  bus.on('twitch.usernotice', handleUserNotice);
-  bus.on('twitch.clearchat', handleClearChat);
-  bus.on('twitch.send', ({ channel, message }) => {
-    if (messageQueue) messageQueue.enqueue(channel, message);
-    else twitchClient?.say(channel, message);
+  bus.on('twitch.message', async (...args) => {
+    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
   });
-
+  bus.on('twitch.usernotice', async (...args) => {
+    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
+  });
+  bus.on('twitch.clearchat', async (...args) => {
+    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
+  });
+  bus.on('twitch.send', ({ channel, message }) => {
+    try {
+      if (messageQueue) messageQueue.enqueue(channel, message);
+      else twitchClient?.say(channel, message);
+    } catch (err) { log.error('Error in twitch.send handler', err); }
+  });
   if (AUTO_WELCOME) {
-    bus.on('twitch.join', handleJoin);
+    bus.on('twitch.join', async (...args) => {
+      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
+    });
   }
-
   bus.on('twitch.ready', () => {
+    log.info('Twitch client is ready. Starting auto-messages...');
     startAutoMessages();
   });
-
   log.info('Bot initialization complete');
   broadcast({ type: 'ready' });
 }
 
-// ---- Main message handler ----
+// ====== MAIN MESSAGE HANDLER (with incoming log) ======
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
   promMetrics.messagesReceived.inc();
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
 
-  await ConversationStore.updateLastActivity(channel);
+  // --- INCOMING LOG (info level) ---
+  log.info(`IN: ${username} @ ${channel}: ${message}`);
 
+  await ConversationStore.updateLastActivity(channel);
   if (config.twitch.ignoredUsers.includes(login)) return;
 
   const modResult = moderation.analyze(channel, user, message);
@@ -335,12 +325,6 @@ async function handleMessage({ channel, user, message, self }) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
 
-  const cooldownKey = `${channel}:${login}`;
-  if (!cooldown.check(cooldownKey)) {
-    log.debug(`Cooldown active for ${username} in ${channel}`);
-    return;
-  }
-
   const lowerMsg = message.trim().toLowerCase();
 
   // Custom commands
@@ -351,6 +335,11 @@ async function handleMessage({ channel, user, message, self }) {
       (cmd.role === 'moderator' && (user.mod || user.badges?.broadcaster)) ||
       (cmd.role === 'broadcaster' && user.badges?.broadcaster);
     if (hasPermission) {
+      const cooldownKey = `${channel}:${login}`;
+      if (!cooldown.check(cooldownKey)) {
+        log.debug(`Cooldown active for ${username} in ${channel}`);
+        return;
+      }
       const response = typeof cmd.response === 'function' ? cmd.response(message, user) : cmd.response;
       if (messageQueue) messageQueue.enqueue(channel, response);
       else await global.twitchClient.say(channel, response);
@@ -363,6 +352,8 @@ async function handleMessage({ channel, user, message, self }) {
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
     const cmd = builtins.get(builtinKey);
+    const cooldownKey = `${channel}:${login}`;
+    if (!cooldown.check(cooldownKey)) return;
     const response = await cmd.handler(user, channel, global.twitchClient, message);
     if (response) {
       if (messageQueue) messageQueue.enqueue(channel, response);
@@ -384,16 +375,20 @@ async function handleMessage({ channel, user, message, self }) {
       const prompt = message.slice(cmd.length).trim();
       if (!prompt) {
         const response = `Usage: ${cmd} <description>`;
+        const cooldownKey = `${channel}:${login}`;
+        if (!cooldown.check(cooldownKey)) return;
         if (messageQueue) messageQueue.enqueue(channel, response);
         else await global.twitchClient.say(channel, response);
         return;
       }
+      const cooldownKey = `${channel}:${login}`;
+      if (!cooldown.check(cooldownKey)) return;
       try {
         const result = await handler(prompt);
         const ext = type === 'image' ? 'png' : type === 'video' ? 'mp4' : 'mp3';
         const filename = `media-${Date.now()}.${ext}`;
         await writeFile(`public/${filename}`, result.buffer);
-        const url = `${req.protocol}://${req.get('host')}/public/${filename}`;
+        const url = `${publicUrl}/public/${filename}`;
         const response = `Here's your ${type}: ${url}`;
         if (messageQueue) messageQueue.enqueue(channel, response);
         else await global.twitchClient.say(channel, response);
@@ -412,15 +407,16 @@ async function handleMessage({ channel, user, message, self }) {
   const shouldReply = shouldRespond(message, config.twitch.username);
   if (!shouldReply) return;
 
+  const cooldownKey = `${channel}:${login}`;
+  if (!cooldown.check(cooldownKey)) return;
+
   const brainName = await scoreBrains(channel, user, message);
   const Brain = getBrain(brainName);
   const brainConfig = Brain.getConfig();
-
   const history = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
   const systemPrompt = brainConfig.systemPrompt;
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
-
   const userPrompt = buildUserPrompt(message, username, history);
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -437,7 +433,6 @@ async function handleMessage({ channel, user, message, self }) {
     promMetrics.tokenUsage.inc(Math.ceil((userPrompt.length + systemPrompt.length) / 4));
 
     const processedReply = await Brain.processResponse(reply, { channel, user, message });
-
     if (brainName === 'moderation') {
       if (processedReply.toxic) {
         log.warn(`Toxicity detected from ${username}: ${processedReply.reason}`);
@@ -449,7 +444,7 @@ async function handleMessage({ channel, user, message, self }) {
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
 
-    await ConversationStore.pushMessage(channel, 'user', message);
+    await ConversationStore.pushMessage(channel, 'user', message, username);
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, { lastSeen: Date.now() });
 
@@ -476,8 +471,8 @@ async function handleJoin({ channel, username, self }) {
   const key = `${channel}:${username}`;
   if (global._welcomedUsers && global._welcomedUsers.has(key)) return;
   if (!global._welcomedUsers) global._welcomedUsers = new Set();
-  const history = await ConversationStore.getHistory(channel, 1);
-  const hasSpoken = history.some(h => h.role === 'user' && h.content.includes(username));
+  const history = await ConversationStore.getHistory(channel, 10);
+  const hasSpoken = history.some(h => h.username === username);
   if (hasSpoken) return;
   const welcomeMsg = `Welcome to the stream, @${username}! Hope you enjoy the chaos.`;
   if (messageQueue) messageQueue.enqueue(channel, welcomeMsg);
@@ -505,26 +500,37 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
-// ---- Startup ----
+app.get('/', (req, res) => {
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
+});
+
 async function bootstrap() {
+  log.info('🚀 Starting SweatyClanker v3...');
+  log.info('🔌 Connecting to Redis...');
   await connectRedis();
+  const redis = getRedis();
+  if (redis) log.info('✅ Redis connected');
+  else log.warn('⚠️ Redis not available, using file storage fallback');
+  log.info('🔐 Initializing authentication...');
   await initAuth();
+  const authorized = isAuthorized();
+  if (authorized) log.info('✅ Token found and validated');
+  else log.info('ℹ️ No token yet – waiting for OAuth');
+  log.info('📦 Loading emotes...');
   const emotePools = await initializeEmotes(config.twitch.channels);
   setEmotePools(emotePools);
-
-  if (isAuthorized()) {
+  log.info('✅ Emotes loaded');
+  if (authorized && !botInitialized) {
     await initializeBot();
-  } else {
+  } else if (!authorized) {
     log.info('No token, waiting for auth');
   }
-
   const port = config.server.port;
   server = app.listen(port, () => {
-    log.info(`Server running on port ${port}`);
+    log.info(`🌐 Server running on port ${port}`);
   });
 }
 
-// ---- Shutdown ----
 async function shutdown() {
   log.info('Shutting down gracefully...');
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
@@ -532,21 +538,13 @@ async function shutdown() {
   if (messageQueue) messageQueue.stop();
   if (eventSubClient) eventSubClient.disconnect();
   await drainQueues();
-  if (global.twitchClient) {
-    global.twitchClient.disconnect();
-  }
+  if (global.twitchClient) global.twitchClient.disconnect();
   const redis = getRedis();
   if (redis) await redis.quit();
   if (server) {
     await new Promise(resolve => {
-      server.close(() => {
-        log.info('HTTP server closed');
-        resolve();
-      });
-      setTimeout(() => {
-        log.warn('Forcing server close');
-        resolve();
-      }, 5000);
+      server.close(() => { log.info('HTTP server closed'); resolve(); });
+      setTimeout(() => { log.warn('Forcing server close'); resolve(); }, 5000);
     });
   }
   process.exit(0);
