@@ -9,16 +9,9 @@ export class CooldownManager {
 
   check(key) {
     const now = Date.now();
-    // Check global cooldown
-    if (now - this.lastGlobal < this.globalCooldown * 1000) {
-      return false;
-    }
-    // Check user cooldown
+    if (now - this.lastGlobal < this.globalCooldown * 1000) return false;
     const lastUser = this.userTimers.get(key) || 0;
-    if (now - lastUser < this.userCooldown * 1000) {
-      return false;
-    }
-    // If we get here, cooldown is not active – update timestamps
+    if (now - lastUser < this.userCooldown * 1000) return false;
     this.lastGlobal = now;
     this.userTimers.set(key, now);
     return true;
