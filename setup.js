@@ -165,7 +165,7 @@ export function getFallbackResponse() {
 }
 `,
 
-  // ---- CONFIG (with validation) ----
+  // ---- CONFIG (with validation) – FIXED: .unknown(true) ----
   'src/config/index.js': `
 import dotenv from 'dotenv';
 import Joi from 'joi';
@@ -210,7 +210,7 @@ const schema = Joi.object({
   ALLOWED_ORIGINS: Joi.string().allow('').default(''),
   EVENTSUB_SECRET: Joi.string().required(),
   EVENTSUB_WSS_URL: Joi.string().uri().default('wss://eventsub.wss.twitch.tv'),
-});
+}).unknown(true); // <-- THIS FIXES THE VALIDATION ERROR
 
 const { error, value: validated } = schema.validate(process.env, { abortEarly: false });
 if (error) {
