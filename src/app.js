@@ -1,3 +1,4 @@
+// src/app.js
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -6,6 +7,8 @@ import { config } from './config/index.js';
 import { logger, createLogger } from './logger/index.js';
 import { connectRedis, getRedis } from './storage/redis.js';
 import { initAuth, exchangeCodeForToken, isAuthorized } from './twitch/auth.js';
+// TODO: Verify this import matches the actual AI client file.
+// The file 'src/ai/client.js' must export a class named DeepSeekClient with a chat() method.
 import { DeepSeekClient } from './ai/client.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { builtins, loadCustomCommands, saveCustomCommand, deleteCustomCommand } from './commands/index.js';
@@ -466,20 +469,41 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
+// ====== JOIN HANDLER – FILTERS OUT BOTS AND STREAMER ======
 async function handleJoin({ channel, username, self }) {
   if (self) return;
+
+  // 🔧 Do not greet the broadcaster or known bot accounts
+  const broadcasterName = channel.replace('#', '').toLowerCase();
+  const ignoredUsers = [
+    broadcasterName,
+    'streamelements', 'nightbot', 'overlayexpert', 'moobot', 'fossabot',
+    'wizebot', 'coebot', 'phantombot', 'streamlabs', 'pretzelrocks',
+    'sweatyclanker', 'anotherttvviewer', 'soundalerts', 'botrixoficial'
+  ];
+
+  if (ignoredUsers.includes(username.toLowerCase())) return;
+
   const key = `${channel}:${username}`;
   if (global._welcomedUsers && global._welcomedUsers.has(key)) return;
   if (!global._welcomedUsers) global._welcomedUsers = new Set();
-  const history = await ConversationStore.getHistory(channel, 10);
+
+  // Check if user has recently chatted (prevents welcoming regulars on rejoin)
+  const history = await ConversationStore.getHistory(channel, 20);
   const hasSpoken = history.some(h => h.username === username);
   if (hasSpoken) return;
+
   const welcomeMsg = `Welcome to the stream, @${username}! Hope you enjoy the chaos.`;
   if (messageQueue) messageQueue.enqueue(channel, welcomeMsg);
   else await global.twitchClient.say(channel, welcomeMsg);
   promMetrics.messagesSent.inc();
+
   global._welcomedUsers.add(key);
-  if (global._welcomedUsers.size > 1000) global._welcomedUsers.clear();
+  // Avoid memory leak – reset after a large number of welcomes
+  if (global._welcomedUsers.size > 2000) {
+    log.debug('Clearing welcomed users cache (size > 2000)');
+    global._welcomedUsers.clear();
+  }
 }
 
 async function handleUserNotice({ channel, user, msg, tags }) {
