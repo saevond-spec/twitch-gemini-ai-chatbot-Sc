@@ -9,7 +9,6 @@ import { metrics } from '../utils/metrics.js';
 
 const log = createLogger('IRC');
 
-// Enable debug only if explicitly requested
 const debugMode = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
 
 export class TwitchClient {
@@ -31,7 +30,7 @@ export class TwitchClient {
     this._reconnectAttempt = 0;
     this._maxReconnectAttempts = 20;
     this._state = 'idle';
-    this._lastPing = 0;
+    this._lastPing = null;                        // 🆕 initialized to null
     this._reconnectTimer = null;
 
     this.stateMachine = new ReconnectStateMachine({
@@ -99,13 +98,25 @@ export class TwitchClient {
         connection: { reconnect: false, secure: true },
       });
 
+      // 🆕 Error handler to prevent crashes
+      this.client.on('error', (err) => {
+        log.error('IRC client error:', err.message);
+        this.emit('error', err);
+      });
+
       this.client.on('ping', () => {
         this._lastPing = Date.now();
         log.debug('PING received from Twitch');
       });
+
+      // 🆕 Fixed PONG latency calculation
       this.client.on('pong', (latency) => {
-        const measured = Date.now() - this._lastPing;
-        log.debug(`PONG received, latency: ${measured}ms`);
+        if (this._lastPing) {
+          const measured = Date.now() - this._lastPing;
+          log.debug(`PONG received, latency: ${measured}ms`);
+        } else {
+          log.debug('PONG received but no previous PING timestamp');
+        }
       });
 
       this.client.on('connected', (addr, port) => {
@@ -143,7 +154,6 @@ export class TwitchClient {
       // ---- MESSAGE HANDLER – logs every incoming message at INFO level ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
-        // Log incoming messages always visible (info level)
         log.info(`📥 IN: ${user.username} @ ${channel}: ${message}`);
         this.emit('message', channel, user, message, false);
       });
@@ -193,7 +203,8 @@ export class TwitchClient {
       this._reconnectTimer = null;
     }
     if (this.client) {
-      this.client.disconnect();
+      // 🆕 Catch disconnection errors so they don't crash the process
+      this.client.disconnect().catch(err => log.error('Error disconnecting IRC:', err));
       this.client = null;
     }
     this.connected = false;
