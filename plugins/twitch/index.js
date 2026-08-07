@@ -33,6 +33,12 @@ export async function register(bus, config) {
     bus.emit('twitch.reconnecting');
   });
 
+  // 🆕 Error listener – prevents crashes from unexpected IRC errors
+  client.on('error', (err) => {
+    log.error('Twitch client error:', err.message);
+    bus.emit('twitch.error', err);
+  });
+
   // --- MESSAGE HANDLER WITH LOG ---
   client.on('message', (channel, user, message, self) => {
     log.info(`📨 PLUGIN: message from ${user.username} in ${channel}: ${message}`);
