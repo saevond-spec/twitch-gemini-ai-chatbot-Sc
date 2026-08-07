@@ -118,18 +118,8 @@ export class TwitchClient {
         log.info(`✅ Connected to ${addr}:${port} (state: ${this._state})`);
         this.emit('connected', addr, port);
 
-        if (this.client && this.client.ws) {
-          this.client.ws.on('close', (code, reason) => {
-            const reasonStr = reason ? reason.toString() : 'no reason';
-            const initiator = this._disconnecting ? 'client' : 'Twitch';
-            log.warn(`IRC WebSocket closed: code=${code}, reason="${reasonStr}", initiated by ${initiator}, active clients=${TwitchClient._activeClients}`);
-          });
-          this.client.ws.on('error', (err) => {
-            log.error('IRC WebSocket error:', err);
-          });
-        } else {
-          log.debug('Could not attach WebSocket listeners – relying on debug logs');
-        }
+        // --- REMOVED the problematic this.client.ws listeners ---
+        // No longer trying to access this.client.ws
 
         resolve();
       });
@@ -152,7 +142,6 @@ export class TwitchClient {
         }
       });
 
-      // ---- MESSAGE HANDLER WITH LOG ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
         log.info(`📡 RAW IRC: ${user.username} @ ${channel}: ${message}`);
