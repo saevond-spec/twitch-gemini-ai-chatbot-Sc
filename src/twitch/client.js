@@ -8,6 +8,8 @@ import { ReconnectStateMachine } from '../state/reconnectState.js';
 import { metrics } from '../utils/metrics.js';
 
 const log = createLogger('IRC');
+
+// Enable debug only if explicitly requested
 const debugMode = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
 
 export class TwitchClient {
@@ -117,10 +119,6 @@ export class TwitchClient {
         this.stateMachine.connected();
         log.info(`✅ Connected to ${addr}:${port} (state: ${this._state})`);
         this.emit('connected', addr, port);
-
-        // --- REMOVED the problematic this.client.ws listeners ---
-        // No longer trying to access this.client.ws
-
         resolve();
       });
 
@@ -142,9 +140,11 @@ export class TwitchClient {
         }
       });
 
+      // ---- MESSAGE HANDLER – logs every incoming message at INFO level ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
-        log.info(`📡 RAW IRC: ${user.username} @ ${channel}: ${message}`);
+        // Log incoming messages always visible (info level)
+        log.info(`📥 IN: ${user.username} @ ${channel}: ${message}`);
         this.emit('message', channel, user, message, false);
       });
 
