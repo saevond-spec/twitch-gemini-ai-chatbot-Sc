@@ -344,6 +344,20 @@ Once running, visit `http://localhost:3000/auth/login` to authorize.
 
 ---
 
+## Automatic Twitch stream highlights
+
+The optional highlight detector listens to live chat reactions and `channel.follow` EventSub events. A follow strengthens nearby chat evidence; it does not create a highlight on its own. DeepSeek scores candidate moments from text context, so it does not watch or hear gameplay. When a tracked stream ends and its archive VOD is available, the bot sends up to five selected moments by default to Amaana. Amaana joins the source clips into a landscape highlight video, cuts a vertical Short from each segment, and uploads them as private YouTube drafts for owner review. A stream without qualifying reactions produces no draft.
+
+Set these variables on this Render service:
+
+- `CLIP_WEBHOOK_URL=https://amaana-yt.onrender.com/api/twitch/vod-clips`
+- `CLIP_WEBHOOK_KEY` to Amaana's `AGENT_KEY` value; keep it secret.
+- `HIGHLIGHT_DETECTION_ENABLED=true`
+
+Optional controls: `HIGHLIGHT_WINDOW_SECONDS`, `HIGHLIGHT_MIN_MESSAGES`, `HIGHLIGHT_COOLDOWN_SECONDS`, and `HIGHLIGHT_MAX_CLIPS` (one to eight). The Twitch bot must be authorized with `moderator:read:followers` for follow signals. Amaana separately needs the broadcaster's Twitch clip permission and Twitch VOD storage and Clips enabled. Source clips on Twitch can be visible independently of the private YouTube drafts.
+
+The bot must be running while the stream is live to observe chat. Render Free web services can spin down after 15 minutes without inbound traffic, so check uptime or use an always-on service if every stream must be covered. A regular stream ending is enough to start the VOD handoff; no 24-hour stream is needed.
+
 ## License
 
 [MIT](LICENSE) — use freely, attribution appreciated!
