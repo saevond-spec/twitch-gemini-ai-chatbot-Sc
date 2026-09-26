@@ -358,6 +358,8 @@ Optional controls: `HIGHLIGHT_WINDOW_SECONDS`, `HIGHLIGHT_MIN_MESSAGES`, `HIGHLI
 
 The bot must be running while the stream is live to observe chat. Render Free web services can spin down after 15 minutes without inbound traffic, so check uptime or use an always-on service if every stream must be covered. A regular stream ending is enough to start the VOD handoff; no 24-hour stream is needed.
 
+The eight legacy BullMQ handlers in this repository only log jobs. They are disabled by default to avoid idle Redis traffic; set `WORKERS_ENABLED=true` only when those handlers are needed. The highlight detector runs separately and does not require BullMQ.
+
 ## License
 
 [MIT](LICENSE) — use freely, attribution appreciated!
