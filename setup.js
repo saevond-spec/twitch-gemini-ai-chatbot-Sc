@@ -31,6 +31,7 @@ AI_CIRCUIT_BREAKER_THRESHOLD=5
 
 # Redis
 REDIS_URL=redis://...
+WORKERS_ENABLED=false
 
 # Cooldowns (seconds)
 COOLDOWN_DURATION=1
@@ -2048,6 +2049,7 @@ export function getQueue(name) {
   return queues[name];
 }
 export function enqueueTask(queueName, data, opts = {}) {
+  if (process.env.WORKERS_ENABLED !== 'true') return Promise.resolve(null);
   const queue = getQueue(queueName);
   return queue.add(queueName, data, { attempts: 3, backoff: { type: 'exponential', delay: 1000 }, ...opts });
 }
@@ -2713,13 +2715,17 @@ async function initializeBot() {
   moderation = new Moderation(config.moderation);
   log.info('Loading custom commands...');
   await loadCustomCommandsIntoMemory();
-  log.info('Starting BullMQ workers...');
-  const queueNames = Object.keys(jobHandlers);
-  for (const q of queueNames) {
-    const worker = startWorker(q, jobHandlers[q], 1);
-    workers.push(worker);
+  if (process.env.WORKERS_ENABLED === 'true') {
+    log.info('Starting BullMQ workers...');
+    const queueNames = Object.keys(jobHandlers);
+    for (const q of queueNames) {
+      const worker = startWorker(q, jobHandlers[q], 1);
+      workers.push(worker);
+    }
+    log.info('Task queue workers started for: ' + queueNames.join(', '));
+  } else {
+    log.info('Placeholder BullMQ workers disabled to avoid idle Redis requests');
   }
-  log.info(\`Task queue workers started for: \${queueNames.join(', ')}\`);
 
   // Register bus listeners before plugins
   bus.on('twitch.message', async (...args) => {
