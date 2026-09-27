@@ -48,10 +48,11 @@ async function loadStoredToken() {
 
 async function saveToken(tokenData) {
   const redis = getRedis();
-  const expiresIn = tokenData.expires_in || 86400;
   if (redis) {
     try {
-      await redis.set(TOKEN_KEY, JSON.stringify(tokenData), 'EX', expiresIn);
+      // Keep the refresh token available after the access token expires or Render sleeps.
+      // An expiring Redis key cannot be refreshed when the bot restarts later.
+      await redis.set(TOKEN_KEY, JSON.stringify(tokenData));
       log.debug('Token persisted to Redis');
     } catch (err) {
       log.warn('Failed to save token to Redis', err.message);
