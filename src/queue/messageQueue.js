@@ -8,6 +8,8 @@ export class MessageQueue {
     this.queue = new Map();
     this.processing = new Set();
     this.interval = null;
+    this.lastSentAt = new Map();
+    this.minChannelIntervalMs = Math.max(1000, Number(process.env.TWITCH_MIN_SEND_INTERVAL_MS || 1100));
     this.start();
   }
   start() {
@@ -43,11 +45,14 @@ export class MessageQueue {
         bucket.lastRefill = now;
       }
       if (bucket.tokens <= 0) continue;
+      const lastSent = this.lastSentAt.get(channel) || 0;
+      if (now - lastSent < this.minChannelIntervalMs) continue;
       const msg = messages.shift();
       this.processing.add(channel);
       try {
         await this.client.say(channel, msg);
         bucket.tokens--;
+        this.lastSentAt.set(channel, Date.now());
         log.debug(`Sent queued message to ${channel}, remaining tokens: ${bucket.tokens}`);
       } catch (err) {
         log.error(`Failed to send queued message to ${channel}`, err);
