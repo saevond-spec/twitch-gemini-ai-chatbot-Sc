@@ -20,6 +20,7 @@ const SCOPES = [
   'moderation:read', 'channel:manage:moderators',
   'moderator:read:followers',
   'moderator:manage:shoutouts',
+  'channel:manage:clips',
 ];
 
 async function loadStoredToken() {
