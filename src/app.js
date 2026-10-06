@@ -32,6 +32,7 @@ import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
 import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
 import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
+import { ProactiveWelcomeLimiter } from './chat/proactiveWelcomeLimiter.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
@@ -53,6 +54,10 @@ let eventSubClient = null;
 let pollinations = new PollinationsClient();
 let highlightDetector = null;
 const incomingDeduper = new IncomingMessageDeduper();
+const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
+  maxPerWindow: Number(process.env.PROACTIVE_WELCOME_MAX_PER_MINUTE || 3),
+  windowMs: 60_000,
+});
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
 
 const AUTO_ENABLED = config.auto.enabled;
@@ -422,11 +427,12 @@ async function handleMessage({ channel, user, message, self }) {
   // AI chat: direct mentions/replies plus low-pressure first-chat welcome.
   const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
   const directInteraction = shouldRespond(message, personaNames, user);
-  const proactiveWelcome = AUTO_WELCOME && shouldProactivelyWelcome({
+  const proactiveWelcomeCandidate = AUTO_WELCOME && shouldProactivelyWelcome({
     profile: viewerProfile,
     message,
     isCommand,
   });
+  const proactiveWelcome = proactiveWelcomeCandidate && proactiveWelcomeLimiter.allow(channel);
   const shouldReply = directInteraction || proactiveWelcome;
   if (!shouldReply || viewerProfile.proactiveOptOut) {
     log.debug('Skipping AI: no direct interaction or eligible first-chat welcome');
@@ -483,7 +489,7 @@ async function handleMessage({ channel, user, message, self }) {
       const emote = getRandomEmote(channel);
       if (emote) finalReply += ` ${emote}`;
     }
-    if (messageQueue) messageQueue.enqueue(channel, finalReply);
+    if (messageQueue) messageQueue.enqueue(channel, finalReply, { priority: directInteraction ? 'high' : 'normal' });
     else await global.twitchClient.say(channel, finalReply);
     promMetrics.messagesSent.inc();
   } catch (err) {
