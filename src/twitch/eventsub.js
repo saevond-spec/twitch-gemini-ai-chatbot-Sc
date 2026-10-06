@@ -7,6 +7,7 @@ import { HelixClient } from './helix.js';
 import { getRedis } from '../storage/redis.js';
 import { getAccessToken } from './auth.js';
 import { metrics } from '../utils/metrics.js';
+import { EventSubDeduper } from './eventsubDeduper.js';
 
 const log = createLogger('EVENTSUB');
 
@@ -28,6 +29,7 @@ export class EventSubClient {
     this._isConnecting = false;
     this._heartbeatInterval = null;
     this._lastKeepalive = 0;
+    this._deduper = new EventSubDeduper();
   }
 
   async connect() {
@@ -153,13 +155,17 @@ export class EventSubClient {
       }
 
       if (metadata?.message_type === 'notification') {
+        if (!this._deduper.shouldProcess(metadata)) {
+          log.debug(`Ignoring duplicate or stale EventSub notification ${metadata?.message_id || 'unknown'}`);
+          return;
+        }
         const event = payload.event;
         const type = metadata.subscription_type;
         bus.emit(`eventsub.${type}`, event);
         bus.emit('eventsub.event', { type, event });
         const redis = getRedis();
         if (redis) {
-          const key = `eventsub:${type}:${Date.now()}`;
+          const key = `eventsub:${type}:${metadata.message_id || Date.now()}`;
           redis.set(key, JSON.stringify(event), 'EX', 3600).catch(() => {});
         }
         this._handleEvent(type, event);
