@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { config } from '../config/index.js';
-import { getAccessToken } from '../twitch/auth.js';
+import { getAccessToken, getAuthenticatedUserId } from '../twitch/auth.js';
 import { createLogger } from '../logger/index.js';
 
 const log = createLogger('CLIP');
@@ -24,8 +24,10 @@ async function helixGet(path, params) {
 
 export async function createClipFromVod({ broadcasterId, vodId, endSeconds, durationSeconds, title }) {
   const duration = Math.max(5, Math.min(60, Number(durationSeconds) || 30));
+  const editorId = getAuthenticatedUserId();
+  if (!editorId) throw new Error('Authenticated Twitch editor id is unavailable; reconnect Twitch');
   const [clip] = await helixPost('/videos/clips', {
-    editor_id: broadcasterId,
+    editor_id: editorId,
     broadcaster_id: broadcasterId,
     vod_id: vodId,
     vod_offset: Math.max(Math.ceil(duration), Math.round(endSeconds)),
@@ -46,8 +48,10 @@ export async function createClipFromVod({ broadcasterId, vodId, endSeconds, dura
 }
 
 export async function getClipDownloads({ broadcasterId, clipId }) {
+  const editorId = getAuthenticatedUserId();
+  if (!editorId) throw new Error('Authenticated Twitch editor id is unavailable; reconnect Twitch');
   const [download] = await helixGet('/clips/downloads', {
-    editor_id: broadcasterId,
+    editor_id: editorId,
     broadcaster_id: broadcasterId,
     clip_id: clipId,
   });
