@@ -1,9 +1,9 @@
 import { getRedis } from '../storage/redis.js';
 
 const PROFILE_TTL_SECONDS = 30 * 24 * 60 * 60;
-const SEEN_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
+const STATE_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
 const memoryProfiles = new Map();
-const memorySeen = new Map();
+const memoryState = new Map();
 
 function defaults(now = Date.now()) {
   return {
@@ -22,62 +22,80 @@ function defaults(now = Date.now()) {
   };
 }
 
-function memoryKey(channel, viewer) {
+function key(channel, viewer) {
   return `${channel}:${viewer}`;
+}
+
+function durableState(profile) {
+  return {
+    seenBefore: true,
+    firstSeen: profile.firstSeen,
+    lastSeen: profile.lastSeen,
+    followed: Boolean(profile.followed),
+    followedAt: profile.followedAt || null,
+    followPromptedAt: profile.followPromptedAt || null,
+    proactiveOptOut: Boolean(profile.proactiveOptOut),
+  };
 }
 
 function pruneMemory(now = Date.now()) {
   const profileCutoff = now - PROFILE_TTL_SECONDS * 1000;
-  const seenCutoff = now - SEEN_TTL_SECONDS * 1000;
+  const stateCutoff = now - STATE_TTL_SECONDS * 1000;
 
-  for (const [key, value] of memoryProfiles) {
-    if ((value.lastSeen || 0) < profileCutoff) memoryProfiles.delete(key);
+  for (const [entryKey, value] of memoryProfiles) {
+    if ((value.lastSeen || 0) < profileCutoff) memoryProfiles.delete(entryKey);
   }
-  for (const [key, lastSeen] of memorySeen) {
-    if (lastSeen < seenCutoff) memorySeen.delete(key);
+  for (const [entryKey, value] of memoryState) {
+    if ((value.lastSeen || 0) < stateCutoff) memoryState.delete(entryKey);
   }
 }
 
 export class ProfileStore {
   static async get(channel, viewer) {
-    const key = memoryKey(channel, viewer);
+    const entryKey = key(channel, viewer);
     const redis = getRedis();
 
     if (!redis) {
       pruneMemory();
-      const existing = memoryProfiles.get(key);
-      const seenBefore = memorySeen.has(key);
-      return existing ? { ...defaults(), ...existing, seenBefore: true } : { ...defaults(), seenBefore };
+      const detailed = memoryProfiles.get(entryKey);
+      const durable = memoryState.get(entryKey);
+      return { ...defaults(), ...(durable || {}), ...(detailed || {}) };
     }
 
-    const [data, seen] = await Promise.all([
+    const [data, stateData] = await Promise.all([
       redis.get(`profile:${channel}:${viewer}`),
-      redis.get(`profile-seen:${channel}:${viewer}`),
+      redis.get(`profile-state:${channel}:${viewer}`),
     ]);
 
-    if (!data) return { ...defaults(), seenBefore: Boolean(seen) };
+    let durable = {};
+    if (stateData) {
+      try { durable = JSON.parse(stateData); } catch {}
+    }
+
+    if (!data) return { ...defaults(), ...durable };
     try {
-      return { ...defaults(), ...JSON.parse(data), seenBefore: true };
+      return { ...defaults(), ...durable, ...JSON.parse(data) };
     } catch {
-      return { ...defaults(), seenBefore: Boolean(seen) };
+      return { ...defaults(), ...durable };
     }
   }
 
   static async update(channel, viewer, updates) {
-    const key = memoryKey(channel, viewer);
+    const entryKey = key(channel, viewer);
     const profile = await this.get(channel, viewer);
     Object.assign(profile, updates, { lastSeen: Date.now(), seenBefore: true });
+    const durable = durableState(profile);
 
     const redis = getRedis();
     if (!redis) {
-      memoryProfiles.set(key, profile);
-      memorySeen.set(key, profile.lastSeen);
+      memoryProfiles.set(entryKey, profile);
+      memoryState.set(entryKey, durable);
       return;
     }
 
     await Promise.all([
       redis.set(`profile:${channel}:${viewer}`, JSON.stringify(profile), 'EX', PROFILE_TTL_SECONDS),
-      redis.set(`profile-seen:${channel}:${viewer}`, String(profile.lastSeen), 'EX', SEEN_TTL_SECONDS),
+      redis.set(`profile-state:${channel}:${viewer}`, JSON.stringify(durable), 'EX', STATE_TTL_SECONDS),
     ]);
   }
 
@@ -90,6 +108,6 @@ export class ProfileStore {
 
   static clearMemoryFallbackForTests() {
     memoryProfiles.clear();
-    memorySeen.clear();
+    memoryState.clear();
   }
 }
