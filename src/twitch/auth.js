@@ -1,4 +1,4 @@
-// src/twitch/auth.js
+
 import axios from 'axios';
 import { config } from '../config/index.js';
 import { getRedis } from '../storage/redis.js';
@@ -8,30 +8,19 @@ import { createLogger } from '../logger/index.js';
 const log = createLogger('AUTH');
 const TOKEN_KEY = 'twitch:oauth';
 const TOKEN_FILE = './tokens.json';
-const REQUEST_TIMEOUT_MS = 10000; // 10 seconds
+const REQUEST_TIMEOUT_MS = 10000;
 
 let currentToken = null;
 let refreshTimer = null;
-let refreshPromise = null;    // 🆕 simple concurrency guard
+let refreshPromise = null;   // concurrent refresh guard
 
 const SCOPES = [
   'chat:read', 'chat:edit',
   'user:bot', 'user:read:chat', 'user:write:chat',
   'moderation:read', 'channel:manage:moderators',
-  'channel:read:subscriptions', 'channel:read:redemptions',
-  'channel:manage:predictions', 'channel:manage:polls',
-  'bits:read', 'channel:read:hype_train',
-  'channel:manage:raids', 'channel:read:goals',
-  'moderator:read:followers'
+  'moderator:read:followers',
+  'moderator:manage:shoutouts',
 ];
-
-async function axiosPostWithTimeout(url, data, configOverrides = {}) {
-  const finalConfig = {
-    timeout: REQUEST_TIMEOUT_MS,
-    ...configOverrides,
-  };
-  return axios.post(url, data, finalConfig);
-}
 
 async function loadStoredToken() {
   const redis = getRedis();
@@ -48,11 +37,10 @@ async function loadStoredToken() {
 
 async function saveToken(tokenData) {
   const redis = getRedis();
+  const expiresIn = tokenData.expires_in || 86400;
   if (redis) {
     try {
-      // Keep the refresh token available after the access token expires or Render sleeps.
-      // An expiring Redis key cannot be refreshed when the bot restarts later.
-      await redis.set(TOKEN_KEY, JSON.stringify(tokenData));
+      await redis.set(TOKEN_KEY, JSON.stringify(tokenData), 'EX', expiresIn);
       log.debug('Token persisted to Redis');
     } catch (err) {
       log.warn('Failed to save token to Redis', err.message);
@@ -80,6 +68,7 @@ export async function validateToken() {
   }
 }
 
+// FIXED: Only returns true if token is actually valid after refresh attempt
 export async function initAuth() {
   const stored = await loadStoredToken();
   if (stored) {
@@ -91,7 +80,6 @@ export async function initAuth() {
       log.warn('Stored token invalid, attempting refresh...');
       try {
         await refreshToken();
-        // refreshToken updates currentToken on success
         if (currentToken && await validateToken()) {
           scheduleRefresh();
           return true;
@@ -99,12 +87,11 @@ export async function initAuth() {
       } catch (err) {
         log.error('Token refresh failed, auth not ready');
       }
-      // Still invalid after refresh – clear token
       currentToken = null;
       return false;
     }
 
-    // Token is valid; check expiry
+    // Token valid, near expiry?
     if (currentToken.expires_at && Date.now() >= currentToken.expires_at - 60000) {
       log.info('Token near expiry, refreshing...');
       await refreshToken().catch(err => log.error('Pre‑emptive refresh failed'));
@@ -125,13 +112,12 @@ export async function exchangeCodeForToken(code, redirectUri) {
     redirect_uri: redirectUri,
   });
 
-  const response = await axiosPostWithTimeout(
+  const response = await axios.post(
     'https://id.twitch.tv/oauth2/token',
     params.toString(),
     {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: REQUEST_TIMEOUT_MS,
     }
   );
 
@@ -145,7 +131,6 @@ export async function exchangeCodeForToken(code, redirectUri) {
   return tokenData;
 }
 
-// 🆕 Refresh function now guarded against concurrent calls
 async function refreshToken() {
   if (refreshPromise) return refreshPromise;
 
@@ -163,13 +148,12 @@ async function refreshToken() {
     });
 
     try {
-      const response = await axiosPostWithTimeout(
+      const response = await axios.post(
         'https://id.twitch.tv/oauth2/token',
         params.toString(),
         {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: REQUEST_TIMEOUT_MS,
         }
       );
 
@@ -192,9 +176,7 @@ async function refreshToken() {
           const redis = getRedis();
           if (redis) await redis.del(TOKEN_KEY);
           await writeJSON(TOKEN_FILE, null);
-        } catch (e) {
-          // ignore cleanup errors
-        }
+        } catch (e) { /* ignore */ }
         throw new Error('invalid_grant');
       } else {
         log.warn('Token refresh failed (transient)', err.response?.status || err.message);
