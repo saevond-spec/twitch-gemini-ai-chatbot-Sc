@@ -30,6 +30,7 @@ import { PollinationsClient } from './media/providers.js';
 import { writeFile } from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
+import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
@@ -50,6 +51,7 @@ let messageQueue = null;
 let eventSubClient = null;
 let pollinations = new PollinationsClient();
 let highlightDetector = null;
+const incomingDeduper = new IncomingMessageDeduper();
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
 
 const AUTO_ENABLED = config.auto.enabled;
@@ -303,6 +305,10 @@ async function loadCustomCommandsIntoMemory() {
 // ========== HANDLE MESSAGE ==========
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
+  if (incomingDeduper.isDuplicate(channel, user)) {
+    log.debug(`Skipping duplicate Twitch message ${user?.id || user?.['message-id'] || 'unknown'}`);
+    return;
+  }
   promMetrics.messagesReceived.inc();
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
@@ -321,6 +327,11 @@ async function handleMessage({ channel, user, message, self }) {
   if (modResult.riskScore > 40) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
+
+  // Preserve surrounding chat from every accepted viewer so DeepSeek sees real multi-user context.
+  const priorHistory = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
+  await ConversationStore.pushMessage(channel, 'user', message, username);
+
   const lowerMsg = message.trim().toLowerCase();
   // Custom commands
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
@@ -410,7 +421,7 @@ async function handleMessage({ channel, user, message, self }) {
   const brainName = await scoreBrains(channel, user, message);
   const Brain = getBrain(brainName);
   const brainConfig = Brain.getConfig();
-  const history = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
+  const history = priorHistory;
   const systemPrompt = brainConfig.systemPrompt;
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
@@ -438,7 +449,6 @@ async function handleMessage({ channel, user, message, self }) {
     }
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
-    await ConversationStore.pushMessage(channel, 'user', message, username);
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, { lastSeen: Date.now() });
     if (config.emotes.enable) {
