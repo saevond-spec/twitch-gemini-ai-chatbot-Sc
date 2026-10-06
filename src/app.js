@@ -65,6 +65,9 @@ const FALLBACK_MESSAGES = [
   "Feeling lucky today – who's ready for some PogChamp moments?",
 ];
 let fallbackIndex = 0;
+const recentChatActivity = new Map();
+const AUTO_MIN_CHAT_LINES = Math.max(0, Number(process.env.AUTO_MIN_CHAT_LINES || 1));
+const AUTO_ACTIVITY_WINDOW_MS = Math.max(60, Number(process.env.AUTO_ACTIVITY_WINDOW_SECONDS || 600)) * 1000;
 
 app.use(helmet());
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
@@ -212,6 +215,9 @@ function startAutoMessages() {
     for (const channel of twitchClient.channels) {
       const last = await ConversationStore.getLastActivity(channel);
       if (now - last < AUTO_QUIET_THRESHOLD) continue;
+      const recent = (recentChatActivity.get(channel) || []).filter(ts => ts >= now - AUTO_ACTIVITY_WINDOW_MS);
+      recentChatActivity.set(channel, recent);
+      if (recent.length < AUTO_MIN_CHAT_LINES) continue;
       const msg = await generateSpontaneousMessage(channel);
       if (!msg) continue;
       let finalMsg = msg;
@@ -316,6 +322,9 @@ async function handleMessage({ channel, user, message, self }) {
   log.info(`IN: ${username} @ ${channel}: ${message}`);
 
   await ConversationStore.updateLastActivity(channel);
+  const activity = (recentChatActivity.get(channel) || []).filter(ts => ts >= Date.now() - AUTO_ACTIVITY_WINDOW_MS);
+  activity.push(Date.now());
+  recentChatActivity.set(channel, activity.slice(-200));
   if (config.twitch.ignoredUsers.includes(login)) return;
 
   const modResult = moderation.analyze(channel, user, message);
