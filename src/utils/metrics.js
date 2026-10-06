@@ -13,6 +13,11 @@ export const metrics = {
   activeViewers: new client.Gauge({ name: 'active_viewers', help: 'Active viewers count' }),
   ircReconnects: new client.Counter({ name: 'irc_reconnects_total', help: 'Total IRC reconnection attempts' }),
   eventsubReconnects: new client.Counter({ name: 'eventsub_reconnects_total', help: 'Total EventSub reconnection attempts' }),
+  viewerWelcomes: new client.Counter({ name: 'viewer_welcomes_total', help: 'Proactive first-chat welcomes sent' }),
+  proactiveWelcomesSuppressed: new client.Counter({ name: 'proactive_welcomes_suppressed_total', help: 'Proactive welcomes suppressed during chat bursts' }),
+  followPrompts: new client.Counter({ name: 'follow_prompts_total', help: 'Soft follow invitations sent' }),
+  followEvents: new client.Counter({ name: 'follow_events_total', help: 'Twitch follow events observed' }),
+  viewerOptOuts: new client.Counter({ name: 'viewer_opt_outs_total', help: 'Viewers opting out of proactive bot conversation' }),
 };
 register.registerMetric(metrics.messagesReceived);
 register.registerMetric(metrics.messagesSent);
@@ -24,4 +29,9 @@ register.registerMetric(metrics.queueDepth);
 register.registerMetric(metrics.activeViewers);
 register.registerMetric(metrics.ircReconnects);
 register.registerMetric(metrics.eventsubReconnects);
+register.registerMetric(metrics.viewerWelcomes);
+register.registerMetric(metrics.proactiveWelcomesSuppressed);
+register.registerMetric(metrics.followPrompts);
+register.registerMetric(metrics.followEvents);
+register.registerMetric(metrics.viewerOptOuts);
 export function getMetrics() { return register.metrics(); }
