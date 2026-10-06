@@ -1,6 +1,5 @@
-// src/state/reconnectState.js
-import EventEmitter from 'events';
 
+import EventEmitter from 'events';
 export class ReconnectStateMachine extends EventEmitter {
   constructor({ maxAttempts = 10, baseDelay = 1000, maxDelay = 30000, jitter = true } = {}) {
     super();
@@ -13,7 +12,6 @@ export class ReconnectStateMachine extends EventEmitter {
     this.state = 'idle';
     this._disconnected = false;
   }
-
   reset() {
     this.attempt = 0;
     this.state = 'idle';
@@ -23,7 +21,6 @@ export class ReconnectStateMachine extends EventEmitter {
       this.timer = null;
     }
   }
-
   connected() {
     this.state = 'connected';
     this.attempt = 0;
@@ -33,7 +30,6 @@ export class ReconnectStateMachine extends EventEmitter {
       this.timer = null;
     }
   }
-
   disconnected() {
     if (this._disconnected) return;
     this._disconnected = true;
@@ -51,7 +47,6 @@ export class ReconnectStateMachine extends EventEmitter {
       this.emit('reconnecting', this.attempt);
     }, actualDelay);
   }
-
   failed() {
     this.state = 'failed';
     this.emit('failed');
