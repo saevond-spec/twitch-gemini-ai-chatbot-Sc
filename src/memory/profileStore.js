@@ -1,6 +1,7 @@
 import { getRedis } from '../storage/redis.js';
 
 const TTL_SECONDS = 2592000;
+const memoryProfiles = new Map();
 
 function defaults(now = Date.now()) {
   return {
@@ -18,10 +19,26 @@ function defaults(now = Date.now()) {
   };
 }
 
+function memoryKey(channel, viewer) {
+  return `${channel}:${viewer}`;
+}
+
+function pruneMemory(now = Date.now()) {
+  const cutoff = now - TTL_SECONDS * 1000;
+  for (const [key, value] of memoryProfiles) {
+    if ((value.lastSeen || 0) < cutoff) memoryProfiles.delete(key);
+  }
+}
+
 export class ProfileStore {
   static async get(channel, viewer) {
     const redis = getRedis();
-    if (!redis) return defaults();
+    if (!redis) {
+      pruneMemory();
+      const existing = memoryProfiles.get(memoryKey(channel, viewer));
+      return existing ? { ...defaults(), ...existing } : defaults();
+    }
+
     const data = await redis.get(`profile:${channel}:${viewer}`);
     if (!data) return defaults();
     try {
@@ -32,10 +49,15 @@ export class ProfileStore {
   }
 
   static async update(channel, viewer, updates) {
-    const redis = getRedis();
-    if (!redis) return;
     const profile = await this.get(channel, viewer);
     Object.assign(profile, updates, { lastSeen: Date.now() });
+
+    const redis = getRedis();
+    if (!redis) {
+      memoryProfiles.set(memoryKey(channel, viewer), profile);
+      return;
+    }
+
     await redis.set(`profile:${channel}:${viewer}`, JSON.stringify(profile), 'EX', TTL_SECONDS);
   }
 
@@ -44,5 +66,9 @@ export class ProfileStore {
     profile.notes.push({ text: note, timestamp: Date.now() });
     profile.notes = profile.notes.slice(-25);
     await this.update(channel, viewer, profile);
+  }
+
+  static clearMemoryFallbackForTests() {
+    memoryProfiles.clear();
   }
 }
