@@ -58,10 +58,17 @@ async function saveToken(tokenData) {
 export async function validateToken() {
   if (!currentToken) return false;
   try {
-    await axios.get('https://id.twitch.tv/oauth2/validate', {
+    const response = await axios.get('https://id.twitch.tv/oauth2/validate', {
       headers: { Authorization: `OAuth ${currentToken.access_token}` },
       timeout: REQUEST_TIMEOUT_MS,
     });
+    const granted = new Set(response.data?.scopes || []);
+    const missingScopes = SCOPES.filter(scope => !granted.has(scope));
+    if (missingScopes.length) {
+      log.warn(`Twitch token is missing required scopes: ${missingScopes.join(', ')}. Re-authorization required.`);
+      return false;
+    }
+    currentToken.scopes = [...granted];
     return true;
   } catch (err) {
     log.debug('Token validation failed', err.response?.status || err.message);
