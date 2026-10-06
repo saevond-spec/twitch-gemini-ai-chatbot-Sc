@@ -22,7 +22,7 @@ services:
       # ═══════════════════════════════════════════════════════════════════
       # REQUIRED: AI & API Keys
       # ═══════════════════════════════════════════════════════════════════
-      - key: GEMINI_API_KEY
+      - key: DEEPSEEK_API_KEY
         value: "your-gemini-api-key(s)"
       - key: POLLINATIONS_API_KEY
         value: "your-pollinations-api-key"
@@ -64,8 +64,8 @@ services:
         value: "1"
       - key: ENABLE_SEARCH_GROUNDING
         value: "true"
-      - key: MODEL_NAME
-        value: "gemini-2.5-flash"
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-chat"
       - key: POLLINATIONS_IMAGE_MODEL
         value: "gptimage"
       - key: POLLINATIONS_VIDEO_MODEL
@@ -76,7 +76,7 @@ services:
         value: "charlotte"
       - key: POLLINATIONS_MUSIC_MODEL
         value: "elevenmusic"
-      - key: GEMINI_MAX_RESPONSE_LENGTH
+      - key: AI_MAX_TOKENS
         value: "450"
       - key: AI_HISTORY_LENGTH
         value: "10"
