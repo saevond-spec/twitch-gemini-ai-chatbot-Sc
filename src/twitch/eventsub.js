@@ -230,7 +230,6 @@ export class EventSubClient {
 
   _generateResponse(type, event) {
     const templates = {
-      'channel.follow': (e) => `Thanks for the follow, @${e.user_name}! ❤️`,
       'channel.shoutout.create': (e) => `Shoutout to @${e.recommended_user_name}! Go check them out! 📢`,
     };
     const template = templates[type];
