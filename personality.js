@@ -33,8 +33,14 @@ export function formatUserPrompt(userMessage, username) {
     return `[Chat from ${username}] ${userMessage}`;
 }
 
-export function shouldRespond(message, personaNames = []) {
+export function shouldRespond(message, personaNames = [], tags = {}) {
     if (!message || !personaNames || personaNames.length === 0) return false;
+
+    const normalizedAliases = personaNames.map(name => name.toLowerCase().replace(/\s+/g, ''));
+    const replyParent = String(tags['reply-parent-user-login'] || '').toLowerCase().replace(/\s+/g, '');
+    const replyThread = String(tags['reply-thread-parent-user-login'] || '').toLowerCase().replace(/\s+/g, '');
+    if (replyParent && normalizedAliases.includes(replyParent)) return true;
+    if (replyThread && normalizedAliases.includes(replyThread)) return true;
 
     const lowerMsg = message.toLowerCase();
 
