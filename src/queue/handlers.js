@@ -1,13 +1,19 @@
-
 import { createLogger } from '../logger/index.js';
 const log = createLogger('WORKER');
+
+function notImplemented(name) {
+  throw new Error(`${name} is not implemented in SweatyClanker; refusing to mark the job complete`);
+}
+
 export const jobHandlers = {
-  'analyze-vod': async ({ vodId, channel }) => { log.info('Analyzing VOD', { vodId, channel }); },
-  'generate-clips': async ({ vodId, timestamps }) => { log.info('Generating clips', { vodId, timestamps }); },
-  'create-thumbnail': async ({ videoId, timestamp }) => { log.info('Creating thumbnail', { videoId, timestamp }); },
-  'stream-summary': async ({ channel, duration }) => { log.info('Generating stream summary', { channel, duration }); },
-  'post-social': async ({ platform, content }) => { log.info('Posting to social', { platform, content }); },
-  'discord-announce': async ({ channel, message }) => { log.info('Announcing to Discord', { channel, message }); },
-  'moderation-review': async ({ channel, user, message }) => { log.info('Moderation review', { channel, user, message }); },
-  'memory-cleanup': async () => { log.info('Cleaning up memory'); },
+  'analyze-vod': async () => notImplemented('analyze-vod'),
+  'generate-clips': async () => notImplemented('generate-clips'),
+  'create-thumbnail': async () => notImplemented('create-thumbnail'),
+  'stream-summary': async () => notImplemented('stream-summary'),
+  'post-social': async () => notImplemented('post-social'),
+  'discord-announce': async () => notImplemented('discord-announce'),
+  'moderation-review': async ({ channel, user, message, reason, riskScore }) => {
+    log.info('Moderation review requested', { channel, user, message, reason, riskScore });
+  },
+  'memory-cleanup': async () => notImplemented('memory-cleanup'),
 };
