@@ -11,7 +11,6 @@ const requiredVars = {
   TWITCH_CLIENT_SECRET: 'Twitch application Client Secret',
   JOIN_CHANNELS: 'Comma-separated list of channels to join',
   DEEPSEEK_API_KEY: 'DeepSeek API key',
-  EVENTSUB_SECRET: 'Secret for EventSub WebSocket verification',
 };
 
 const missing = Object.keys(requiredVars).filter(key => !process.env[key]);
@@ -30,6 +29,8 @@ const optional = {
   AI_MAX_RETRIES: 3,
   AI_CIRCUIT_BREAKER_THRESHOLD: 5,
   REDIS_URL: '',
+  EVENTSUB_SECRET: '',
+  ADMIN_API_KEY: '',
   COOLDOWN_DURATION: 1,
   USER_COOLDOWN: 5,
   MAX_REPEAT_MESSAGES: 3,
@@ -149,6 +150,7 @@ export const config = {
     trustProxy: 1,
     allowedOrigins: env.ALLOWED_ORIGINS ? env.ALLOWED_ORIGINS.split(',') : [],
     publicUrl: publicUrl,
+    adminApiKey: env.ADMIN_API_KEY || '',
   },
   eventsub: {
     secret: env.EVENTSUB_SECRET,
