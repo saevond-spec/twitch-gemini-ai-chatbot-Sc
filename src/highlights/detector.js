@@ -4,6 +4,8 @@ import { getAccessToken } from '../twitch/auth.js';
 import { getRedis } from '../storage/redis.js';
 import { createLogger } from '../logger/index.js';
 import bus from '../bus/index.js';
+import { createClipFromVod } from '../clips/twitchClipService.js';
+import { enqueueTask } from '../queue/index.js';
 
 const log = createLogger('HIGHLIGHTS');
 const HELIX_BASE = 'https://api.twitch.tv/helix';
@@ -54,8 +56,7 @@ function twitchDurationSeconds(value) {
 export class HighlightDetector {
   constructor(ai) {
     this.ai = ai;
-    this.enabled = asBoolean(process.env.HIGHLIGHT_DETECTION_ENABLED, true)
-      && Boolean(process.env.CLIP_WEBHOOK_URL && process.env.CLIP_WEBHOOK_KEY);
+    this.enabled = asBoolean(process.env.HIGHLIGHT_DETECTION_ENABLED, true);
     this.windowMs = asNumber(process.env.HIGHLIGHT_WINDOW_SECONDS, 20, 10, 60) * 1000;
     this.minimumMessages = asNumber(process.env.HIGHLIGHT_MIN_MESSAGES, 3, 1, 20);
     this.cooldownMs = asNumber(process.env.HIGHLIGHT_COOLDOWN_SECONDS, 150, 60, 900) * 1000;
@@ -86,7 +87,7 @@ export class HighlightDetector {
 
   async start() {
     if (!this.enabled) {
-      log.info('AI highlight detection is disabled until CLIP_WEBHOOK_URL and CLIP_WEBHOOK_KEY are configured');
+      log.info('AI highlight detection is disabled by configuration');
       return;
     }
     bus.on('eventsub.channel.follow', this.followListener);
@@ -356,30 +357,37 @@ export class HighlightDetector {
       }
       return;
     }
+
     const vod = await this.findVod(snapshot);
     if (!vod?.id) throw new Error('The Twitch archive VOD was not available; confirm Store past broadcasts is enabled');
     const vodDuration = twitchDurationSeconds(vod.duration);
-    const adjustedCandidates = candidates.map((candidate) => {
+
+    for (const candidate of candidates) {
       const endSeconds = vodDuration ? Math.min(candidate.endSeconds, vodDuration) : candidate.endSeconds;
-      const duration = Math.min(60, Math.max(5, candidate.endSeconds - candidate.startSeconds));
-      return {
-        ...candidate,
+      const durationSeconds = Math.min(60, Math.max(5, candidate.endSeconds - candidate.startSeconds));
+      const clip = await createClipFromVod({
+        broadcasterId: snapshot.broadcasterId,
+        vodId: vod.id,
         endSeconds,
-        startSeconds: Math.max(0, endSeconds - duration)
-      };
-    });
-    const response = await axios.post(process.env.CLIP_WEBHOOK_URL, {
-      vodId: vod.id,
-      vodUrl: vod.url,
-      channel: snapshot.channel,
-      streamTitle: snapshot.streamTitle,
-      timestamps: adjustedCandidates
-    }, {
-      timeout: 90000,
-      maxRedirects: 2,
-      headers: { 'x-agent-key': process.env.CLIP_WEBHOOK_KEY }
-    });
-    if (response.status < 200 || response.status >= 300) throw new Error(`Amaana returned ${response.status}`);
+        durationSeconds,
+        title: candidate.title,
+      });
+
+      await enqueueTask('generate-clips', {
+        clipId: clip.id,
+        broadcasterId: snapshot.broadcasterId,
+        title: candidate.title,
+        reason: candidate.reason,
+        twitchUrl: clip.url || `https://clips.twitch.tv/${clip.id}`,
+      }, {
+        jobId: `clip-${clip.id}`,
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      });
+
+      log.info(`Queued official Twitch clip ${clip.id} for media processing`);
+    }
+
     const current = this.states.get(snapshot.channel);
     if (current && current.streamId === snapshot.streamId) {
       current.candidates = [];
@@ -387,6 +395,5 @@ export class HighlightDetector {
       const redis = getRedis();
       if (redis) await redis.del(`highlights:${snapshot.channel}`);
     }
-    log.info(`Delivered ${adjustedCandidates.length} AI highlights from VOD ${vod.id} to Amaana`);
   }
 }
