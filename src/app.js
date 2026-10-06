@@ -31,6 +31,7 @@ import { writeFile } from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
 import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
+import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
@@ -63,7 +64,6 @@ const FALLBACK_MESSAGES = [
   "Just vibing in the chat! How's everyone doing?",
   "Anyone else hyped for the next game?",
   "I'm SweatyClanker, your friendly neighborhood bot!",
-  "Don't forget to follow if you're enjoying the stream!",
   "What's your favourite game right now?",
   "I'm learning new things every day – thanks for chatting with me!",
   "Feeling lucky today – who's ready for some PogChamp moments?",
@@ -328,11 +328,21 @@ async function handleMessage({ channel, user, message, self }) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
 
-  // Preserve surrounding chat from every accepted viewer so DeepSeek sees real multi-user context.
+  // Preserve surrounding chat and track new-viewer engagement without calling out silent lurkers.
   const priorHistory = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
+  const previousProfile = await ProfileStore.get(channel, login);
+  const viewerProfile = nextViewerProfile(previousProfile, message);
+  await ProfileStore.update(channel, login, viewerProfile);
   await ConversationStore.pushMessage(channel, 'user', message, username);
 
   const lowerMsg = message.trim().toLowerCase();
+  const isCommand = lowerMsg.startsWith('!');
+  if (!previousProfile.proactiveOptOut && viewerProfile.proactiveOptOut) {
+    const response = `@${username} got it — I’ll stay out of your way unless you use a command.`;
+    if (messageQueue) messageQueue.enqueue(channel, response);
+    else await global.twitchClient.say(channel, response);
+    return;
+  }
   // Custom commands
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
   if (cmdKey) {
@@ -409,11 +419,17 @@ async function handleMessage({ channel, user, message, self }) {
       return;
     }
   }
-  // AI chat – FIX: use personaNames array
+  // AI chat: direct mentions/replies plus low-pressure first-chat welcome.
   const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
-  const shouldReply = shouldRespond(message, personaNames, user);
-  if (!shouldReply) {
-    log.debug(`Skipping AI: no mention/greeting`);
+  const directInteraction = shouldRespond(message, personaNames, user);
+  const proactiveWelcome = AUTO_WELCOME && shouldProactivelyWelcome({
+    profile: viewerProfile,
+    message,
+    isCommand,
+  });
+  const shouldReply = directInteraction || proactiveWelcome;
+  if (!shouldReply || viewerProfile.proactiveOptOut) {
+    log.debug('Skipping AI: no direct interaction or eligible first-chat welcome');
     return;
   }
   const cooldownKey = `${channel}:${login}`;
@@ -422,7 +438,15 @@ async function handleMessage({ channel, user, message, self }) {
   const Brain = getBrain(brainName);
   const brainConfig = Brain.getConfig();
   const history = priorHistory;
-  const systemPrompt = brainConfig.systemPrompt;
+  let systemPrompt = brainConfig.systemPrompt;
+  if (proactiveWelcome) {
+    systemPrompt += `\n\nNEW VIEWER GUIDANCE: ${firstChatInstruction(username, message)}`;
+  }
+  const offerFollow = shouldOfferFollow({
+    profile: viewerProfile,
+    message,
+    directInteraction,
+  });
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
   const userPrompt = buildUserPrompt(message, username, history);
@@ -449,8 +473,12 @@ async function handleMessage({ channel, user, message, self }) {
     }
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
+    if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
-    await ProfileStore.update(channel, login, { lastSeen: Date.now() });
+    await ProfileStore.update(channel, login, {
+      botInteractions: viewerProfile.botInteractions + 1,
+      followPromptedAt: offerFollow ? Date.now() : viewerProfile.followPromptedAt,
+    });
     if (config.emotes.enable) {
       const emote = getRandomEmote(channel);
       if (emote) finalReply += ` ${emote}`;
@@ -574,11 +602,17 @@ async function initializeBot() {
       else twitchClient?.say(channel, message);
     } catch (err) { log.error('Error in twitch.send handler', err); }
   });
-  if (AUTO_WELCOME) {
-    bus.on('twitch.join', async (...args) => {
-      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
-    });
-  }
+  bus.on('eventsub.channel.follow', async (event) => {
+    try {
+      const channel = `#${String(event?.broadcaster_user_login || '').toLowerCase()}`;
+      const viewer = String(event?.user_login || '').toLowerCase();
+      if (channel !== '#' && viewer) {
+        await ProfileStore.update(channel, viewer, { followed: true, followedAt: Date.now() });
+      }
+    } catch (err) {
+      log.warn('Failed to record follower state', err.message);
+    }
+  });
 
   // Load plugins
   log.info('Loading plugins...');
