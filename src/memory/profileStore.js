@@ -1,7 +1,9 @@
 import { getRedis } from '../storage/redis.js';
 
-const TTL_SECONDS = 2592000;
+const PROFILE_TTL_SECONDS = 30 * 24 * 60 * 60;
+const SEEN_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
 const memoryProfiles = new Map();
+const memorySeen = new Map();
 
 function defaults(now = Date.now()) {
   return {
@@ -14,6 +16,7 @@ function defaults(now = Date.now()) {
     followedAt: null,
     followPromptedAt: null,
     proactiveOptOut: false,
+    seenBefore: false,
     preferences: {},
     notes: [],
   };
@@ -24,41 +27,58 @@ function memoryKey(channel, viewer) {
 }
 
 function pruneMemory(now = Date.now()) {
-  const cutoff = now - TTL_SECONDS * 1000;
+  const profileCutoff = now - PROFILE_TTL_SECONDS * 1000;
+  const seenCutoff = now - SEEN_TTL_SECONDS * 1000;
+
   for (const [key, value] of memoryProfiles) {
-    if ((value.lastSeen || 0) < cutoff) memoryProfiles.delete(key);
+    if ((value.lastSeen || 0) < profileCutoff) memoryProfiles.delete(key);
+  }
+  for (const [key, lastSeen] of memorySeen) {
+    if (lastSeen < seenCutoff) memorySeen.delete(key);
   }
 }
 
 export class ProfileStore {
   static async get(channel, viewer) {
+    const key = memoryKey(channel, viewer);
     const redis = getRedis();
+
     if (!redis) {
       pruneMemory();
-      const existing = memoryProfiles.get(memoryKey(channel, viewer));
-      return existing ? { ...defaults(), ...existing } : defaults();
+      const existing = memoryProfiles.get(key);
+      const seenBefore = memorySeen.has(key);
+      return existing ? { ...defaults(), ...existing, seenBefore: true } : { ...defaults(), seenBefore };
     }
 
-    const data = await redis.get(`profile:${channel}:${viewer}`);
-    if (!data) return defaults();
+    const [data, seen] = await Promise.all([
+      redis.get(`profile:${channel}:${viewer}`),
+      redis.get(`profile-seen:${channel}:${viewer}`),
+    ]);
+
+    if (!data) return { ...defaults(), seenBefore: Boolean(seen) };
     try {
-      return { ...defaults(), ...JSON.parse(data) };
+      return { ...defaults(), ...JSON.parse(data), seenBefore: true };
     } catch {
-      return defaults();
+      return { ...defaults(), seenBefore: Boolean(seen) };
     }
   }
 
   static async update(channel, viewer, updates) {
+    const key = memoryKey(channel, viewer);
     const profile = await this.get(channel, viewer);
-    Object.assign(profile, updates, { lastSeen: Date.now() });
+    Object.assign(profile, updates, { lastSeen: Date.now(), seenBefore: true });
 
     const redis = getRedis();
     if (!redis) {
-      memoryProfiles.set(memoryKey(channel, viewer), profile);
+      memoryProfiles.set(key, profile);
+      memorySeen.set(key, profile.lastSeen);
       return;
     }
 
-    await redis.set(`profile:${channel}:${viewer}`, JSON.stringify(profile), 'EX', TTL_SECONDS);
+    await Promise.all([
+      redis.set(`profile:${channel}:${viewer}`, JSON.stringify(profile), 'EX', PROFILE_TTL_SECONDS),
+      redis.set(`profile-seen:${channel}:${viewer}`, String(profile.lastSeen), 'EX', SEEN_TTL_SECONDS),
+    ]);
   }
 
   static async addNote(channel, viewer, note) {
@@ -70,5 +90,6 @@ export class ProfileStore {
 
   static clearMemoryFallbackForTests() {
     memoryProfiles.clear();
+    memorySeen.clear();
   }
 }
