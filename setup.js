@@ -33,6 +33,15 @@ AI_CIRCUIT_BREAKER_THRESHOLD=5
 REDIS_URL=redis://...
 WORKERS_ENABLED=false
 
+# Reliability / EventSub
+EVENTSUB_ENABLED=true
+EVENTSUB_REDIS_AUDIT=false
+EVENTSUB_DEDUPE_TTL_SECONDS=600
+
+# Auto-message activity gate
+AUTO_MIN_CHAT_LINES=1
+AUTO_ACTIVITY_WINDOW_SECONDS=600
+
 # Cooldowns (seconds)
 COOLDOWN_DURATION=1
 USER_COOLDOWN=5
@@ -444,10 +453,10 @@ async function loadStoredToken() {
 
 async function saveToken(tokenData) {
   const redis = getRedis();
-  const expiresIn = tokenData.expires_in || 86400;
   if (redis) {
     try {
-      await redis.set(TOKEN_KEY, JSON.stringify(tokenData), 'EX', expiresIn);
+      // Persist the refresh token across access-token expiry and service sleep/restarts.
+      await redis.set(TOKEN_KEY, JSON.stringify(tokenData));
       log.debug('Token persisted to Redis');
     } catch (err) {
       log.warn('Failed to save token to Redis', err.message);
@@ -2857,10 +2866,14 @@ function ensureDirectory(dir) {
 for (const [filePath, content] of Object.entries(files)) {
   const dir = path.dirname(filePath);
   ensureDirectory(dir);
-  // Note: Overwrites existing files to ensure fixes are applied.
-  // Remove the "if" guard if you prefer idempotent behaviour.
-  fs.writeFileSync(filePath, content.trimStart(), 'utf8');
-  console.log(`Written ${filePath}`);
+  // Never overwrite committed/runtime-patched source during normal starts.
+  // Missing generated files are still materialized for backward compatibility.
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, content.trimStart(), 'utf8');
+    console.log(`Written missing file ${filePath}`);
+  } else {
+    console.log(`Preserved existing ${filePath}`);
+  }
 }
 
 console.log('\n✅ Setup complete – all files generated with fixes applied.');
