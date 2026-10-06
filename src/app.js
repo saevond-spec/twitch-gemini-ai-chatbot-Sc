@@ -496,41 +496,7 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
-// ========== JOIN HANDLER (FIXED: no bot/streamer spam) ==========
-async function handleJoin({ channel, username, self }) {
-  if (self) return;
-
-  const broadcasterName = channel.replace('#', '').toLowerCase();
-  const ignoredUsers = [
-    broadcasterName,
-    'streamelements', 'nightbot', 'overlayexpert', 'moobot', 'fossabot',
-    'wizebot', 'coebot', 'phantombot', 'streamlabs', 'pretzelrocks',
-    'sweatyclanker', 'anotherttvviewer', 'soundalerts', 'botrixoficial'
-  ];
-
-  if (ignoredUsers.includes(username.toLowerCase())) return;
-
-  const key = `${channel}:${username}`;
-  if (global._welcomedUsers && global._welcomedUsers.has(key)) return;
-  if (!global._welcomedUsers) global._welcomedUsers = new Set();
-
-  const history = await ConversationStore.getHistory(channel, 20);
-  const hasSpoken = history.some(h => h.username === username);
-  if (hasSpoken) return;
-
-  const welcomeMsg = `Welcome to the stream, @${username}! Hope you enjoy the chaos.`;
-  if (messageQueue) messageQueue.enqueue(channel, welcomeMsg);
-  else await global.twitchClient.say(channel, welcomeMsg);
-  promMetrics.messagesSent.inc();
-
-  global._welcomedUsers.add(key);
-  if (global._welcomedUsers.size > 2000) {
-    log.debug('Clearing welcomed users cache (size > 2000)');
-    global._welcomedUsers.clear();
-  }
-}
-
-async function handleUserNotice({ channel, user, msg, tags }) {
+// Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.\nasync function handleUserNotice({ channel, user, msg, tags }) {
   if (tags['msg-id'] === 'raid') {
     const from = tags['display-name'] || 'someone';
     const reply = `Thanks for the raid, ${from}! PogChamp`;
