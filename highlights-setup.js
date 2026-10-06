@@ -6,8 +6,10 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 
 function replaceOnce(filePath, needle, replacement) {
   const current = fs.readFileSync(filePath, 'utf8');
+  if (current.includes(replacement)) return false;
   if (!current.includes(needle)) throw new Error(`Highlight setup could not find its patch point in ${filePath}`);
   fs.writeFileSync(filePath, current.replace(needle, replacement), 'utf8');
+  return true;
 }
 
 fs.mkdirSync(path.join(root, 'src/highlights'), { recursive: true });
@@ -39,7 +41,8 @@ replaceOnce(
   '  if (messageQueue) messageQueue.stop();\n  if (highlightDetector) highlightDetector.stop();'
 );
 
-fs.appendFileSync(path.join(root, '.env.example'), `
+const envPath = path.join(root, '.env.example');
+const envBlock = `
 # AI-assisted Twitch VOD highlight detection
 HIGHLIGHT_DETECTION_ENABLED=true
 HIGHLIGHT_WINDOW_SECONDS=20
@@ -48,6 +51,10 @@ HIGHLIGHT_COOLDOWN_SECONDS=150
 HIGHLIGHT_MAX_CLIPS=5
 CLIP_WEBHOOK_URL=https://amaana-yt.onrender.com/api/twitch/vod-clips
 CLIP_WEBHOOK_KEY=
-`, 'utf8');
+`;
+const envCurrent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+if (!envCurrent.includes('HIGHLIGHT_DETECTION_ENABLED=')) {
+  fs.appendFileSync(envPath, envBlock, 'utf8');
+}
 
-console.log('Highlight detector installed.');
+console.log('Highlight detector ready (idempotent setup).');
