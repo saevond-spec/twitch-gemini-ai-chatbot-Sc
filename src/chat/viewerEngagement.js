@@ -63,7 +63,7 @@ export function followLineFor(viewer) {
 export function firstChatInstruction(username, message) {
   return [
     'This is the first chat message we have observed from this viewer in the current retained profile window.',
-    `Welcome ${username} naturally without claiming this is their first-ever visit or first-ever message.`
+    `Welcome ${username} naturally without claiming this is their first-ever visit or first-ever message.`,
     'Respond to what they actually said first.',
     'Ask at most one easy, relevant question that helps them join the conversation.',
     'Do not ask for a follow on the first interaction.',
