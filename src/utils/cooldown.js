@@ -1,4 +1,4 @@
-// src/utils/cooldown.js
+
 export class CooldownManager {
   constructor(config) {
     this.globalCooldown = config.global || 1;
@@ -6,7 +6,6 @@ export class CooldownManager {
     this.lastGlobal = 0;
     this.userTimers = new Map();
   }
-
   check(key) {
     const now = Date.now();
     if (now - this.lastGlobal < this.globalCooldown * 1000) return false;
