@@ -191,3 +191,87 @@ test('real-world session: several newcomers do not all get immediate follow pitc
   assert.equal(results.filter(x => x.follow).length, 0);
   assert.equal(results.find(x => x.name === 'dana').welcome, false);
 });
+
+
+test('stress: 100 first-time chatters never receive an immediate follow pitch', () => {
+  const now = 30_000_000;
+  let welcomes = 0;
+  let follows = 0;
+
+  for (let i = 0; i < 100; i += 1) {
+    const message = i % 10 === 0 ? '!help' : `hello from viewer ${i}`;
+    const profile = nextViewerProfile({}, message, now + i);
+    if (shouldProactivelyWelcome({ profile, message, isCommand: message.startsWith('!') })) welcomes += 1;
+    if (shouldOfferFollow({ profile, message, now: now + i, directInteraction: false })) follows += 1;
+  }
+
+  assert.equal(welcomes, 90);
+  assert.equal(follows, 0);
+});
+
+test('stress: only qualified engaged viewers get one follow invitation', () => {
+  const start = 40_000_000;
+  let eligible = 0;
+
+  for (let i = 0; i < 100; i += 1) {
+    const direct = i % 2 === 0;
+    const positive = i % 4 !== 0;
+    const followed = i % 10 === 0;
+    const optedOut = i % 15 === 0;
+    const profile = {
+      firstChatAt: start,
+      messageCount: 4,
+      botInteractions: 2,
+      followed,
+      followPromptedAt: null,
+      proactiveOptOut: optedOut,
+    };
+    const message = positive ? 'lol that was awesome' : 'that was boring';
+
+    const result = shouldOfferFollow({
+      profile,
+      message,
+      now: start + 90_000,
+      directInteraction: direct,
+    });
+
+    if (result) eligible += 1;
+  }
+
+  assert.ok(eligible > 0);
+  assert.ok(eligible < 50, 'conversion prompt should remain selective rather than target everyone');
+});
+
+test('follow events are tracked without public named follower announcements', () => {
+  const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  const eventsub = fs.readFileSync(new URL('../src/twitch/eventsub.js', import.meta.url), 'utf8');
+
+  assert.match(app, /eventsub\.channel\.follow/);
+  assert.match(app, /followed:\s*true/);
+  assert.doesNotMatch(eventsub, /Thanks for the follow, @/);
+});
+
+test('Redis outage fallback can retain viewer engagement in memory', async () => {
+  process.env.TWITCH_USERNAME ||= 'testbot';
+  process.env.TWITCH_CLIENT_ID ||= 'test-client';
+  process.env.TWITCH_CLIENT_SECRET ||= 'test-secret';
+  process.env.JOIN_CHANNELS ||= 'saevond';
+  process.env.DEEPSEEK_API_KEY ||= 'test-key';
+  process.env.REDIS_URL = '';
+
+  const { ProfileStore } = await import('../src/memory/profileStore.js');
+  ProfileStore.clearMemoryFallbackForTests();
+
+  await ProfileStore.update('#saevond', 'newviewer', {
+    firstChatAt: 123,
+    messageCount: 2,
+    botInteractions: 1,
+  });
+
+  const profile = await ProfileStore.get('#saevond', 'newviewer');
+  assert.equal(profile.firstChatAt, 123);
+  assert.equal(profile.messageCount, 2);
+  assert.equal(profile.botInteractions, 1);
+
+  ProfileStore.clearMemoryFallbackForTests();
+});
