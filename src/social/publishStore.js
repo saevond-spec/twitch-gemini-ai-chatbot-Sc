@@ -1,24 +1,35 @@
 import { getRedis } from '../storage/redis.js';
 
-const TTL_SECONDS = 60 * 60 * 24 * 90;
+const COMPLETE_TTL = 60 * 60 * 24 * 90;
+const FAILURE_TTL = 60 * 60 * 24 * 7;
+const LOCK_TTL = 60 * 15;
 
-function key(platform, clipId) {
+function resultKey(platform, clipId) {
   return `publish:${platform}:${clipId}`;
+}
+
+function lockKey(platform, clipId) {
+  return `publish-lock:${platform}:${clipId}`;
+}
+
+function failureKey(platform, clipId) {
+  return `publish-failure:${platform}:${clipId}`;
 }
 
 export class PublishStore {
   static async reserve(platform, clipId) {
     const redis = getRedis();
     if (!redis) throw new Error('Redis is required for publish idempotency');
-    const value = JSON.stringify({ status: 'reserved', at: Date.now() });
-    const result = await redis.set(key(platform, clipId), value, 'EX', TTL_SECONDS, 'NX');
-    return result === 'OK';
+    if (await redis.exists(resultKey(platform, clipId))) return false;
+    const value = JSON.stringify({ at: Date.now() });
+    const locked = await redis.set(lockKey(platform, clipId), value, 'EX', LOCK_TTL, 'NX');
+    return locked === 'OK';
   }
 
   static async get(platform, clipId) {
     const redis = getRedis();
     if (!redis) return null;
-    const raw = await redis.get(key(platform, clipId));
+    const raw = await redis.get(resultKey(platform, clipId));
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
   }
@@ -26,25 +37,22 @@ export class PublishStore {
   static async complete(platform, clipId, result) {
     const redis = getRedis();
     if (!redis) throw new Error('Redis is required for publish idempotency');
-    await redis.set(key(platform, clipId), JSON.stringify({
+    await redis.set(resultKey(platform, clipId), JSON.stringify({
       status: 'complete',
       at: Date.now(),
       result,
-    }), 'EX', TTL_SECONDS);
+    }), 'EX', COMPLETE_TTL);
+    await redis.del(lockKey(platform, clipId));
   }
 
   static async fail(platform, clipId, error) {
     const redis = getRedis();
     if (!redis) return;
-    await redis.set(key(platform, clipId), JSON.stringify({
+    await redis.set(failureKey(platform, clipId), JSON.stringify({
       status: 'failed',
       at: Date.now(),
       error: String(error?.message || error).slice(0, 1000),
-    }), 'EX', 60 * 60);
-  }
-
-  static async release(platform, clipId) {
-    const redis = getRedis();
-    if (redis) await redis.del(key(platform, clipId));
+    }), 'EX', FAILURE_TTL);
+    await redis.del(lockKey(platform, clipId));
   }
 }
