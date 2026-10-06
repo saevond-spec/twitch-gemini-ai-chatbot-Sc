@@ -28,6 +28,7 @@ import { MessageQueue } from './queue/messageQueue.js';
 import { EventSubClient } from './twitch/eventsub.js';
 import { PollinationsClient } from './media/providers.js';
 import { writeFile } from 'fs/promises';
+import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
 
 const log = createLogger('APP');
@@ -65,6 +66,43 @@ const FALLBACK_MESSAGES = [
   "Feeling lucky today – who's ready for some PogChamp moments?",
 ];
 let fallbackIndex = 0;
+const oauthStates = new Map();
+
+function requireAdmin(req, res, next) {
+  const expected = config.server.adminApiKey;
+  if (!expected) return res.status(503).json({ error: 'Admin API is disabled until ADMIN_API_KEY is configured' });
+  const header = req.get('authorization') || '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (supplied !== expected) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+
+async function createOAuthState() {
+  const state = randomBytes(24).toString('hex');
+  const redis = getRedis();
+  if (redis) await redis.set(`oauth:state:${state}`, '1', 'EX', 600);
+  else {
+    oauthStates.set(state, Date.now() + 600000);
+    const timer = setTimeout(() => oauthStates.delete(state), 600000);
+    timer.unref?.();
+  }
+  return state;
+}
+
+async function consumeOAuthState(state) {
+  if (!state) return false;
+  const redis = getRedis();
+  if (redis) {
+    const key = `oauth:state:${state}`;
+    const exists = await redis.get(key);
+    if (!exists) return false;
+    await redis.del(key);
+    return true;
+  }
+  const expiresAt = oauthStates.get(state);
+  oauthStates.delete(state);
+  return Boolean(expiresAt && expiresAt > Date.now());
+}
 
 app.use(helmet());
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
@@ -107,7 +145,8 @@ app.get('/readyz', async (req, res) => {
   let attempts = 0;
   while (attempts < 20) {
     const twitchReady = !!global.twitchClient?.connected;
-    const redisReady = !!getRedis();
+    const redisRequired = Boolean(config.redis.url || process.env.WORKERS_ENABLED === 'true');
+    const redisReady = !redisRequired || !!getRedis();
     const deepseekReady = !!deepseek;
     const authReady = isAuthorized();
     if (twitchReady && redisReady && deepseekReady && authReady) {
@@ -124,20 +163,23 @@ app.get('/readyz', async (req, res) => {
   });
 });
 
-app.get('/metrics', async (req, res) => {
+app.get('/metrics', requireAdmin, async (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(await getMetrics());
 });
 
-app.get('/auth/login', (req, res) => {
+app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts`;
+  const state = await createOAuthState();
+  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts';
+  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
   res.redirect(url);
 });
 
 app.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   if (!code) return res.status(400).send('Missing code');
+  if (!(await consumeOAuthState(state))) return res.status(400).send('Invalid or expired OAuth state');
   try {
     const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
     await exchangeCodeForToken(code, redirectUri);
@@ -150,7 +192,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-app.post('/api/commands', async (req, res) => {
+app.post('/api/commands', requireAdmin, async (req, res) => {
   const { name, response, role } = req.body;
   if (!name || !response) return res.status(400).json({ error: 'Missing fields' });
   await saveCustomCommand(name, response, role || 'all');
@@ -158,13 +200,13 @@ app.post('/api/commands', async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/commands/:name', async (req, res) => {
+app.delete('/api/commands/:name', requireAdmin, async (req, res) => {
   await deleteCustomCommand(req.params.name);
   await loadCustomCommandsIntoMemory();
   res.json({ success: true });
 });
 
-app.post('/api/media/image', async (req, res) => {
+app.post('/api/media/image', requireAdmin, async (req, res) => {
   const { prompt } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Prompt required' });
   try {
@@ -513,17 +555,13 @@ async function initializeBot() {
     log.info('Message queue initialized');
   }
 
-  if (config.eventsub.secret) {
-    try {
-      log.info('Connecting to EventSub...');
-      eventSubClient = new EventSubClient();
-      await eventSubClient.connect();
-      log.info('EventSub client connected');
-    } catch (err) {
-      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
-    }
-  } else {
-    log.info('EventSub secret not set – skipping EventSub');
+  try {
+    log.info('Connecting to EventSub...');
+    eventSubClient = new EventSubClient();
+    await eventSubClient.connect();
+    log.info('EventSub client connected');
+  } catch (err) {
+    log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
   }
 
   bus.on('twitch.ready', () => {
