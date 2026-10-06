@@ -5,9 +5,8 @@
   "description": "Full-featured AI streaming platform with EventSub, media generation, moderation, and more",
   "main": "src/app.js",
   "scripts": {
-    "prestart": "node setup.js && node highlights-setup.js",
     "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
+    "dev": "node --watch src/app.js",
     "setup": "node setup.js && node highlights-setup.js",
     "test": "node --test"
   },
@@ -26,12 +25,10 @@
     "winston": "^3.11.0",
     "prom-client": "^15.0.0",
     "ws": "^8.14.0",
-    "multer": "^2.0.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
+    "multer": "^2.0.0",
+    "ffmpeg-static": "5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "22.x"
   }
 }

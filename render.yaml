@@ -4,7 +4,7 @@ services:
     runtime: node
     branch: main
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     envVars:
       # ═══════════════════════════════════════════════════════════════════
@@ -22,11 +22,11 @@ services:
       # ═══════════════════════════════════════════════════════════════════
       # REQUIRED: AI & API Keys
       # ═══════════════════════════════════════════════════════════════════
-      - key: GEMINI_API_KEY
-        value: "your-gemini-api-key(s)"
+      - key: DEEPSEEK_API_KEY
+        value: "your-deepseek-api-key"
       - key: POLLINATIONS_API_KEY
         value: "your-pollinations-api-key"
-      - key: UPSTASH_REDIS_URL
+      - key: REDIS_URL
         value: "your-upstash-redis-url"
 
       # ═══════════════════════════════════════════════════════════════════
@@ -64,8 +64,8 @@ services:
         value: "1"
       - key: ENABLE_SEARCH_GROUNDING
         value: "true"
-      - key: MODEL_NAME
-        value: "gemini-2.5-flash"
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-chat"
       - key: POLLINATIONS_IMAGE_MODEL
         value: "gptimage"
       - key: POLLINATIONS_VIDEO_MODEL
@@ -76,7 +76,7 @@ services:
         value: "charlotte"
       - key: POLLINATIONS_MUSIC_MODEL
         value: "elevenmusic"
-      - key: GEMINI_MAX_RESPONSE_LENGTH
+      - key: AI_MAX_TOKENS
         value: "450"
       - key: AI_HISTORY_LENGTH
         value: "10"
@@ -90,3 +90,26 @@ services:
       # ═══════════════════════════════════════════════════════════════════
       - key: YOUTUBE_API_KEY
         value: "your-youtube-api-key"
+      - key: WORKERS_ENABLED
+        value: "true"
+      - key: ADMIN_API_KEY
+        sync: false
+
+      - key: YOUTUBE_UPLOAD_ENABLED
+        value: "false"
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_DEFAULT_PRIVACY
+        value: "private"
+      - key: YOUTUBE_ALLOW_PUBLIC
+        value: "false"
+      - key: TIKTOK_UPLOAD_ENABLED
+        value: "false"
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      - key: DISCORD_ANNOUNCE_ENABLED
+        value: "false"
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
