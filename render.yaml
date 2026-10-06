@@ -4,7 +4,7 @@ services:
     runtime: node
     branch: main
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     envVars:
       # ═══════════════════════════════════════════════════════════════════
@@ -23,10 +23,10 @@ services:
       # REQUIRED: AI & API Keys
       # ═══════════════════════════════════════════════════════════════════
       - key: DEEPSEEK_API_KEY
-        value: "your-gemini-api-key(s)"
+        value: "your-deepseek-api-key"
       - key: POLLINATIONS_API_KEY
         value: "your-pollinations-api-key"
-      - key: UPSTASH_REDIS_URL
+      - key: REDIS_URL
         value: "your-upstash-redis-url"
 
       # ═══════════════════════════════════════════════════════════════════
@@ -90,3 +90,11 @@ services:
       # ═══════════════════════════════════════════════════════════════════
       - key: YOUTUBE_API_KEY
         value: "your-youtube-api-key"
+      - key: WORKERS_ENABLED
+        value: "false"
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: CLIP_WEBHOOK_URL
+        value: "https://amaana-yt.onrender.com/api/twitch/vod-clips"
+      - key: CLIP_WEBHOOK_KEY
+        sync: false
