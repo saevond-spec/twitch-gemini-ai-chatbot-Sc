@@ -43,7 +43,9 @@ export function startWorker(queueName, handler, concurrency = 1) {
   return worker;
 }
 export async function drainQueues() {
-  for (const [name, queue] of Object.entries(queues)) { await queue.drain(); }
-  for (const [name, worker] of Object.entries(workers)) { await worker.close(); }
+  for (const worker of Object.values(workers)) await worker.close();
+  for (const queue of Object.values(queues)) await queue.close();
+  workers = {};
+  queues = {};
   if (bullConnection) { await bullConnection.quit(); bullConnection = null; }
 }
