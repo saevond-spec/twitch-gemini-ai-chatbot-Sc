@@ -13,6 +13,7 @@ export function normalizeViewerProfile(profile = {}, now = Date.now()) {
     followedAt: profile.followedAt || null,
     followPromptedAt: profile.followPromptedAt || null,
     proactiveOptOut: Boolean(profile.proactiveOptOut),
+    seenBefore: Boolean(profile.seenBefore),
     preferences: profile.preferences || {},
     notes: Array.isArray(profile.notes) ? profile.notes : [],
   };
@@ -20,7 +21,7 @@ export function normalizeViewerProfile(profile = {}, now = Date.now()) {
 
 export function nextViewerProfile(profile, message, now = Date.now()) {
   const current = normalizeViewerProfile(profile, now);
-  const firstChat = current.messageCount === 0;
+  const firstChat = current.messageCount === 0 && !current.seenBefore;
   return {
     ...current,
     firstChatAt: current.firstChatAt || now,
@@ -61,8 +62,8 @@ export function followLineFor(viewer) {
 
 export function firstChatInstruction(username, message) {
   return [
-    'This is the viewer’s first chat message in this channel.',
-    `Welcome ${username} naturally without sounding like an automated greeter.`,
+    'This is the first chat message we have observed from this viewer in the current retained profile window.',
+    `Welcome ${username} naturally without claiming this is their first-ever visit or first-ever message.`
     'Respond to what they actually said first.',
     'Ask at most one easy, relevant question that helps them join the conversation.',
     'Do not ask for a follow on the first interaction.',
