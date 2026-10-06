@@ -30,6 +30,7 @@ import { PollinationsClient } from './media/providers.js';
 import { writeFile } from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
+import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -189,6 +190,31 @@ app.get('/auth/callback', async (req, res) => {
   } catch (err) {
     log.error('Auth callback failed', err);
     res.status(500).send('Authorization failed');
+  }
+});
+
+app.post('/api/youtube/auth-url', requireAdmin, async (req, res) => {
+  try {
+    const state = await createOAuthState();
+    const redirectUri = `${req.protocol}://${req.get('host')}/auth/youtube/callback`;
+    res.json({ url: youtubeAuthUrl({ state, redirectUri }) });
+  } catch (err) {
+    log.error('YouTube auth URL failed', err);
+    res.status(500).json({ error: 'Unable to start YouTube authorization' });
+  }
+});
+
+app.get('/auth/youtube/callback', async (req, res) => {
+  const { code, state } = req.query;
+  if (!code) return res.status(400).send('Missing code');
+  if (!(await consumeOAuthState(state))) return res.status(400).send('Invalid or expired OAuth state');
+  try {
+    const redirectUri = `${req.protocol}://${req.get('host')}/auth/youtube/callback`;
+    await exchangeYouTubeCode({ code, redirectUri });
+    res.send('YouTube authorization successful. You may close this window.');
+  } catch (err) {
+    log.error('YouTube OAuth callback failed', err);
+    res.status(500).send('YouTube authorization failed');
   }
 });
 
