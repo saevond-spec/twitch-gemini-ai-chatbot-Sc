@@ -4,7 +4,7 @@ services:
     runtime: node
     branch: main
     plan: free
-    buildCommand: npm ci
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     envVars:
       # ═══════════════════════════════════════════════════════════════════
@@ -91,10 +91,25 @@ services:
       - key: YOUTUBE_API_KEY
         value: "your-youtube-api-key"
       - key: WORKERS_ENABLED
-        value: "false"
+        value: "true"
       - key: ADMIN_API_KEY
         sync: false
-      - key: CLIP_WEBHOOK_URL
-        value: "https://amaana-yt.onrender.com/api/twitch/vod-clips"
-      - key: CLIP_WEBHOOK_KEY
+
+      - key: YOUTUBE_UPLOAD_ENABLED
+        value: "false"
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_DEFAULT_PRIVACY
+        value: "private"
+      - key: YOUTUBE_ALLOW_PUBLIC
+        value: "false"
+      - key: TIKTOK_UPLOAD_ENABLED
+        value: "false"
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      - key: DISCORD_ANNOUNCE_ENABLED
+        value: "false"
+      - key: DISCORD_WEBHOOK_URL
         sync: false
