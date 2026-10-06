@@ -411,7 +411,7 @@ async function handleMessage({ channel, user, message, self }) {
   }
   // AI chat – FIX: use personaNames array
   const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
-  const shouldReply = shouldRespond(message, personaNames);
+  const shouldReply = shouldRespond(message, personaNames, user);
   if (!shouldReply) {
     log.debug(`Skipping AI: no mention/greeting`);
     return;
