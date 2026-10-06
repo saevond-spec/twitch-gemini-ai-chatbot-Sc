@@ -171,7 +171,7 @@ app.get('/metrics', requireAdmin, async (req, res) => {
 app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const state = await createOAuthState();
-  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts';
+  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts channel:manage:clips';
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
   res.redirect(url);
 });
