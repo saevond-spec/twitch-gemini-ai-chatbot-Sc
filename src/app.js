@@ -496,7 +496,8 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
-// Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.\nasync function handleUserNotice({ channel, user, msg, tags }) {
+// Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.
+async function handleUserNotice({ channel, user, msg, tags }) {
   if (tags['msg-id'] === 'raid') {
     const from = tags['display-name'] || 'someone';
     const reply = `Thanks for the raid, ${from}! PogChamp`;
