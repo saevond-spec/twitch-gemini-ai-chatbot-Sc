@@ -21,12 +21,14 @@ export class MessageQueue {
       this.interval = null;
     }
   }
-  enqueue(channel, message) {
+  enqueue(channel, message, { priority = 'normal' } = {}) {
     if (!this.queue.has(channel)) {
       this.queue.set(channel, []);
     }
-    this.queue.get(channel).push(message);
-    log.debug(`Message queued for ${channel}`);
+    const messages = this.queue.get(channel);
+    if (priority === 'high') messages.unshift(message);
+    else messages.push(message);
+    log.debug(`Message queued for ${channel} (priority: ${priority})`);
   }
   async process() {
     const now = Date.now();
