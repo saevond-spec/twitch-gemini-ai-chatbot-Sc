@@ -1,4 +1,4 @@
-// src/twitch/client.js
+
 import tmi from 'tmi.js';
 import { config } from '../config/index.js';
 import { getAccessToken } from './auth.js';
@@ -8,7 +8,6 @@ import { ReconnectStateMachine } from '../state/reconnectState.js';
 import { metrics } from '../utils/metrics.js';
 
 const log = createLogger('IRC');
-
 const debugMode = process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
 
 export class TwitchClient {
@@ -30,7 +29,7 @@ export class TwitchClient {
     this._reconnectAttempt = 0;
     this._maxReconnectAttempts = 20;
     this._state = 'idle';
-    this._lastPing = null;                        // 🆕 initialized to null
+    this._lastPing = null;   // fixed: null instead of 0
     this._reconnectTimer = null;
 
     this.stateMachine = new ReconnectStateMachine({
@@ -98,7 +97,7 @@ export class TwitchClient {
         connection: { reconnect: false, secure: true },
       });
 
-      // 🆕 Error handler to prevent crashes
+      // ---- FIX: Add error listener ----
       this.client.on('error', (err) => {
         log.error('IRC client error:', err.message);
         this.emit('error', err);
@@ -109,7 +108,7 @@ export class TwitchClient {
         log.debug('PING received from Twitch');
       });
 
-      // 🆕 Fixed PONG latency calculation
+      // ---- FIX: Guard PONG latency ----
       this.client.on('pong', (latency) => {
         if (this._lastPing) {
           const measured = Date.now() - this._lastPing;
@@ -151,10 +150,9 @@ export class TwitchClient {
         }
       });
 
-      // ---- MESSAGE HANDLER – logs every incoming message at INFO level ----
       this.client.on('message', (channel, user, message, self) => {
         if (self) return;
-        log.info(`📥 IN: ${user.username} @ ${channel}: ${message}`);
+        log.info(`📡 RAW IRC: ${user.username} @ ${channel}: ${message}`);
         this.emit('message', channel, user, message, false);
       });
 
@@ -203,7 +201,7 @@ export class TwitchClient {
       this._reconnectTimer = null;
     }
     if (this.client) {
-      // 🆕 Catch disconnection errors so they don't crash the process
+      // FIX: Catch disconnect promise
       this.client.disconnect().catch(err => log.error('Error disconnecting IRC:', err));
       this.client = null;
     }
