@@ -343,6 +343,7 @@ async function handleMessage({ channel, user, message, self }) {
   const lowerMsg = message.trim().toLowerCase();
   const isCommand = lowerMsg.startsWith('!');
   if (!previousProfile.proactiveOptOut && viewerProfile.proactiveOptOut) {
+    promMetrics.viewerOptOuts.inc();
     const response = `@${username} got it — I’ll stay out of your way unless you use a command.`;
     if (messageQueue) messageQueue.enqueue(channel, response);
     else await global.twitchClient.say(channel, response);
@@ -433,6 +434,7 @@ async function handleMessage({ channel, user, message, self }) {
     isCommand,
   });
   const proactiveWelcome = proactiveWelcomeCandidate && proactiveWelcomeLimiter.allow(channel);
+  if (proactiveWelcomeCandidate && !proactiveWelcome) promMetrics.proactiveWelcomesSuppressed.inc();
   const shouldReply = directInteraction || proactiveWelcome;
   if (!shouldReply || viewerProfile.proactiveOptOut) {
     log.debug('Skipping AI: no direct interaction or eligible first-chat welcome');
@@ -480,6 +482,8 @@ async function handleMessage({ channel, user, message, self }) {
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
     if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
+    if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
+    if (offerFollow) promMetrics.followPrompts.inc();
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, {
       botInteractions: viewerProfile.botInteractions + 1,
@@ -580,6 +584,7 @@ async function initializeBot() {
       const channel = `#${String(event?.broadcaster_user_login || '').toLowerCase()}`;
       const viewer = String(event?.user_login || '').toLowerCase();
       if (channel !== '#' && viewer) {
+        promMetrics.followEvents.inc();
         await ProfileStore.update(channel, viewer, { followed: true, followedAt: Date.now() });
       }
     } catch (err) {
