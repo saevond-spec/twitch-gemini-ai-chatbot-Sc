@@ -69,6 +69,8 @@ export async function validateToken() {
       return false;
     }
     currentToken.scopes = [...granted];
+    currentToken.user_id = response.data?.user_id || currentToken.user_id;
+    currentToken.login = response.data?.login || currentToken.login;
     return true;
   } catch (err) {
     log.debug('Token validation failed', err.response?.status || err.message);
@@ -219,6 +221,10 @@ function scheduleRefresh() {
 
 export function getAccessToken() {
   return currentToken?.access_token || null;
+}
+
+export function getAuthenticatedUserId() {
+  return currentToken?.user_id || null;
 }
 
 export function isAuthorized() {
