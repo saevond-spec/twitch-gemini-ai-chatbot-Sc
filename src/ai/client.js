@@ -8,6 +8,25 @@ import { validateAIResponse, detectPromptInjection } from './safeguards.js';
 const log = createLogger('DEEPSEEK');
 const promptCache = new Map();
 const CACHE_MAX = 100;
+const BALANCE_RECHECK_MS = 5 * 60 * 1000;
+
+export class DeepSeekUnavailableError extends Error {
+  constructor(message, { status = null, code = 'deepseek_unavailable', retryable = false } = {}) {
+    super(message);
+    this.name = 'DeepSeekUnavailableError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+function statusOf(err) {
+  return Number(err?.response?.status || 0) || null;
+}
+
+function isRetryableStatus(status) {
+  return status === 408 || status === 409 || status === 429 || (status >= 500 && status <= 599);
+}
 const circuitBreaker = new CircuitBreaker({
   name: 'deepseek',
   failureThreshold: config.deepseek.circuitBreakerThreshold || 5,
@@ -24,6 +43,9 @@ export class DeepSeekClient {
     this.timeout = config.deepseek.timeoutMs || 10000;
     this.retries = config.deepseek.maxRetries || 3;
     this.baseURL = 'https://api.deepseek.com/v1';
+    this.billingBlocked = false;
+    this.nextBalanceCheckAt = 0;
+    this.lastProviderStatus = null;
   }
 
   estimateTokens(text) { return Math.ceil(text.length / 4); }
@@ -39,15 +61,64 @@ export class DeepSeekClient {
     return systemPrompt;
   }
 
+  getHealth() {
+    return {
+      available: !this.billingBlocked,
+      billingBlocked: this.billingBlocked,
+      lastProviderStatus: this.lastProviderStatus,
+      nextBalanceCheckAt: this.nextBalanceCheckAt || null,
+    };
+  }
+
+  async _checkBalanceIfBlocked() {
+    if (!this.billingBlocked) return true;
+    if (Date.now() < this.nextBalanceCheckAt) return false;
+
+    this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
+    try {
+      const response = await axios.get(this.baseURL + '/user/balance', {
+        headers: { Authorization: 'Bearer ' + this.apiKey },
+        timeout: Math.min(this.timeout, 8000),
+      });
+      const available = Boolean(response.data?.is_available);
+      if (available) {
+        this.billingBlocked = false;
+        this.lastProviderStatus = 200;
+        log.info('DeepSeek balance is available again; AI calls resumed');
+        return true;
+      }
+      this.lastProviderStatus = 402;
+      return false;
+    } catch (err) {
+      this.lastProviderStatus = statusOf(err);
+      log.warn('DeepSeek balance recheck failed: ' + (this.lastProviderStatus || err.message));
+      return false;
+    }
+  }
+
   async chat(messages, options = {}) {
+    if (!(await this._checkBalanceIfBlocked())) {
+      throw new DeepSeekUnavailableError('DeepSeek account balance unavailable; using local fallback', {
+        status: 402,
+        code: 'insufficient_balance',
+        retryable: false,
+      });
+    }
+
     if (circuitBreaker.isOpen()) {
-      throw new Error('Circuit breaker open – too many failures');
+      throw new DeepSeekUnavailableError('DeepSeek circuit breaker open', {
+        code: 'circuit_open',
+        retryable: true,
+      });
     }
 
     const userMessages = messages.filter(m => m.role === 'user');
     for (const msg of userMessages) {
       if (detectPromptInjection(msg.content)) {
-        throw new Error('Prompt injection detected');
+        throw new DeepSeekUnavailableError('Prompt injection detected', {
+          code: 'prompt_injection',
+          retryable: false,
+        });
       }
     }
 
@@ -86,6 +157,7 @@ export class DeepSeekClient {
         });
         clearTimeout(timeoutId);
 
+        this.lastProviderStatus = response.status;
         circuitBreaker.recordSuccess();
 
         if (stream) return this._handleStream(response);
@@ -96,9 +168,31 @@ export class DeepSeekClient {
         return content;
 
       } catch (err) {
-        attempt++;
+        const status = statusOf(err);
+        this.lastProviderStatus = status;
         lastError = err;
-        // Only retry if we still have attempts left
+
+        if (status === 402) {
+          this.billingBlocked = true;
+          this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
+          log.warn('DeepSeek reported insufficient balance (402); switching to local fallback and pausing paid API retries');
+          throw new DeepSeekUnavailableError('DeepSeek insufficient balance', {
+            status: 402,
+            code: 'insufficient_balance',
+            retryable: false,
+          });
+        }
+
+        if (status && !isRetryableStatus(status)) {
+          log.warn('DeepSeek returned non-retryable HTTP ' + status + '; using local fallback');
+          throw new DeepSeekUnavailableError('DeepSeek non-retryable HTTP ' + status, {
+            status,
+            code: status === 401 ? 'authentication_failed' : 'request_rejected',
+            retryable: false,
+          });
+        }
+
+        attempt++;
         if (attempt < this.retries) {
           const delay = 1000 * Math.pow(2, attempt) + Math.random() * 500;
           await this._delay(delay);
@@ -106,11 +200,13 @@ export class DeepSeekClient {
       }
     }
 
-    // FIX: Record failure only once after all retries exhausted
     circuitBreaker.recordFailure();
-    // FIX: Log only error message, not full object (prevents key leak)
-    log.error(`DeepSeek call failed: ${lastError.message}`);
-    throw lastError;
+    log.error('DeepSeek call failed after retries: ' + (lastError?.message || 'unknown error'));
+    throw new DeepSeekUnavailableError('DeepSeek temporarily unavailable', {
+      status: statusOf(lastError),
+      code: 'provider_unavailable',
+      retryable: true,
+    });
   }
 
   async _handleStream(response) {
