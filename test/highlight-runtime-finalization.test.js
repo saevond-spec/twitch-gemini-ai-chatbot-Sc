@@ -1,10 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HighlightDetector } from '../src/highlights/detector.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 process.env.HIGHLIGHT_DETECTION_ENABLED = 'true';
 
-function makeDetector(ai) {
+async function loadHighlightDetector(t) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'highlight-runtime-test-'));
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+  const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const detector = await fs.readFile(path.join(sourceRoot, 'src/highlights/detector.js'), 'utf8');
+  const helper = await fs.readFile(path.join(sourceRoot, 'highlight-window.js'), 'utf8');
+  const files = {
+    'package.json': JSON.stringify({ type: 'module' }),
+    'node_modules/axios/package.json': JSON.stringify({ type: 'module', exports: './index.js' }),
+    'node_modules/axios/index.js': "export default { get: async () => ({ data: { data: [] } }) };",
+    'src/config/index.js': "export const config = { twitch: { channels: ['saevond'], clientId: 'test-client' } };",
+    'src/twitch/auth.js': "export function getAccessToken() { return 'test-token'; }",
+    'src/storage/redis.js': "export function getRedis() { return null; }",
+    'src/logger/index.js': "export function createLogger() { return { info() {}, warn() {}, error() {} }; }",
+    'src/bus/index.js': "const bus = { on() {}, off() {} }; export default bus;",
+    'src/clips/twitchClipService.js': "export async function createClipFromVod() { return { id: 'stub', url: 'https://clips.twitch.tv/stub' }; }",
+    'src/queue/index.js': "export async function enqueueTask() { return { id: 'stub' }; }",
+    'src/highlights/detector.js': detector,
+    'highlight-window.js': helper
+  };
+  await Promise.all(Object.entries(files).map(async ([relative, contents]) => {
+    const filePath = path.join(tempRoot, relative);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, contents);
+  }));
+  const moduleUrl = pathToFileURL(path.join(tempRoot, 'src/highlights/detector.js')).href;
+  return (await import(moduleUrl + '?test=' + Math.random())).HighlightDetector;
+}
+
+function makeDetector(HighlightDetector, ai) {
   const detector = new HighlightDetector(ai);
   const scheduled = [];
   const scheduledIds = new Set();
@@ -37,9 +69,10 @@ function startLiveStream(detector, { id = 'vod-old', startedAt = Date.now() - 60
   return state;
 }
 
-test('the offline poll reviews quiet final chat at its observed timestamp before clearing it', async () => {
+test('the offline poll reviews quiet final chat at its observed timestamp before clearing it', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
   const requests = [];
-  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+  const { detector, scheduled } = makeDetector(HighlightDetector, { chat: async (messages) => {
     requests.push(JSON.parse(messages[1].content));
     return JSON.stringify({ highlight: true, score: 82, title: 'Clutch finish',
       reason: 'Two viewers reacted to the final play', durationSeconds: 20 });
@@ -62,9 +95,10 @@ test('the offline poll reviews quiet final chat at its observed timestamp before
   assert.equal(scheduled[0].candidates[0].endSeconds, 128);
 });
 
-test('empty final chat schedules the VOD without inventing an AI candidate', async () => {
+test('empty final chat schedules the VOD without inventing an AI candidate', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
   let calls = 0;
-  const { detector, scheduled } = makeDetector({ chat: async () => {
+  const { detector, scheduled } = makeDetector(HighlightDetector, { chat: async () => {
     calls += 1;
     return JSON.stringify({ highlight: true, score: 99, title: 'Invented', reason: 'None', durationSeconds: 20 });
   } });
@@ -82,9 +116,10 @@ test('empty final chat schedules the VOD without inventing an AI candidate', asy
   assert.deepEqual(scheduled[0].candidates, []);
 });
 
-test('a failed final review preserves evidence for the next poll', async () => {
+test('a failed final review preserves evidence for the next poll', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
   let attempts = 0;
-  const { detector } = makeDetector({ chat: async () => {
+  const { detector } = makeDetector(HighlightDetector, { chat: async () => {
     attempts += 1;
     if (attempts === 1) throw new Error('temporary model outage');
     return JSON.stringify({ highlight: false, score: 0, title: '', reason: '', durationSeconds: 20 });
@@ -105,9 +140,10 @@ test('a failed final review preserves evidence for the next poll', async () => {
   assert.equal(state.messages.length, 0);
 });
 
-test('a new stream ID finishes the previous stream before resetting its final chat', async () => {
+test('a new stream ID finishes the previous stream before resetting its final chat', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
   const requests = [];
-  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+  const { detector, scheduled } = makeDetector(HighlightDetector, { chat: async (messages) => {
     requests.push(JSON.parse(messages[1].content));
     return JSON.stringify({ highlight: true, score: 81, title: 'Final play',
       reason: 'Chat reacted to the final play', durationSeconds: 20 });
@@ -130,17 +166,18 @@ test('a new stream ID finishes the previous stream before resetting its final ch
   assert.deepEqual(state.messages, []);
 });
 
-test('a five-year finalization simulation recovers transient failures and never fabricates empty-chat clips', async () => {
+test('a five-year finalization simulation recovers transient failures and never fabricates empty-chat clips', async (t) => {
   const DAYS = 1826;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const START = Date.parse('2026-10-17T00:00:00.000Z');
+  const HighlightDetector = await loadHighlightDetector(t);
   const originalNow = Date.now;
   let simulatedNow = START;
   Date.now = () => simulatedNow;
 
   const callsByDay = new Map();
   const failuresByDay = new Set();
-  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+  const { detector, scheduled } = makeDetector(HighlightDetector, { chat: async (messages) => {
     const request = JSON.parse(messages[1].content);
     const day = Number(request.streamTitle.match(/#(\d+)$/)?.[1]);
     const attempt = (callsByDay.get(day) || 0) + 1;
