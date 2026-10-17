@@ -16,6 +16,10 @@ function defaults(now = Date.now()) {
     followedAt: null,
     followPromptedAt: null,
     proactiveOptOut: false,
+    commercialOptOut: false,
+    lastCommercialPromptAt: null,
+    lastCommercialConversionAt: null,
+    commercialPromptCount: 0,
     seenBefore: false,
     preferences: {},
     notes: [],
@@ -35,6 +39,9 @@ function durableState(profile) {
     followedAt: profile.followedAt || null,
     followPromptedAt: profile.followPromptedAt || null,
     proactiveOptOut: Boolean(profile.proactiveOptOut),
+    commercialOptOut: Boolean(profile.commercialOptOut),
+    lastCommercialPromptAt: profile.lastCommercialPromptAt || null,
+    lastCommercialConversionAt: profile.lastCommercialConversionAt || null,
   };
 }
 
