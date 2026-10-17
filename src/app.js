@@ -37,6 +37,7 @@ import { StreamMomentTracker } from './chat/streamMomentTracker.js';
 import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
 import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
 import { EngagementAttribution } from './chat/engagementAttribution.js';
+import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 
@@ -66,6 +67,19 @@ const analyticalMomentGate = new AnalyticalMomentGate({
   minScore: 72,
 });
 const commerceEngine = new CommerceEngine({ enabled: config.sales.enabled });
+const joinWelcomeBatcher = new JoinWelcomeBatcher({
+  flushMs: config.auto.joinWelcomeBatchMs,
+  dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
+  warmupMs: config.auto.joinWelcomeWarmupSeconds * 1000,
+  onFlush: async (channel, message) => {
+    if (!config.auto.welcomeOnJoin) return;
+    if (messageQueue) messageQueue.enqueue(channel, message, { priority: 'normal' });
+    else if (global.twitchClient?.connected) await global.twitchClient.say(channel, message);
+    promMetrics.messagesSent.inc();
+    promMetrics.viewerWelcomes.inc();
+    log.info(`Join welcome sent in ${channel}: ${message}`);
+  },
+});
 const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
   maxPerWindow: Number(process.env.PROACTIVE_WELCOME_MAX_PER_MINUTE || 3),
   windowMs: 60_000,
@@ -555,7 +569,8 @@ async function handleMessage({ channel, user, message, self }) {
   const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
   const directInteraction = shouldRespond(message, personaNames, user);
   const commercialIntent = !viewerProfile.commercialOptOut && commerceEngine.hasIntent(message);
-  const proactiveWelcomeCandidate = AUTO_WELCOME && shouldProactivelyWelcome({
+  const alreadyWelcomedOnJoin = joinWelcomeBatcher.hasWelcomed(channel, login);
+  const proactiveWelcomeCandidate = AUTO_WELCOME && !alreadyWelcomedOnJoin && shouldProactivelyWelcome({
     profile: viewerProfile,
     message,
     isCommand,
@@ -781,6 +796,18 @@ async function initializeBot() {
     log.info('🔊 BUS: twitch.message event received');
     try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
   });
+  bus.on('twitch.join', ({ channel, username, self }) => {
+    try {
+      const login = String(username || '').toLowerCase();
+      if (self || !login) return;
+      if (login === configuredBotLogin()) return;
+      if (config.twitch.ignoredUsers.includes(login)) return;
+      if (!config.auto.welcomeOnJoin) return;
+      joinWelcomeBatcher.add(channel, login);
+    } catch (err) {
+      log.warn('Failed to queue join welcome', err.message);
+    }
+  });
   bus.on('twitch.usernotice', async (...args) => {
     try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
   });
@@ -868,6 +895,7 @@ async function shutdown() {
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   if (messageQueue) messageQueue.stop();
+  joinWelcomeBatcher.stop();
   if (highlightDetector) highlightDetector.stop();
   if (eventSubClient) eventSubClient.disconnect();
   await drainQueues();

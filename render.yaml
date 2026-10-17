@@ -104,6 +104,14 @@ services:
         value: "true"
       - key: ANALYTICAL_MOMENT_COOLDOWN_SECONDS
         value: "90"
+      - key: WELCOME_ON_JOIN
+        value: "true"
+      - key: JOIN_WELCOME_BATCH_MS
+        value: "2500"
+      - key: JOIN_WELCOME_DEDUPE_MINUTES
+        value: "360"
+      - key: JOIN_WELCOME_WARMUP_SECONDS
+        value: "20"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys

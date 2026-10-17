@@ -172,3 +172,18 @@ test('Twitch chat authorization is bound to the configured bot identity', () => 
   assert.match(auth, /Revoking it and refusing chat startup/);
   assert.match(app, /Authorize SweatyClanker bot account/);
 });
+
+
+test('join welcomes are wired into production runtime', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(app, /new JoinWelcomeBatcher/);
+  assert.match(app, /bus\.on\('twitch\.join'/);
+  assert.match(app, /joinWelcomeBatcher\.add/);
+  assert.match(app, /joinWelcomeBatcher\.hasWelcomed/);
+  assert.match(app, /self \|\| !login/);
+  assert.match(app, /login === configuredBotLogin\(\)/);
+  assert.match(render, /WELCOME_ON_JOIN\n\s+value: "true"/);
+  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "20"/);
+});

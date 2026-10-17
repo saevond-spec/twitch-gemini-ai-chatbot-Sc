@@ -10,9 +10,11 @@ import {
   firstChatInstruction,
 } from '../src/chat/viewerEngagement.js';
 
-test('silent lurkers are never proactively welcomed from join events', () => {
+test('incoming viewers are welcomed from join events with reconnect protection', () => {
   const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(app, /bus\.on\('twitch\.join'/);
+  assert.match(app, /bus\.on\('twitch\.join'/);
+  assert.match(app, /joinWelcomeBatcher\.add/);
+  assert.match(app, /JOIN_WELCOME_WARMUP_SECONDS|joinWelcomeWarmupSeconds/);
 });
 
 test('first-time chatter gets a conversational welcome but no follow CTA', () => {
