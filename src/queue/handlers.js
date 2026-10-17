@@ -50,7 +50,14 @@ async function publishSocial({ clipId, filePath, title, reason, twitchUrl }) {
     }));
   }
 
-  return results;
+  const uploadDestinations = Object.keys(results).filter((platform) => platform === 'youtube' || platform === 'tiktok');
+  if (!uploadDestinations.length) {
+    const reason = 'No video upload destination is enabled; enable YOUTUBE_UPLOAD_ENABLED for YouTube or TIKTOK_UPLOAD_ENABLED for TikTok.';
+    log.warn(`Clip ${clipId} is ready but will not be uploaded`, reason);
+    return { ...results, uploaded: false, skipped: true, reason, uploadDestinations: [] };
+  }
+
+  return { ...results, uploaded: true, skipped: false, uploadDestinations };
 }
 
 async function processOfficialTwitchClip(data) {
@@ -69,7 +76,12 @@ async function processOfficialTwitchClip(data) {
     sourcePath = await downloadToTemp(sourceUrl);
     finalPath = portraitUrl ? sourcePath : await renderVerticalShort(sourcePath);
     const result = await publishSocial({ clipId, filePath: finalPath, title, reason, twitchUrl });
-    log.info(`Completed clip pipeline for ${clipId}`);
+    if (result?.uploaded === false) {
+      log.warn(`Twitch clip ${clipId} was processed but not uploaded: ${result.reason}`);
+    } else {
+      const destinations = result?.uploadDestinations?.join(', ') || Object.keys(result || {}).join(', ') || 'configured destinations';
+      log.info(`Completed clip delivery for ${clipId} to ${destinations}`);
+    }
     return result;
   } finally {
     if (finalPath && finalPath !== sourcePath) await safeUnlink(finalPath);

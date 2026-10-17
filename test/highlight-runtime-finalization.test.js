@@ -16,10 +16,10 @@ async function loadHighlightDetector(t) {
   const files = {
     'package.json': JSON.stringify({ type: 'module' }),
     'node_modules/axios/package.json': JSON.stringify({ type: 'module', exports: './index.js' }),
-    'node_modules/axios/index.js': "export default { get: async () => ({ data: { data: [] } }) };",
+    'node_modules/axios/index.js': "let getImpl = async () => ({ data: { data: [] } }); export function setGetImpl(fn) { getImpl = fn; } export default { get: (...args) => getImpl(...args) };",
     'src/config/index.js': "export const config = { twitch: { channels: ['saevond'], clientId: 'test-client' } };",
     'src/twitch/auth.js': "export function getAccessToken() { return 'test-token'; }",
-    'src/storage/redis.js': "export function getRedis() { return null; }",
+    'src/storage/redis.js': "let redis = null; export function getRedis() { return redis; } export function setRedis(value) { redis = value; }",
     'src/logger/index.js': "export function createLogger() { return { info() {}, warn() {}, error() {} }; }",
     'src/bus/index.js': "const bus = { on() {}, off() {} }; export default bus;",
     'src/clips/twitchClipService.js': "export async function createClipFromVod() { return { id: 'stub', url: 'https://clips.twitch.tv/stub' }; }",
@@ -33,7 +33,12 @@ async function loadHighlightDetector(t) {
     await fs.writeFile(filePath, contents);
   }));
   const moduleUrl = pathToFileURL(path.join(tempRoot, 'src/highlights/detector.js')).href;
-  return (await import(moduleUrl + '?test=' + Math.random())).HighlightDetector;
+  const loaded = await import(moduleUrl + '?test=' + Math.random());
+  const redisModule = await import(pathToFileURL(path.join(tempRoot, 'src/storage/redis.js')).href);
+  const axiosModule = await import(pathToFileURL(path.join(tempRoot, 'node_modules/axios/index.js')).href);
+  loaded.HighlightDetector.testSetRedis = redisModule.setRedis;
+  loaded.HighlightDetector.testSetAxiosGet = axiosModule.setGetImpl;
+  return loaded.HighlightDetector;
 }
 
 function makeDetector(HighlightDetector, ai) {
@@ -270,4 +275,106 @@ test('a five-year finalization simulation recovers transient failures and never 
   assert.equal(approvedStreams, 1328);
   assert.equal(callsByDay.size, nonemptyStreams);
   assert.equal([...callsByDay.values()].reduce((sum, count) => sum + count, 0), nonemptyStreams + recoveredFinalReviews);
+});
+
+
+test('recent low-signal chat survives a deploy and a delayed offline poll', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
+  const stored = new Map();
+  HighlightDetector.testSetRedis({
+    async get(key) { return stored.get(key) || null; },
+    async set(key, value) { stored.set(key, String(value)); return 'OK'; },
+    async del(key) { stored.delete(key); return 1; }
+  });
+
+  const startedAt = Date.now() - 10 * 60 * 1000;
+  const firstProcess = new HighlightDetector({});
+  const liveState = firstProcess.stateFor('saevond');
+  Object.assign(liveState, {
+    broadcasterId: 'broadcaster-1',
+    live: true,
+    streamId: 'stream-recovery-test',
+    startedAt: new Date(startedAt).toISOString(),
+    streamTitle: 'Recovery test',
+    gameName: 'Game'
+  });
+
+  await firstProcess.observe({
+    channel: 'saevond',
+    user: { username: 'viewer-a' },
+    message: 'That was close'
+  });
+  const snapshot = JSON.parse(stored.get('highlights:saevond'));
+  assert.equal(snapshot.messageHistory.length, 1);
+  assert.equal(snapshot.messageHistory[0].message, 'That was close');
+
+  const requests = [];
+  const nextProcess = new HighlightDetector({ chat: async (messages) => {
+    requests.push(JSON.parse(messages[1].content));
+    return JSON.stringify({ highlight: true, score: 82, title: 'Clutch finish',
+      reason: 'Chat reacted to the closing play', durationSeconds: 20 });
+  } });
+  const scheduled = [];
+  nextProcess.scheduleFinalize = (state) => scheduled.push(state);
+  nextProcess.helix = async (pathname) => pathname === '/streams' ? [] : [];
+
+  const originalNow = Date.now;
+  Date.now = () => originalNow() + 75_000;
+  try {
+    await nextProcess.checkChannel(nextProcess.stateFor('saevond'));
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(requests.length, 1, 'the restored final chat is reviewed');
+  assert.equal(requests[0].signals.finalWindow, true);
+  assert.equal(requests[0].recentChat[0].message, 'That was close');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].streamId, 'stream-recovery-test');
+  assert.equal(scheduled[0].candidates.length, 1);
+});
+
+test('Twitch Helix retries transient responses with a bound and fails authorization errors fast', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
+  const detector = new HighlightDetector({});
+  const delays = [];
+  detector.helixSleep = async (ms) => delays.push(ms);
+
+  let calls = 0;
+  HighlightDetector.testSetAxiosGet(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw Object.assign(new Error('connection ended during response decompression'), { code: 'ERR_BAD_RESPONSE' });
+    }
+    return { data: { data: [{ id: 'stream-1' }] } };
+  });
+  const recovered = await detector.helix('/streams');
+  assert.equal(recovered[0].id, 'stream-1');
+  assert.equal(calls, 2);
+  assert.equal(delays.length, 1);
+  assert.ok(delays[0] >= 125 && delays[0] <= 250);
+
+  calls = 0;
+  delays.length = 0;
+  HighlightDetector.testSetAxiosGet(async () => {
+    calls += 1;
+    throw Object.assign(new Error('forbidden'), { response: { status: 403 } });
+  });
+  await assert.rejects(detector.helix('/streams'), /forbidden/);
+  assert.equal(calls, 1, 'permission errors are not retried');
+  assert.equal(delays.length, 0);
+});
+
+test('repeated Twitch 5xx responses stop after the configured attempt limit', async (t) => {
+  const HighlightDetector = await loadHighlightDetector(t);
+  const detector = new HighlightDetector({});
+  let calls = 0;
+  detector.helixSleep = async () => {};
+  HighlightDetector.testSetAxiosGet(async () => {
+    calls += 1;
+    throw Object.assign(new Error('temporary service error'), { response: { status: 503 } });
+  });
+
+  await assert.rejects(detector.helix('/streams'), /temporary service error/);
+  assert.equal(calls, 3);
 });
