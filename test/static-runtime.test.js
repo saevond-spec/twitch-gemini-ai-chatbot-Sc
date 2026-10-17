@@ -132,3 +132,27 @@ test('analytical brain and adaptive quiet chat are wired into production', () =>
   assert.match(render, /AUTO_CHAT_MAX_QUIET_SECONDS\n\s+value: "360"/);
   assert.match(render, /ANALYTICAL_AUTO_COMMENT_ENABLED\n\s+value: "true"/);
 });
+
+
+test('advanced commerce strategy is wired into Twitch runtime', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const auth = fs.readFileSync(path.join(root, 'src/twitch/auth.js'), 'utf8');
+  const eventsub = fs.readFileSync(path.join(root, 'src/twitch/eventsub.js'), 'utf8');
+  const helix = fs.readFileSync(path.join(root, 'src/twitch/helix.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(app, /new CommerceEngine/);
+  assert.match(app, /commerceEngine\.consider/);
+  assert.match(app, /\/api\/commerce\/stats/);
+  assert.match(app, /\/api\/commerce\/conversion/);
+  assert.match(auth, /channel:read:subscriptions/);
+  assert.match(auth, /bits:read/);
+  assert.match(eventsub, /subscribeChannelSubscribe/);
+  assert.match(eventsub, /subscribeSubscriptionGift/);
+  assert.match(eventsub, /subscribeBitsUse/);
+  assert.match(helix, /channel\.subscribe/);
+  assert.match(helix, /channel\.subscription\.gift/);
+  assert.match(helix, /channel\.bits\.use/);
+  assert.match(render, /SALES_ENGINE_ENABLED\n\s+value: "true"/);
+  assert.match(render, /BRANDED_CONTENT_DISCLOSURE_CONFIRMED\n\s+value: "false"/);
+});

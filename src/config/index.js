@@ -54,6 +54,12 @@ const optional = {
   ANALYTICAL_MOMENT_COOLDOWN_SECONDS: 90,
   ANALYTICAL_AUTO_COMMENT_ENABLED: 'true',
   AUTO_WELCOME: 'true',
+  SALES_ENGINE_ENABLED: 'true',
+  SALES_VIEWER_COOLDOWN_DAYS: 30,
+  SALES_CHANNEL_COOLDOWN_MINUTES: 15,
+  SALES_CONVERSION_COOLDOWN_DAYS: 30,
+  SALES_OFFERS_JSON: '',
+  BRANDED_CONTENT_DISCLOSURE_CONFIRMED: 'false',
   IMAGE_COMMAND_NAME: '!image',
   VIDEO_COMMAND_NAME: '!video',
   TTS_COMMAND_NAME: '!tts',
@@ -93,6 +99,9 @@ const convert = {
   AUTO_CHAT_BOT_GAP_SECONDS: Number,
   AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS: Number,
   ANALYTICAL_MOMENT_COOLDOWN_SECONDS: Number,
+  SALES_VIEWER_COOLDOWN_DAYS: Number,
+  SALES_CHANNEL_COOLDOWN_MINUTES: Number,
+  SALES_CONVERSION_COOLDOWN_DAYS: Number,
   PORT: Number,
   ALLOW_LINKS: Boolean,
   ENABLE_EMOTE_APPENDING: Boolean,
@@ -104,6 +113,8 @@ const convert = {
   AUTO_CHAT_REQUIRE_LIVE: Boolean,
   ANALYTICAL_AUTO_COMMENT_ENABLED: Boolean,
   AUTO_WELCOME: Boolean,
+  SALES_ENGINE_ENABLED: Boolean,
+  BRANDED_CONTENT_DISCLOSURE_CONFIRMED: Boolean,
 };
 
 for (const [key, fn] of Object.entries(convert)) {
@@ -162,6 +173,14 @@ export const config = {
     analyticalCooldownSeconds: env.ANALYTICAL_MOMENT_COOLDOWN_SECONDS,
     analyticalAutoComment: env.ANALYTICAL_AUTO_COMMENT_ENABLED,
     welcome: env.AUTO_WELCOME,
+  },
+  sales: {
+    enabled: env.SALES_ENGINE_ENABLED,
+    viewerCooldownDays: env.SALES_VIEWER_COOLDOWN_DAYS,
+    channelCooldownMinutes: env.SALES_CHANNEL_COOLDOWN_MINUTES,
+    conversionCooldownDays: env.SALES_CONVERSION_COOLDOWN_DAYS,
+    offersJson: env.SALES_OFFERS_JSON || '',
+    brandedContentConfirmed: env.BRANDED_CONTENT_DISCLOSURE_CONFIRMED,
   },
   media: {
     imageCommand: env.IMAGE_COMMAND_NAME || '!image',

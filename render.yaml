@@ -133,3 +133,16 @@ services:
         value: "false"
       - key: DISCORD_WEBHOOK_URL
         sync: false
+
+      - key: SALES_ENGINE_ENABLED
+        value: "true"
+      - key: SALES_VIEWER_COOLDOWN_DAYS
+        value: "30"
+      - key: SALES_CHANNEL_COOLDOWN_MINUTES
+        value: "15"
+      - key: SALES_CONVERSION_COOLDOWN_DAYS
+        value: "30"
+      - key: SALES_OFFERS_JSON
+        value: ""
+      - key: BRANDED_CONTENT_DISCLOSURE_CONFIRMED
+        value: "false"
