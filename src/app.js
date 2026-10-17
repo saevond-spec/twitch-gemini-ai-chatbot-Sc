@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config/index.js';
 import { logger, createLogger } from './logger/index.js';
 import { connectRedis, getRedis } from './storage/redis.js';
-import { initAuth, exchangeCodeForToken, isAuthorized } from './twitch/auth.js';
+import { initAuth, exchangeCodeForToken, isAuthorized, BOT_SCOPES, configuredBotLogin } from './twitch/auth.js';
 import { DeepSeekClient } from './ai/client.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { builtins, loadCustomCommands, saveCustomCommand, deleteCustomCommand } from './commands/index.js';
@@ -193,7 +193,7 @@ app.get('/metrics', requireAdmin, async (req, res) => {
 app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const state = await createOAuthState();
-  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts channel:manage:clips channel:read:subscriptions bits:read';
+  const scope = BOT_SCOPES.join(' ');
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
   res.redirect(url);
 });
@@ -207,9 +207,12 @@ app.get('/auth/callback', async (req, res) => {
     await exchangeCodeForToken(code, redirectUri);
     if (!botInitialized) await initializeBot();
     else log.info('Bot already running, skipping re‑initialization');
-    res.send('Authorization successful! You may close this window.');
+    res.send(`SweatyClanker bot authorization successful for ${configuredBotLogin()}. You may close this window.`);
   } catch (err) {
     log.error('Auth callback failed', err);
+    if (String(err.message || '').includes('Wrong Twitch account authorized')) {
+      return res.status(400).send(`Wrong Twitch account. Sign out of the current Twitch account, sign in as ${configuredBotLogin()}, then authorize again.`);
+    }
     res.status(500).send('Authorization failed');
   }
 });
@@ -415,6 +418,13 @@ async function handleMessage({ channel, user, message, self }) {
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
   log.info(`📩 IN: ${username} @ ${channel}: ${message}`);
+  const bitsUsed = Number(user.bits || user['bits'] || 0);
+  if (bitsUsed > 0) {
+    recordNativeCommerceConversion({
+      broadcaster_user_login: String(channel || '').replace(/^#/, ''),
+      user_login: login,
+    }, 'twitch_bits', 'irc_bits').catch(err => log.warn('Bits conversion tracking failed', err.message));
+  }
   await ConversationStore.updateLastActivity(channel);
   if (highlightDetector) {
     highlightDetector.observe({ channel, user, message }).catch((err) => log.warn('Highlight observation failed', err.message));
@@ -678,13 +688,25 @@ async function handleMessage({ channel, user, message, self }) {
 
 // Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.
 async function handleUserNotice({ channel, user, msg, tags }) {
-  if (tags['msg-id'] === 'raid') {
+  const msgId = tags?.['msg-id'];
+  if (msgId === 'raid') {
     const from = tags['display-name'] || 'someone';
     const reply = `Thanks for the raid, ${from}! PogChamp`;
     if (messageQueue) messageQueue.enqueue(channel, reply);
     else await global.twitchClient.say(channel, reply);
-  } else if (tags['msg-id'] === 'sub' || tags['msg-id'] === 'resub') {
-    const subName = tags['display-name'] || 'a viewer';
+    return;
+  }
+
+  const subscriptionNotices = new Set(['sub', 'resub', 'subgift', 'anonsubgift', 'submysterygift', 'anonsubmysterygift']);
+  if (subscriptionNotices.has(msgId)) {
+    const subName = tags?.['display-name'] || user?.username || user || 'a viewer';
+    const viewerLogin = String(tags?.login || user?.username || tags?.['display-name'] || '').toLowerCase();
+    if (viewerLogin) {
+      recordNativeCommerceConversion({
+        broadcaster_user_login: String(channel || '').replace(/^#/, ''),
+        user_login: viewerLogin,
+      }, 'twitch_sub', `irc_${msgId}`).catch(err => log.warn('Subscription conversion tracking failed', err.message));
+    }
     const reply = `Thanks for the sub, ${subName}! Much love <3`;
     if (messageQueue) messageQueue.enqueue(channel, reply);
     else await global.twitchClient.say(channel, reply);
@@ -710,7 +732,7 @@ async function handleClearChat({ channel }) {
 }
 
 app.get('/', (req, res) => {
-  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Chat identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize SweatyClanker bot account</a></p>`);
 });
 
 // ========== INITIALIZATION ==========
@@ -775,16 +797,6 @@ async function initializeBot() {
       log.warn('Failed to record follower state', err.message);
     }
   });
-  bus.on('eventsub.channel.subscribe', (event) => {
-    recordNativeCommerceConversion(event, 'twitch_sub', 'subscription').catch(err => log.warn('Subscription conversion tracking failed', err.message));
-  });
-  bus.on('eventsub.channel.subscription.gift', (event) => {
-    recordNativeCommerceConversion(event, 'twitch_sub', 'gift_subscription').catch(err => log.warn('Gift subscription conversion tracking failed', err.message));
-  });
-  bus.on('eventsub.channel.bits.use', (event) => {
-    recordNativeCommerceConversion(event, 'twitch_bits', 'bits').catch(err => log.warn('Bits conversion tracking failed', err.message));
-  });
-
   // Load plugins
   log.info('Loading plugins...');
   await loadPlugins(bus, config);

@@ -69,7 +69,7 @@ test('OAuth state, admin protection, and Twitch clip scope are present', () => {
   assert.match(app, /consumeOAuthState/);
   assert.match(app, /Invalid or expired OAuth state/);
   assert.match(app, /requireAdmin/);
-  assert.match(app, /channel:manage:clips/);
+  assert.match(app, /BOT_SCOPES\.join/);
   assert.match(auth, /channel:manage:clips/);
   assert.match(auth, /missingScopes/);
 });
@@ -145,14 +145,30 @@ test('advanced commerce strategy is wired into Twitch runtime', () => {
   assert.match(app, /commerceEngine\.consider/);
   assert.match(app, /\/api\/commerce\/stats/);
   assert.match(app, /\/api\/commerce\/conversion/);
-  assert.match(auth, /channel:read:subscriptions/);
-  assert.match(auth, /bits:read/);
-  assert.match(eventsub, /subscribeChannelSubscribe/);
-  assert.match(eventsub, /subscribeSubscriptionGift/);
-  assert.match(eventsub, /subscribeBitsUse/);
+  assert.doesNotMatch(auth, /['"]channel:read:subscriptions['"]/);
+  assert.doesNotMatch(auth, /['"]bits:read['"]/);
+  assert.doesNotMatch(eventsub, /this\.helix\.subscribeChannelSubscribe/);
+  assert.doesNotMatch(eventsub, /this\.helix\.subscribeSubscriptionGift/);
+  assert.doesNotMatch(eventsub, /this\.helix\.subscribeBitsUse/);
+  assert.match(app, /irc_bits/);
+  assert.match(app, /subscriptionNotices/);
   assert.match(helix, /channel\.subscribe/);
   assert.match(helix, /channel\.subscription\.gift/);
   assert.match(helix, /channel\.bits\.use/);
   assert.match(render, /SALES_ENGINE_ENABLED\n\s+value: "true"/);
   assert.match(render, /BRANDED_CONTENT_DISCLOSURE_CONFIRMED\n\s+value: "false"/);
+});
+
+
+test('Twitch chat authorization is bound to the configured bot identity', () => {
+  const auth = fs.readFileSync(path.join(root, 'src/twitch/auth.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+
+  assert.match(auth, /twitch:oauth:bot/);
+  assert.match(auth, /LEGACY_TOKEN_KEY = 'twitch:oauth'/);
+  assert.match(auth, /tokenBelongsToConfiguredBot/);
+  assert.match(auth, /Wrong Twitch account authorized/);
+  assert.match(auth, /revokeAccessToken/);
+  assert.match(auth, /Revoking it and refusing chat startup/);
+  assert.match(app, /Authorize SweatyClanker bot account/);
 });
