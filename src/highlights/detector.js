@@ -515,9 +515,12 @@ export class HighlightDetector {
     const elapsed = Math.max(0, (now - Date.parse(state.startedAt)) / 1000);
     const durationSeconds = Math.min(this.manualClipSeconds, Math.max(5, elapsed));
     const endSeconds = Math.max(durationSeconds, Math.floor(elapsed));
-    const requestedTitle = cleanText(String(message || '').replace(/^!clip\b/i, '').trim(), 100);
+    const trustedRequester = trustedClipRequester(user);
+    const requestedTitle = trustedRequester
+      ? cleanText(String(message || '').replace(/^!clip\b/i, '').trim(), 100)
+      : '';
     const title = requestedTitle || cleanText(`${state.gameName || 'Gaming'} live highlight`, 100);
-    const reason = trustedClipRequester(user)
+    const reason = trustedRequester
       ? `Manual !clip by ${login}`
       : `${this.viewerClipVotesRequired} unique viewer !clip votes`;
 
