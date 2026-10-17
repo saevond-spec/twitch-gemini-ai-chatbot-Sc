@@ -2,25 +2,26 @@ export function quietSpeakProbability({
   silenceMs,
   tickMs = 30_000,
   recentBotMessages = 0,
-  minQuietMs = 150_000,
-  maxQuietMs = 720_000,
+  minQuietMs = 90_000,
+  maxQuietMs = 360_000,
 }) {
   if (!Number.isFinite(silenceMs) || silenceMs < minQuietMs) return 0;
 
-  const midpoint = minQuietMs + (maxQuietMs - minQuietMs) * 0.38;
-  const scale = Math.max(30_000, (maxQuietMs - minQuietMs) / 7);
+  const midpoint = minQuietMs + (maxQuietMs - minQuietMs) * 0.35;
+  const scale = Math.max(30_000, (maxQuietMs - minQuietMs) / 6);
   const activation = 1 / (1 + Math.exp(-(silenceMs - midpoint) / scale));
 
   // Fatigue falls exponentially as the bot has spoken more often recently.
   const fatigue = Math.exp(-0.72 * Math.max(0, recentBotMessages));
 
-  // Fully-quiet target hazard ~= one attempt every 4.5 minutes before fatigue.
-  const lambdaPerMs = (1 / (4.5 * 60_000)) * activation * fatigue;
+  // Fully-quiet target hazard ~= one attempt every 2.75 minutes before fatigue.
+  // If humans do not respond, exponential fatigue quickly lengthens the gap.
+  const lambdaPerMs = (1 / (2.75 * 60_000)) * activation * fatigue;
   let probability = 1 - Math.exp(-lambdaPerMs * tickMs);
 
   // Guarantee a useful nudge after prolonged silence without turning chat into a wall of bot messages.
-  if (silenceMs >= maxQuietMs && recentBotMessages === 0) probability = Math.max(probability, 0.65);
-  return Math.max(0, Math.min(0.75, probability));
+  if (silenceMs >= maxQuietMs && recentBotMessages === 0) probability = Math.max(probability, 0.72);
+  return Math.max(0, Math.min(0.8, probability));
 }
 
 export function chooseQuietMode({ history = [], streamContext = {}, moment = {} }) {
