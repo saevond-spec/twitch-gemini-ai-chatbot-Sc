@@ -115,3 +115,20 @@ test('publish store separates completion records from retry locks', () => {
   assert.match(store, /NX/);
   assert.match(store, /redis\.del\(lockKey/);
 });
+
+
+test('analytical brain and adaptive quiet chat are wired into production', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const brains = fs.readFileSync(path.join(root, 'src/brains/index.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(brains, /analyst:\s*AnalystBrain/);
+  assert.match(app, /new StreamMomentTracker\(\)/);
+  assert.match(app, /quietSpeakProbability/);
+  assert.match(app, /analyticalMomentGate\.allow/);
+  assert.match(app, /engagementAttribution\.recordQuiet/);
+  assert.match(app, /engagementAttribution\.recordAnalytical/);
+  assert.match(render, /AUTO_CHAT_MIN_QUIET_SECONDS\n\s+value: "90"/);
+  assert.match(render, /AUTO_CHAT_MAX_QUIET_SECONDS\n\s+value: "360"/);
+  assert.match(render, /ANALYTICAL_AUTO_COMMENT_ENABLED\n\s+value: "true"/);
+});
