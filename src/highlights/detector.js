@@ -7,6 +7,12 @@ import bus from '../bus/index.js';
 import { createClipFromVod } from '../clips/twitchClipService.js';
 import { enqueueTask } from '../queue/index.js';
 import { finalWindowOffsetSeconds, finalWindowSignals } from '../../highlight-window.js';
+import {
+  computeHighlightSignals,
+  isExplicitClipCommand,
+  shouldEvaluateAutoClip,
+  shouldFallbackClipWithoutAI,
+} from './scoring.js';
 
 const log = createLogger('HIGHLIGHTS');
 const HELIX_BASE = 'https://api.twitch.tv/helix';
@@ -98,6 +104,12 @@ export class HighlightDetector {
     this.minimumMessages = asNumber(process.env.HIGHLIGHT_MIN_MESSAGES, 3, 1, 20);
     this.cooldownMs = asNumber(process.env.HIGHLIGHT_COOLDOWN_SECONDS, 150, 60, 900) * 1000;
     this.maxClips = asNumber(process.env.HIGHLIGHT_MAX_CLIPS, 5, 1, 8);
+    this.autoScoreThreshold = asNumber(process.env.HIGHLIGHT_AUTO_SCORE_THRESHOLD, 64, 40, 95);
+    this.aiFallbackScoreThreshold = asNumber(process.env.HIGHLIGHT_AI_FALLBACK_SCORE, 84, 60, 99);
+    this.manualClipSeconds = asNumber(process.env.MANUAL_CLIP_SECONDS, 35, 5, 60);
+    this.manualClipCooldownMs = asNumber(process.env.MANUAL_CLIP_COOLDOWN_SECONDS, 45, 10, 300) * 1000;
+    this.viewerClipVoteWindowMs = asNumber(process.env.VIEWER_CLIP_VOTE_WINDOW_SECONDS, 12, 5, 60) * 1000;
+    this.viewerClipVotesRequired = asNumber(process.env.VIEWER_CLIP_VOTES_REQUIRED, 2, 1, 10);
     this.states = new Map();
     this.interval = null;
     this.finalizeTimers = new Set();
@@ -118,6 +130,8 @@ export class HighlightDetector {
         messageHistory: [],
         followEvents: [],
         candidates: [],
+        clipVotes: [],
+        lastManualClipAt: 0,
         lastAiAt: 0,
         lastEvidencePersistAt: 0,
         restored: false
