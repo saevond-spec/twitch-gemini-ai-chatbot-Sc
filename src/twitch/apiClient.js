@@ -1,4 +1,4 @@
-import { getUserToken, forceRefresh, getAppToken, invalidateAppToken } from './tokenManager.js';
+import { getUserToken, forceRefresh, getAppToken, invalidateAppToken } from './tokenmanager.js';
 
 const HELIX_API_BASE = 'https://api.twitch.tv/helix';
 

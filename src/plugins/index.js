@@ -1,17 +1,11 @@
-// src/plugins/index.js
+
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../logger/index.js';
-
 const log = createLogger('PLUGIN');
-
 export async function loadPlugins(bus, config) {
   const pluginsDir = path.resolve(process.cwd(), 'plugins');
-  if (!fs.existsSync(pluginsDir)) {
-    log.warn('Plugins directory not found, skipping plugin loading.');
-    return;
-  }
-
+  if (!fs.existsSync(pluginsDir)) return;
   const items = fs.readdirSync(pluginsDir, { withFileTypes: true });
   for (const item of items) {
     if (!item.isDirectory()) continue;

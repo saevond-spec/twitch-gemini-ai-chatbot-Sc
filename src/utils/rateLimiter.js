@@ -1,11 +1,10 @@
-// src/utils/rateLimiter.js
+
 export class RateLimiter {
   constructor(maxTokens, refillInterval) {
     this.maxTokens = maxTokens;
     this.refillInterval = refillInterval;
     this.tokens = new Map();
   }
-
   async wait(channel) {
     const key = channel.toLowerCase();
     const now = Date.now();

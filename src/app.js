@@ -1,4 +1,4 @@
-// src/app.js
+
 import express from 'express';
 import expressWs from 'express-ws';
 import helmet from 'helmet';
@@ -7,8 +7,6 @@ import { config } from './config/index.js';
 import { logger, createLogger } from './logger/index.js';
 import { connectRedis, getRedis } from './storage/redis.js';
 import { initAuth, exchangeCodeForToken, isAuthorized } from './twitch/auth.js';
-// TODO: Verify this import matches the actual AI client file.
-// The file 'src/ai/client.js' must export a class named DeepSeekClient with a chat() method.
 import { DeepSeekClient } from './ai/client.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { builtins, loadCustomCommands, saveCustomCommand, deleteCustomCommand } from './commands/index.js';
@@ -30,6 +28,16 @@ import { MessageQueue } from './queue/messageQueue.js';
 import { EventSubClient } from './twitch/eventsub.js';
 import { PollinationsClient } from './media/providers.js';
 import { writeFile } from 'fs/promises';
+import { randomBytes } from 'crypto';
+import { HighlightDetector } from './highlights/detector.js';
+import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
+import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
+import { ProactiveWelcomeLimiter } from './chat/proactiveWelcomeLimiter.js';
+import { StreamMomentTracker } from './chat/streamMomentTracker.js';
+import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
+import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
+import { EngagementAttribution } from './chat/engagementAttribution.js';
+import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -48,23 +56,73 @@ let heartbeatInterval = null;
 let messageQueue = null;
 let eventSubClient = null;
 let pollinations = new PollinationsClient();
+let highlightDetector = null;
+const incomingDeduper = new IncomingMessageDeduper();
+const streamMomentTracker = new StreamMomentTracker();
+const engagementAttribution = new EngagementAttribution();
+const analyticalMomentGate = new AnalyticalMomentGate({
+  cooldownMs: config.auto.analyticalCooldownSeconds * 1000,
+  minScore: 72,
+});
+const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
+  maxPerWindow: Number(process.env.PROACTIVE_WELCOME_MAX_PER_MINUTE || 3),
+  windowMs: 60_000,
+});
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
 
 const AUTO_ENABLED = config.auto.enabled;
-const AUTO_INTERVAL = config.auto.interval * 1000;
 const AUTO_USE_DEEPSEEK = config.auto.useDeepSeek;
-const AUTO_QUIET_THRESHOLD = config.auto.quietThreshold * 1000;
+const AUTO_CHAT_TICK_MS = Math.max(10_000, config.auto.tickSeconds * 1000);
+const AUTO_CHAT_MIN_QUIET_MS = Math.max(60_000, config.auto.minQuietSeconds * 1000);
+const AUTO_CHAT_MAX_QUIET_MS = Math.max(AUTO_CHAT_MIN_QUIET_MS + 60_000, config.auto.maxQuietSeconds * 1000);
+const AUTO_CHAT_BOT_GAP_MS = Math.max(60_000, config.auto.botGapSeconds * 1000);
+const AUTO_CHAT_RECENT_BOT_WINDOW_MS = Math.max(AUTO_CHAT_BOT_GAP_MS, config.auto.recentBotWindowSeconds * 1000);
 const AUTO_WELCOME = config.auto.welcome;
 const FALLBACK_MESSAGES = [
-  "Just vibing in the chat! How's everyone doing?",
-  "Anyone else hyped for the next game?",
-  "I'm SweatyClanker, your friendly neighborhood bot!",
-  "Don't forget to follow if you're enjoying the stream!",
-  "What's your favourite game right now?",
-  "I'm learning new things every day – thanks for chatting with me!",
-  "Feeling lucky today – who's ready for some PogChamp moments?",
+  "Quick read, chat: push the next fight or reset and play safe?",
+  "Prediction check: clean win next fight or maximum chaos?",
+  "What weapon or loadout are you trusting right now?",
+  "Rate the last sequence 1–10 — my circuits need a verdict.",
+  "What’s one adjustment you’d make before the next fight?",
 ];
 let fallbackIndex = 0;
+const oauthStates = new Map();
+
+function requireAdmin(req, res, next) {
+  const expected = config.server.adminApiKey;
+  if (!expected) return res.status(503).json({ error: 'Admin API is disabled until ADMIN_API_KEY is configured' });
+  const header = req.get('authorization') || '';
+  const supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (supplied !== expected) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+
+async function createOAuthState() {
+  const state = randomBytes(24).toString('hex');
+  const redis = getRedis();
+  if (redis) await redis.set(`oauth:state:${state}`, '1', 'EX', 600);
+  else {
+    oauthStates.set(state, Date.now() + 600000);
+    const timer = setTimeout(() => oauthStates.delete(state), 600000);
+    timer.unref?.();
+  }
+  return state;
+}
+
+async function consumeOAuthState(state) {
+  if (!state) return false;
+  const redis = getRedis();
+  if (redis) {
+    const key = `oauth:state:${state}`;
+    const exists = await redis.get(key);
+    if (!exists) return false;
+    await redis.del(key);
+    return true;
+  }
+  const expiresAt = oauthStates.get(state);
+  oauthStates.delete(state);
+  return Boolean(expiresAt && expiresAt > Date.now());
+}
 
 app.use(helmet());
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
@@ -107,7 +165,8 @@ app.get('/readyz', async (req, res) => {
   let attempts = 0;
   while (attempts < 20) {
     const twitchReady = !!global.twitchClient?.connected;
-    const redisReady = !!getRedis();
+    const redisRequired = Boolean(config.redis.url || process.env.WORKERS_ENABLED === 'true');
+    const redisReady = !redisRequired || !!getRedis();
     const deepseekReady = !!deepseek;
     const authReady = isAuthorized();
     if (twitchReady && redisReady && deepseekReady && authReady) {
@@ -124,20 +183,23 @@ app.get('/readyz', async (req, res) => {
   });
 });
 
-app.get('/metrics', async (req, res) => {
+app.get('/metrics', requireAdmin, async (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(await getMetrics());
 });
 
-app.get('/auth/login', (req, res) => {
+app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
-  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts`;
+  const state = await createOAuthState();
+  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts channel:manage:clips';
+  const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
   res.redirect(url);
 });
 
 app.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   if (!code) return res.status(400).send('Missing code');
+  if (!(await consumeOAuthState(state))) return res.status(400).send('Invalid or expired OAuth state');
   try {
     const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
     await exchangeCodeForToken(code, redirectUri);
@@ -150,7 +212,32 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-app.post('/api/commands', async (req, res) => {
+app.post('/api/youtube/auth-url', requireAdmin, async (req, res) => {
+  try {
+    const state = await createOAuthState();
+    const redirectUri = `${req.protocol}://${req.get('host')}/auth/youtube/callback`;
+    res.json({ url: youtubeAuthUrl({ state, redirectUri }) });
+  } catch (err) {
+    log.error('YouTube auth URL failed', err);
+    res.status(500).json({ error: 'Unable to start YouTube authorization' });
+  }
+});
+
+app.get('/auth/youtube/callback', async (req, res) => {
+  const { code, state } = req.query;
+  if (!code) return res.status(400).send('Missing code');
+  if (!(await consumeOAuthState(state))) return res.status(400).send('Invalid or expired OAuth state');
+  try {
+    const redirectUri = `${req.protocol}://${req.get('host')}/auth/youtube/callback`;
+    await exchangeYouTubeCode({ code, redirectUri });
+    res.send('YouTube authorization successful. You may close this window.');
+  } catch (err) {
+    log.error('YouTube OAuth callback failed', err);
+    res.status(500).send('YouTube authorization failed');
+  }
+});
+
+app.post('/api/commands', requireAdmin, async (req, res) => {
   const { name, response, role } = req.body;
   if (!name || !response) return res.status(400).json({ error: 'Missing fields' });
   await saveCustomCommand(name, response, role || 'all');
@@ -158,13 +245,13 @@ app.post('/api/commands', async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/commands/:name', async (req, res) => {
+app.delete('/api/commands/:name', requireAdmin, async (req, res) => {
   await deleteCustomCommand(req.params.name);
   await loadCustomCommandsIntoMemory();
   res.json({ success: true });
 });
 
-app.post('/api/media/image', async (req, res) => {
+app.post('/api/media/image', requireAdmin, async (req, res) => {
   const { prompt } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Prompt required' });
   try {
@@ -178,146 +265,142 @@ app.post('/api/media/image', async (req, res) => {
   }
 });
 
-async function generateSpontaneousMessage(channel) {
+async function generateSpontaneousMessage(channel, mode, streamContext, history, moment) {
   if (!deepseek || !AUTO_USE_DEEPSEEK) {
     const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
     fallbackIndex++;
     return msg;
   }
-  const systemPrompt = `You are SweatyClanker, a Twitch chatter. Say something spontaneous, fun, and engaging to the chat. Keep it short.`;
+
+  const systemPrompt = [
+    'You are SweatyClanker, a concise Twitch gaming companion.',
+    'The channel is quiet, so restart participation without sounding automated or desperate.',
+    'Never ask for follows, subs, money, or personal information in an idle message.',
+    'Do not claim you saw gameplay unless the supplied context explicitly proves it.',
+    'Prefer one useful observation, prediction, or easy question over generic hype.',
+    quietPrompt(mode, streamContext),
+  ].join(' ');
+
+  const recentChat = history
+    .filter(entry => entry.role === 'user')
+    .slice(-6)
+    .map(entry => `${entry.username || 'viewer'}: ${entry.content}`)
+    .join('\n');
+
   const messages = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: 'Say something random to the chat.' }
+    {
+      role: 'user',
+      content: JSON.stringify({
+        mode,
+        game: streamContext.gameName || null,
+        streamTitle: streamContext.streamTitle || null,
+        moment,
+        recentChat: recentChat || null,
+      })
+    }
   ];
+
   try {
     const start = Date.now();
-    const reply = await deepseek.chat(messages, { temperature: 0.9 });
+    const reply = await deepseek.chat(messages, { temperature: mode === 'analysis-recap' ? 0.45 : 0.8, maxTokens: 180 });
     promMetrics.aiLatency.observe((Date.now() - start) / 1000);
     promMetrics.aiCalls.inc();
     return reply;
   } catch (err) {
-    log.error('Failed to generate spontaneous message', err);
+    log.error('Failed to generate adaptive quiet message', err);
     promMetrics.aiErrors.inc();
-    return FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
+    const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
+    fallbackIndex++;
+    return msg;
   }
 }
 
 function startAutoMessages() {
   if (!AUTO_ENABLED) return;
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
+
   global._autoMessageTimer = setInterval(async () => {
     const twitchClient = global.twitchClient;
     if (!twitchClient || !twitchClient.connected) return;
+
     const now = Date.now();
     for (const channel of twitchClient.channels) {
-      const last = await ConversationStore.getLastActivity(channel);
-      if (now - last < AUTO_QUIET_THRESHOLD) continue;
-      const msg = await generateSpontaneousMessage(channel);
+      const streamContext = highlightDetector?.getLiveContext(channel) || {};
+      if (config.auto.requireLive && !streamContext.live) continue;
+
+      const lastHumanAt = await ConversationStore.getLastActivity(channel);
+      const silenceMs = lastHumanAt ? now - lastHumanAt : AUTO_CHAT_MAX_QUIET_MS;
+      if (silenceMs < AUTO_CHAT_MIN_QUIET_MS) continue;
+
+      const history = await ConversationStore.getHistory(channel, 40);
+      const recentBotEntries = history.filter(entry =>
+        (entry.role === 'bot' || entry.role === 'assistant')
+        && Number(entry.ts || 0) >= now - AUTO_CHAT_RECENT_BOT_WINDOW_MS
+      );
+      const lastBotAt = recentBotEntries.reduce((max, entry) => Math.max(max, Number(entry.ts || 0)), 0);
+      if (lastBotAt && now - lastBotAt < AUTO_CHAT_BOT_GAP_MS) continue;
+
+      const probability = quietSpeakProbability({
+        silenceMs,
+        tickMs: AUTO_CHAT_TICK_MS,
+        recentBotMessages: recentBotEntries.length,
+        minQuietMs: AUTO_CHAT_MIN_QUIET_MS,
+        maxQuietMs: AUTO_CHAT_MAX_QUIET_MS,
+      });
+      promMetrics.quietSpeakProbability.observe(probability);
+      if (Math.random() >= probability) continue;
+
+      const moment = streamMomentTracker.snapshot(channel, now);
+      const mode = chooseQuietMode({ history, streamContext, moment });
+      const msg = await generateSpontaneousMessage(channel, mode, streamContext, history, moment);
       if (!msg) continue;
-      let finalMsg = msg;
+
+      let finalMsg = msg.trim();
+      if (!finalMsg) continue;
       if (config.emotes.enable) {
         const emote = getRandomEmote(channel);
         if (emote) finalMsg += ` ${emote}`;
       }
+
       if (messageQueue) messageQueue.enqueue(channel, finalMsg);
       else await twitchClient.say(channel, finalMsg);
+
       promMetrics.messagesSent.inc();
+      promMetrics.quietMessages.inc();
+      if (mode === 'analysis-recap') promMetrics.quietAnalysisRecaps.inc();
+      else if (mode === 'prediction') promMetrics.quietPredictionPrompts.inc();
+      else promMetrics.quietCommunityQuestions.inc();
+
       await ConversationStore.pushMessage(channel, 'bot', finalMsg);
+      engagementAttribution.recordQuiet(channel, mode, Date.now());
+      log.info(`Adaptive quiet message sent in ${channel} (mode: ${mode}, p=${probability.toFixed(3)})`);
     }
-  }, AUTO_INTERVAL);
-  log.info(`Auto‑messages started (interval: ${AUTO_INTERVAL/1000}s)`);
+  }, AUTO_CHAT_TICK_MS);
+
+  log.info(`Adaptive auto-chat started (tick: ${AUTO_CHAT_TICK_MS / 1000}s, quiet range: ${AUTO_CHAT_MIN_QUIET_MS / 1000}-${AUTO_CHAT_MAX_QUIET_MS / 1000}s)`);
 }
 
 async function loadCustomCommandsIntoMemory() {
   customCommands = await loadCustomCommands();
 }
 
-async function initializeBot() {
-  if (botInitialized) {
-    log.warn('Bot already initialized, skipping duplicate call');
-    return;
-  }
-  botInitialized = true;
-  log.info('Starting bot initialization...');
-  if (!isAuthorized()) {
-    log.warn('No valid token; bot not starting');
-    return;
-  }
-  log.info('Initializing DeepSeek client...');
-  deepseek = new DeepSeekClient();
-  log.info('DeepSeek client ready');
-  log.info('Initializing moderation...');
-  moderation = new Moderation(config.moderation);
-  log.info('Loading custom commands...');
-  await loadCustomCommandsIntoMemory();
-  log.info('Starting BullMQ workers...');
-  const queueNames = Object.keys(jobHandlers);
-  for (const q of queueNames) {
-    const worker = startWorker(q, jobHandlers[q], 1);
-    workers.push(worker);
-  }
-  log.info(`Task queue workers started for: ${queueNames.join(', ')}`);
-  log.info('Loading plugins...');
-  await loadPlugins(bus, config);
-  const twitchClient = global.twitchClient;
-  if (twitchClient) {
-    log.info('Initializing message queue...');
-    messageQueue = new MessageQueue(twitchClient);
-    log.info('Message queue initialized');
-  }
-  if (config.eventsub.secret) {
-    try {
-      log.info('Connecting to EventSub...');
-      eventSubClient = new EventSubClient();
-      await eventSubClient.connect();
-      log.info('EventSub client connected');
-    } catch (err) {
-      log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
-    }
-  } else {
-    log.info('EventSub secret not set – skipping EventSub');
-  }
-  bus.on('twitch.message', async (...args) => {
-    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
-  });
-  bus.on('twitch.usernotice', async (...args) => {
-    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
-  });
-  bus.on('twitch.clearchat', async (...args) => {
-    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
-  });
-  bus.on('twitch.send', ({ channel, message }) => {
-    try {
-      if (messageQueue) messageQueue.enqueue(channel, message);
-      else twitchClient?.say(channel, message);
-    } catch (err) { log.error('Error in twitch.send handler', err); }
-  });
-  if (AUTO_WELCOME) {
-    bus.on('twitch.join', async (...args) => {
-      try { await handleJoin(...args); } catch (err) { log.error('Error in handleJoin', err); }
-    });
-  }
-  bus.on('twitch.ready', () => {
-    log.info('Twitch client is ready. Starting auto-messages...');
-    startAutoMessages();
-  });
-  log.info('Bot initialization complete');
-  broadcast({ type: 'ready' });
-}
-
-// ====== MAIN MESSAGE HANDLER (with incoming log) ======
+// ========== HANDLE MESSAGE ==========
 async function handleMessage({ channel, user, message, self }) {
   if (self) return;
+  if (incomingDeduper.isDuplicate(channel, user)) {
+    log.debug(`Skipping duplicate Twitch message ${user?.id || user?.['message-id'] || 'unknown'}`);
+    return;
+  }
   promMetrics.messagesReceived.inc();
   const username = user['display-name'] || user.username;
   const login = user.username.toLowerCase();
-
-  // --- INCOMING LOG (info level) ---
-  log.info(`IN: ${username} @ ${channel}: ${message}`);
-
+  log.info(`📩 IN: ${username} @ ${channel}: ${message}`);
   await ConversationStore.updateLastActivity(channel);
+  if (highlightDetector) {
+    highlightDetector.observe({ channel, user, message }).catch((err) => log.warn('Highlight observation failed', err.message));
+  }
   if (config.twitch.ignoredUsers.includes(login)) return;
-
   const modResult = moderation.analyze(channel, user, message);
   if (modResult.blocked) {
     log.warn(`Blocked message from ${username} in ${channel}`);
@@ -328,11 +411,37 @@ async function handleMessage({ channel, user, message, self }) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
 
-  const lowerMsg = message.trim().toLowerCase();
+  const attributedResponse = engagementAttribution.recordHuman(channel, Date.now());
+  if (attributedResponse.quietMode) {
+    promMetrics.quietResponses.inc({ mode: attributedResponse.quietMode });
+  }
+  if (attributedResponse.analytical) {
+    promMetrics.analyticalAutoResponses.inc();
+  }
 
+  const moment = streamMomentTracker.observe(channel, { username, message, now: Date.now() });
+  promMetrics.streamMomentScore.observe(moment.score);
+
+  // Preserve surrounding chat and track new-viewer engagement without calling out silent lurkers.
+  const priorHistory = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
+  const previousProfile = await ProfileStore.get(channel, login);
+  const viewerProfile = nextViewerProfile(previousProfile, message);
+  await ProfileStore.update(channel, login, viewerProfile);
+  await ConversationStore.pushMessage(channel, 'user', message, username);
+
+  const lowerMsg = message.trim().toLowerCase();
+  const isCommand = lowerMsg.startsWith('!');
+  if (!previousProfile.proactiveOptOut && viewerProfile.proactiveOptOut) {
+    promMetrics.viewerOptOuts.inc();
+    const response = `@${username} got it — I’ll stay out of your way unless you use a command.`;
+    if (messageQueue) messageQueue.enqueue(channel, response);
+    else await global.twitchClient.say(channel, response);
+    return;
+  }
   // Custom commands
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
   if (cmdKey) {
+    log.info(`🔧 Custom command matched: ${cmdKey}`);
     const cmd = customCommands.get(cmdKey);
     const hasPermission = cmd.role === 'all' ||
       (cmd.role === 'moderator' && (user.mod || user.badges?.broadcaster)) ||
@@ -350,10 +459,10 @@ async function handleMessage({ channel, user, message, self }) {
       return;
     }
   }
-
-  // Built-in commands
+  // Builtin commands
   const builtinKey = lowerMsg.split(' ')[0];
   if (builtins.has(builtinKey)) {
+    log.info(`⚡ Built-in command matched: ${builtinKey}`);
     const cmd = builtins.get(builtinKey);
     const cooldownKey = `${channel}:${login}`;
     if (!cooldown.check(cooldownKey)) return;
@@ -365,8 +474,7 @@ async function handleMessage({ channel, user, message, self }) {
     }
     return;
   }
-
-  // Media generation
+  // Media commands
   const mediaCommands = {
     [config.media.imageCommand]: { type: 'image', handler: pollinations.generateImage.bind(pollinations) },
     [config.media.videoCommand]: { type: 'video', handler: pollinations.generateVideo.bind(pollinations) },
@@ -375,6 +483,7 @@ async function handleMessage({ channel, user, message, self }) {
   };
   for (const [cmd, { type, handler }] of Object.entries(mediaCommands)) {
     if (lowerMsg.startsWith(cmd)) {
+      log.info(`🎨 Media command matched: ${cmd}`);
       const prompt = message.slice(cmd.length).trim();
       if (!prompt) {
         const response = `Usage: ${cmd} <description>`;
@@ -405,19 +514,49 @@ async function handleMessage({ channel, user, message, self }) {
       return;
     }
   }
+  // AI chat: direct mentions/replies plus low-pressure first-chat welcome.
+  const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
+  const directInteraction = shouldRespond(message, personaNames, user);
+  const proactiveWelcomeCandidate = AUTO_WELCOME && shouldProactivelyWelcome({
+    profile: viewerProfile,
+    message,
+    isCommand,
+  });
+  const proactiveWelcome = proactiveWelcomeCandidate && proactiveWelcomeLimiter.allow(channel);
+  if (proactiveWelcomeCandidate && !proactiveWelcome) promMetrics.proactiveWelcomesSuppressed.inc();
 
-  // AI chat
-  const shouldReply = shouldRespond(message, config.twitch.username);
-  if (!shouldReply) return;
+  const analyticalAutoComment = config.auto.analyticalAutoComment
+    && !isCommand
+    && !directInteraction
+    && !proactiveWelcome
+    && analyticalMomentGate.allow(channel, moment);
 
+  const shouldReply = directInteraction || proactiveWelcome || analyticalAutoComment;
+  if (!shouldReply || viewerProfile.proactiveOptOut) {
+    log.debug('Skipping AI: no direct interaction, eligible first-chat welcome, or analytical moment');
+    return;
+  }
   const cooldownKey = `${channel}:${login}`;
   if (!cooldown.check(cooldownKey)) return;
-
-  const brainName = await scoreBrains(channel, user, message);
+  const streamContext = highlightDetector?.getLiveContext(channel) || {};
+  const brainName = analyticalAutoComment
+    ? 'analyst'
+    : await scoreBrains(channel, user, message, { moment, streamContext });
   const Brain = getBrain(brainName);
-  const brainConfig = Brain.getConfig();
-  const history = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
-  const systemPrompt = brainConfig.systemPrompt;
+  const brainConfig = Brain.getConfig({ moment, streamContext });
+  const history = priorHistory;
+  let systemPrompt = brainConfig.systemPrompt;
+  if (proactiveWelcome) {
+    systemPrompt += `\n\nNEW VIEWER GUIDANCE: ${firstChatInstruction(username, message)}`;
+  }
+  if (brainName === 'analyst') {
+    systemPrompt += `\n\nLIVE CONTEXT: game=${streamContext.gameName || 'unknown'}; title=${streamContext.streamTitle || 'unknown'}; momentScore=${moment.score}; chatSpikeZ=${moment.poissonZ}; recentMessages=${moment.recentMessages}; uniqueUsers=${moment.uniqueUsers}; tacticalHits=${moment.tacticalHits}; excitementHits=${moment.excitementHits}. Treat these as indirect chat signals, not visual proof.`;
+  }
+  const offerFollow = shouldOfferFollow({
+    profile: viewerProfile,
+    message,
+    directInteraction,
+  });
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
   const userPrompt = buildUserPrompt(message, username, history);
@@ -426,15 +565,14 @@ async function handleMessage({ channel, user, message, self }) {
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: 'user', content: userPrompt },
   ];
-
   try {
+    log.info(`🤖 Sending to DeepSeek (brain: ${brainName})`);
     const start = Date.now();
     const reply = await deepseek.chat(messages, { temperature, maxTokens });
     const latency = Date.now() - start;
     promMetrics.aiLatency.observe(latency / 1000);
     promMetrics.aiCalls.inc();
     promMetrics.tokenUsage.inc(Math.ceil((userPrompt.length + systemPrompt.length) / 4));
-
     const processedReply = await Brain.processResponse(reply, { channel, user, message });
     if (brainName === 'moderation') {
       if (processedReply.toxic) {
@@ -443,20 +581,26 @@ async function handleMessage({ channel, user, message, self }) {
       }
       return;
     }
-
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
-
-    await ConversationStore.pushMessage(channel, 'user', message, username);
+    if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
+    if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
+    if (brainName === 'analyst') promMetrics.analyticalReplies.inc();
+    if (analyticalAutoComment) {
+      promMetrics.analyticalAutoComments.inc();
+      engagementAttribution.recordAnalytical(channel, Date.now());
+    }
+    if (offerFollow) promMetrics.followPrompts.inc();
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
-    await ProfileStore.update(channel, login, { lastSeen: Date.now() });
-
+    await ProfileStore.update(channel, login, {
+      botInteractions: viewerProfile.botInteractions + 1,
+      followPromptedAt: offerFollow ? Date.now() : viewerProfile.followPromptedAt,
+    });
     if (config.emotes.enable) {
       const emote = getRandomEmote(channel);
       if (emote) finalReply += ` ${emote}`;
     }
-
-    if (messageQueue) messageQueue.enqueue(channel, finalReply);
+    if (messageQueue) messageQueue.enqueue(channel, finalReply, { priority: (directInteraction || analyticalAutoComment) ? 'high' : 'normal' });
     else await global.twitchClient.say(channel, finalReply);
     promMetrics.messagesSent.inc();
   } catch (err) {
@@ -469,43 +613,7 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
-// ====== JOIN HANDLER – FILTERS OUT BOTS AND STREAMER ======
-async function handleJoin({ channel, username, self }) {
-  if (self) return;
-
-  // 🔧 Do not greet the broadcaster or known bot accounts
-  const broadcasterName = channel.replace('#', '').toLowerCase();
-  const ignoredUsers = [
-    broadcasterName,
-    'streamelements', 'nightbot', 'overlayexpert', 'moobot', 'fossabot',
-    'wizebot', 'coebot', 'phantombot', 'streamlabs', 'pretzelrocks',
-    'sweatyclanker', 'anotherttvviewer', 'soundalerts', 'botrixoficial'
-  ];
-
-  if (ignoredUsers.includes(username.toLowerCase())) return;
-
-  const key = `${channel}:${username}`;
-  if (global._welcomedUsers && global._welcomedUsers.has(key)) return;
-  if (!global._welcomedUsers) global._welcomedUsers = new Set();
-
-  // Check if user has recently chatted (prevents welcoming regulars on rejoin)
-  const history = await ConversationStore.getHistory(channel, 20);
-  const hasSpoken = history.some(h => h.username === username);
-  if (hasSpoken) return;
-
-  const welcomeMsg = `Welcome to the stream, @${username}! Hope you enjoy the chaos.`;
-  if (messageQueue) messageQueue.enqueue(channel, welcomeMsg);
-  else await global.twitchClient.say(channel, welcomeMsg);
-  promMetrics.messagesSent.inc();
-
-  global._welcomedUsers.add(key);
-  // Avoid memory leak – reset after a large number of welcomes
-  if (global._welcomedUsers.size > 2000) {
-    log.debug('Clearing welcomed users cache (size > 2000)');
-    global._welcomedUsers.clear();
-  }
-}
-
+// Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.
 async function handleUserNotice({ channel, user, msg, tags }) {
   if (tags['msg-id'] === 'raid') {
     const from = tags['display-name'] || 'someone';
@@ -528,6 +636,99 @@ app.get('/', (req, res) => {
   res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p><a href="/auth/login">Authorize on Twitch</a></p>`);
 });
 
+// ========== INITIALIZATION ==========
+async function initializeBot() {
+  if (botInitialized) {
+    log.warn('Bot already initialized, skipping duplicate call');
+    return;
+  }
+  botInitialized = true;
+  log.info('Starting bot initialization...');
+  if (!isAuthorized()) {
+    log.warn('No valid token; bot not starting');
+    return;
+  }
+  log.info('Initializing DeepSeek client...');
+  deepseek = new DeepSeekClient();
+  log.info('DeepSeek client ready');
+  highlightDetector = new HighlightDetector(deepseek);
+  await highlightDetector.start();
+  log.info('Initializing moderation...');
+  moderation = new Moderation(config.moderation);
+  log.info('Loading custom commands...');
+  await loadCustomCommandsIntoMemory();
+  if (process.env.WORKERS_ENABLED === 'true') {
+    log.info('Starting BullMQ workers...');
+    const queueNames = Object.keys(jobHandlers);
+    for (const q of queueNames) {
+      const worker = startWorker(q, jobHandlers[q], 1);
+      workers.push(worker);
+    }
+    log.info('Task queue workers started for: ' + queueNames.join(', '));
+  } else {
+    log.info('Placeholder BullMQ workers disabled to avoid idle Redis requests');
+  }
+
+  // Register bus listeners before plugins
+  bus.on('twitch.message', async (...args) => {
+    log.info('🔊 BUS: twitch.message event received');
+    try { await handleMessage(...args); } catch (err) { log.error('Error in handleMessage', err); }
+  });
+  bus.on('twitch.usernotice', async (...args) => {
+    try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
+  });
+  bus.on('twitch.clearchat', async (...args) => {
+    try { await handleClearChat(...args); } catch (err) { log.error('Error in handleClearChat', err); }
+  });
+  bus.on('twitch.send', ({ channel, message }) => {
+    try {
+      if (messageQueue) messageQueue.enqueue(channel, message);
+      else twitchClient?.say(channel, message);
+    } catch (err) { log.error('Error in twitch.send handler', err); }
+  });
+  bus.on('eventsub.channel.follow', async (event) => {
+    try {
+      const channel = `#${String(event?.broadcaster_user_login || '').toLowerCase()}`;
+      const viewer = String(event?.user_login || '').toLowerCase();
+      if (channel !== '#' && viewer) {
+        promMetrics.followEvents.inc();
+        await ProfileStore.update(channel, viewer, { followed: true, followedAt: Date.now() });
+      }
+    } catch (err) {
+      log.warn('Failed to record follower state', err.message);
+    }
+  });
+
+  // Load plugins
+  log.info('Loading plugins...');
+  await loadPlugins(bus, config);
+
+  const twitchClient = global.twitchClient;
+  if (twitchClient) {
+    log.info('Initializing message queue...');
+    messageQueue = new MessageQueue(twitchClient);
+    log.info('Message queue initialized');
+  }
+
+  try {
+    log.info('Connecting to EventSub...');
+    eventSubClient = new EventSubClient();
+    await eventSubClient.connect();
+    log.info('EventSub client connected');
+  } catch (err) {
+    log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
+  }
+
+  bus.on('twitch.ready', () => {
+    log.info('Twitch client is ready. Starting auto-messages...');
+    startAutoMessages();
+  });
+
+  log.info('Bot initialization complete');
+  broadcast({ type: 'ready' });
+}
+
+// ========== BOOTSTRAP ==========
 async function bootstrap() {
   log.info('🚀 Starting SweatyClanker v3...');
   log.info('🔌 Connecting to Redis...');
@@ -555,11 +756,13 @@ async function bootstrap() {
   });
 }
 
+// ========== SHUTDOWN ==========
 async function shutdown() {
   log.info('Shutting down gracefully...');
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   if (messageQueue) messageQueue.stop();
+  if (highlightDetector) highlightDetector.stop();
   if (eventSubClient) eventSubClient.disconnect();
   await drainQueues();
   if (global.twitchClient) global.twitchClient.disconnect();

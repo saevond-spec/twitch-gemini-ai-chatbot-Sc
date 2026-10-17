@@ -4,7 +4,7 @@ services:
     runtime: node
     branch: main
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     envVars:
       # ═══════════════════════════════════════════════════════════════════
@@ -22,11 +22,11 @@ services:
       # ═══════════════════════════════════════════════════════════════════
       # REQUIRED: AI & API Keys
       # ═══════════════════════════════════════════════════════════════════
-      - key: GEMINI_API_KEY
-        value: "your-gemini-api-key(s)"
+      - key: DEEPSEEK_API_KEY
+        value: "your-deepseek-api-key"
       - key: POLLINATIONS_API_KEY
         value: "your-pollinations-api-key"
-      - key: UPSTASH_REDIS_URL
+      - key: REDIS_URL
         value: "your-upstash-redis-url"
 
       # ═══════════════════════════════════════════════════════════════════
@@ -64,8 +64,8 @@ services:
         value: "1"
       - key: ENABLE_SEARCH_GROUNDING
         value: "true"
-      - key: MODEL_NAME
-        value: "gemini-2.5-flash"
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-chat"
       - key: POLLINATIONS_IMAGE_MODEL
         value: "gptimage"
       - key: POLLINATIONS_VIDEO_MODEL
@@ -76,7 +76,7 @@ services:
         value: "charlotte"
       - key: POLLINATIONS_MUSIC_MODEL
         value: "elevenmusic"
-      - key: GEMINI_MAX_RESPONSE_LENGTH
+      - key: AI_MAX_TOKENS
         value: "450"
       - key: AI_HISTORY_LENGTH
         value: "10"
@@ -84,9 +84,52 @@ services:
         value: "10"
       - key: IGNORED_USERNAMES
         value: "StreamElements,Nightbot"
+      - key: AUTO_MESSAGE_ENABLED
+        value: "true"
+      - key: AUTO_USE_DEEPSEEK
+        value: "true"
+      - key: AUTO_CHAT_TICK_SECONDS
+        value: "30"
+      - key: AUTO_CHAT_MIN_QUIET_SECONDS
+        value: "90"
+      - key: AUTO_CHAT_MAX_QUIET_SECONDS
+        value: "360"
+      - key: AUTO_CHAT_BOT_GAP_SECONDS
+        value: "120"
+      - key: AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS
+        value: "600"
+      - key: AUTO_CHAT_REQUIRE_LIVE
+        value: "true"
+      - key: ANALYTICAL_AUTO_COMMENT_ENABLED
+        value: "true"
+      - key: ANALYTICAL_MOMENT_COOLDOWN_SECONDS
+        value: "90"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
       # ═══════════════════════════════════════════════════════════════════
       - key: YOUTUBE_API_KEY
         value: "your-youtube-api-key"
+      - key: WORKERS_ENABLED
+        value: "true"
+      - key: ADMIN_API_KEY
+        sync: false
+
+      - key: YOUTUBE_UPLOAD_ENABLED
+        value: "false"
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_DEFAULT_PRIVACY
+        value: "private"
+      - key: YOUTUBE_ALLOW_PUBLIC
+        value: "false"
+      - key: TIKTOK_UPLOAD_ENABLED
+        value: "false"
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      - key: DISCORD_ANNOUNCE_ENABLED
+        value: "false"
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
