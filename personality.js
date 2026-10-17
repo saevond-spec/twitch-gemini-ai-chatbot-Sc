@@ -70,6 +70,31 @@ const FALLBACKS = [
 
 let lastFallbackIndex = -1;
 
+export function getContextualFallbackResponse(message = '', username = '') {
+    const text = String(message || '').trim().toLowerCase();
+    const name = username ? `@${username} ` : '';
+
+    if (/^(hi|hey|hello|yo|sup)\b|\bhey sweaty\b|\bhello sweaty\b/.test(text)) {
+        return `${name}🤖 Online on backup circuits. What’s good?`;
+    }
+    if (/how are you|how you doing|how's it going|hows it going/.test(text)) {
+        return `${name}🤖 Operational. Chrome polished, circuits behaving. How are you?`;
+    }
+    if (/^@?sweaty(clanker)?[?!. ]*$|^sweaty[?!. ]*$/.test(text)) {
+        return `${name}🤖 Yeah? Sensors online.`;
+    }
+    if (/\b(thanks|thank you|ty)\b/.test(text)) {
+        return `${name}🤖 Anytime. That’s what the chrome is for.`;
+    }
+    if (/\b(lol|lmao|haha|gg|nice|clutch|insane|crazy|wow|w)\b/.test(text)) {
+        return `${name}⚡ Chaos detected. I respect it.`;
+    }
+    if (text.endsWith('?')) {
+        return `${name}🤖 My cloud brain is temporarily offline, so I won’t fake an answer. I’m still here on backup circuits.`;
+    }
+    return `${name}🤖 I’m here — running on backup circuits for a bit.`;
+}
+
 export function getFallbackResponse() {
     if (FALLBACKS.length === 1) return FALLBACKS[0];
 
