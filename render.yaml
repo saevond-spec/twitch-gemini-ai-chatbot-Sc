@@ -84,6 +84,26 @@ services:
         value: "10"
       - key: IGNORED_USERNAMES
         value: "StreamElements,Nightbot"
+      - key: AUTO_MESSAGE_ENABLED
+        value: "true"
+      - key: AUTO_USE_DEEPSEEK
+        value: "true"
+      - key: AUTO_CHAT_TICK_SECONDS
+        value: "30"
+      - key: AUTO_CHAT_MIN_QUIET_SECONDS
+        value: "150"
+      - key: AUTO_CHAT_MAX_QUIET_SECONDS
+        value: "720"
+      - key: AUTO_CHAT_BOT_GAP_SECONDS
+        value: "180"
+      - key: AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS
+        value: "900"
+      - key: AUTO_CHAT_REQUIRE_LIVE
+        value: "true"
+      - key: ANALYTICAL_AUTO_COMMENT_ENABLED
+        value: "true"
+      - key: ANALYTICAL_MOMENT_COOLDOWN_SECONDS
+        value: "90"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
