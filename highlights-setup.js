@@ -12,6 +12,7 @@ function replaceOnce(filePath, needle, replacement) {
 
 fs.mkdirSync(path.join(root, 'src/highlights'), { recursive: true });
 fs.copyFileSync(path.join(root, 'highlight-detector.js'), path.join(root, 'src/highlights/detector.js'));
+fs.copyFileSync(path.join(root, 'highlight-window.js'), path.join(root, 'src/highlights/final-window.js'));
 
 replaceOnce(
   path.join(root, 'src/app.js'),
