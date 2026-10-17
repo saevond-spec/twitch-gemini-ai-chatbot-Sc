@@ -28,6 +28,11 @@ export const metrics = {
   analyticalAutoResponses: new client.Counter({ name: 'analytical_auto_responses_total', help: 'Human responses within the automatic analytical-comment attribution window' }),
   streamMomentScore: new client.Histogram({ name: 'stream_moment_score', help: 'Mathematical live moment score from chat signals', buckets: [20, 40, 58, 70, 80, 90, 100] }),
   quietSpeakProbability: new client.Histogram({ name: 'quiet_speak_probability', help: 'Adaptive probability of a quiet-chat message per scheduler tick', buckets: [0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.65, 0.75] }),
+  commerceImpressions: new client.Counter({ name: 'commerce_impressions_total', help: 'Commercial CTA impressions', labelNames: ['offer'] }),
+  commerceConversions: new client.Counter({ name: 'commerce_conversions_total', help: 'Attributed or organic commerce conversions', labelNames: ['offer', 'source', 'attributed'] }),
+  commerceSuppressed: new client.Counter({ name: 'commerce_suppressed_total', help: 'Commercial prompts suppressed by policy', labelNames: ['reason'] }),
+  commerceOptOuts: new client.Counter({ name: 'commerce_opt_outs_total', help: 'Viewers opting out of commercial prompts' }),
+  commerceBanditScore: new client.Histogram({ name: 'commerce_bandit_score', help: 'Thompson-sampling value score for selected offers', buckets: [0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2] }),
 };
 register.registerMetric(metrics.messagesReceived);
 register.registerMetric(metrics.messagesSent);
@@ -54,4 +59,9 @@ register.registerMetric(metrics.quietResponses);
 register.registerMetric(metrics.analyticalAutoResponses);
 register.registerMetric(metrics.streamMomentScore);
 register.registerMetric(metrics.quietSpeakProbability);
+register.registerMetric(metrics.commerceImpressions);
+register.registerMetric(metrics.commerceConversions);
+register.registerMetric(metrics.commerceSuppressed);
+register.registerMetric(metrics.commerceOptOuts);
+register.registerMetric(metrics.commerceBanditScore);
 export function getMetrics() { return register.metrics(); }
