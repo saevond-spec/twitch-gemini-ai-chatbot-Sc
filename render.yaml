@@ -111,7 +111,7 @@ services:
       - key: JOIN_WELCOME_DEDUPE_MINUTES
         value: "360"
       - key: JOIN_WELCOME_WARMUP_SECONDS
-        value: "20"
+        value: "60"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
