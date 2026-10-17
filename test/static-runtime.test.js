@@ -185,5 +185,5 @@ test('join welcomes are wired into production runtime', () => {
   assert.match(app, /self \|\| !login/);
   assert.match(app, /login === configuredBotLogin\(\)/);
   assert.match(render, /WELCOME_ON_JOIN\n\s+value: "true"/);
-  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "20"/);
+  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "60"/);
 });
