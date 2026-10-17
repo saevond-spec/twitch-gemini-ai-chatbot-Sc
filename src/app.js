@@ -14,7 +14,7 @@ import './commands/builtins.js';
 import { Moderation } from './moderation/index.js';
 import { CooldownManager } from './utils/cooldown.js';
 import { initializeEmotes, getRandomEmote, setEmotePools } from './twitch/emotes.js';
-import { shouldRespond, getFallbackResponse } from '../personality.js';
+import { shouldRespond, getFallbackResponse, getContextualFallbackResponse } from '../personality.js';
 import { metrics as promMetrics, getMetrics } from './utils/metrics.js';
 import { getBrain } from './brains/index.js';
 import { scoreBrains } from './brains/router.js';
@@ -677,10 +677,18 @@ async function handleMessage({ channel, user, message, self }) {
     else await global.twitchClient.say(channel, finalReply);
     promMetrics.messagesSent.inc();
   } catch (err) {
-    log.error('AI chat error', err);
+    const status = Number(err?.status || err?.response?.status || 0) || null;
+    const code = String(err?.code || '');
+    if (status === 402 || code === 'insufficient_balance') {
+      log.warn('DeepSeek balance unavailable; using local conversational fallback');
+    } else {
+      log.error('AI chat error', err);
+    }
     promMetrics.aiErrors.inc();
-    const fallback = getFallbackResponse();
-    if (messageQueue) messageQueue.enqueue(channel, fallback);
+    const fallback = (status === 402 || code === 'insufficient_balance')
+      ? getContextualFallbackResponse(message, username)
+      : getFallbackResponse();
+    if (messageQueue) messageQueue.enqueue(channel, fallback, { priority: directInteraction ? 'high' : 'normal' });
     else await global.twitchClient.say(channel, fallback);
     promMetrics.messagesSent.inc();
   }
