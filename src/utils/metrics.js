@@ -24,6 +24,8 @@ export const metrics = {
   quietAnalysisRecaps: new client.Counter({ name: 'quiet_analysis_recaps_total', help: 'Quiet-chat messages using analysis-recap mode' }),
   quietPredictionPrompts: new client.Counter({ name: 'quiet_prediction_prompts_total', help: 'Quiet-chat messages using prediction mode' }),
   quietCommunityQuestions: new client.Counter({ name: 'quiet_community_questions_total', help: 'Quiet-chat messages using community-question mode' }),
+  quietResponses: new client.Counter({ name: 'quiet_responses_total', help: 'Human responses within the quiet-message attribution window', labelNames: ['mode'] }),
+  analyticalAutoResponses: new client.Counter({ name: 'analytical_auto_responses_total', help: 'Human responses within the automatic analytical-comment attribution window' }),
   streamMomentScore: new client.Histogram({ name: 'stream_moment_score', help: 'Mathematical live moment score from chat signals', buckets: [20, 40, 58, 70, 80, 90, 100] }),
   quietSpeakProbability: new client.Histogram({ name: 'quiet_speak_probability', help: 'Adaptive probability of a quiet-chat message per scheduler tick', buckets: [0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.65, 0.75] }),
 };
@@ -48,6 +50,8 @@ register.registerMetric(metrics.quietMessages);
 register.registerMetric(metrics.quietAnalysisRecaps);
 register.registerMetric(metrics.quietPredictionPrompts);
 register.registerMetric(metrics.quietCommunityQuestions);
+register.registerMetric(metrics.quietResponses);
+register.registerMetric(metrics.analyticalAutoResponses);
 register.registerMetric(metrics.streamMomentScore);
 register.registerMetric(metrics.quietSpeakProbability);
 export function getMetrics() { return register.metrics(); }
