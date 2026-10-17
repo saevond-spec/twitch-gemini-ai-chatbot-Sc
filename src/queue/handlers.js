@@ -50,6 +50,12 @@ async function publishSocial({ clipId, filePath, title, reason, twitchUrl }) {
     }));
   }
 
+  if (!Object.keys(results).length) {
+    const reason = 'No upload destination is enabled; enable YouTube, TikTok, or Discord in the service configuration.';
+    log.warn(`Clip ${clipId} is ready but will not be uploaded`, reason);
+    return { uploaded: false, skipped: true, reason, destinations: [] };
+  }
+
   return results;
 }
 
@@ -69,7 +75,11 @@ async function processOfficialTwitchClip(data) {
     sourcePath = await downloadToTemp(sourceUrl);
     finalPath = portraitUrl ? sourcePath : await renderVerticalShort(sourcePath);
     const result = await publishSocial({ clipId, filePath: finalPath, title, reason, twitchUrl });
-    log.info(`Completed clip pipeline for ${clipId}`);
+    if (result?.uploaded === false) {
+      log.warn(`Twitch clip ${clipId} was processed but not uploaded: ${result.reason}`);
+    } else {
+      log.info(`Completed clip delivery for ${clipId} to ${Object.keys(result || {}).join(', ') || 'configured destinations'}`);
+    }
     return result;
   } finally {
     if (finalPath && finalPath !== sourcePath) await safeUnlink(finalPath);
