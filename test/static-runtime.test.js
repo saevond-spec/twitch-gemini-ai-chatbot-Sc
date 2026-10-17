@@ -182,8 +182,11 @@ test('join welcomes are wired into production runtime', () => {
   assert.match(app, /bus\.on\('twitch\.join'/);
   assert.match(app, /joinWelcomeBatcher\.add/);
   assert.match(app, /joinWelcomeBatcher\.hasWelcomed/);
-  assert.match(app, /self \|\| !login/);
-  assert.match(app, /login === configuredBotLogin\(\)/);
+  assert.match(app, /shouldWelcomeJoin/);
+  const joinPolicy = fs.readFileSync(path.join(root, 'src/chat/joinWelcomePolicy.js'), 'utf8');
+  assert.match(joinPolicy, /login === configuredBot/);
+  assert.match(joinPolicy, /login === owner/);
+  assert.match(joinPolicy, /SERVICE_ACCOUNTS/);
   assert.match(render, /WELCOME_ON_JOIN\n\s+value: "true"/);
-  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "20"/);
+  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "60"/);
 });
