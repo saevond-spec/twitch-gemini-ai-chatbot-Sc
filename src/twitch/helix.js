@@ -62,6 +62,33 @@ export class HelixClient {
     );
   }
 
+  async subscribeChannelSubscribe(broadcasterId) {
+    return this.createEventSubSubscription(
+      'channel.subscribe',
+      '1',
+      { broadcaster_user_id: broadcasterId },
+      { method: 'websocket', session_id: global._eventsubSessionId }
+    );
+  }
+
+  async subscribeSubscriptionGift(broadcasterId) {
+    return this.createEventSubSubscription(
+      'channel.subscription.gift',
+      '1',
+      { broadcaster_user_id: broadcasterId },
+      { method: 'websocket', session_id: global._eventsubSessionId }
+    );
+  }
+
+  async subscribeBitsUse(broadcasterId) {
+    return this.createEventSubSubscription(
+      'channel.bits.use',
+      '1',
+      { broadcaster_user_id: broadcasterId },
+      { method: 'websocket', session_id: global._eventsubSessionId }
+    );
+  }
+
   async subscribeShoutout(broadcasterId, moderatorId) {
     return this.createEventSubSubscription(
       'channel.shoutout.create',
