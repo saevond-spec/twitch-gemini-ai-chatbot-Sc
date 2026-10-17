@@ -1,0 +1,68 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { JoinWelcomeBatcher, formatJoinWelcome } from '../src/chat/joinWelcomeBatcher.js';
+
+test('single incoming viewer gets a direct welcome', () => {
+  assert.equal(
+    formatJoinWelcome(['Alice']),
+    "Welcome in @alice! 🤖 Glad you're here."
+  );
+});
+
+test('multiple incoming viewers are welcomed together', () => {
+  const msg = formatJoinWelcome(['Alice', 'Bob', 'Charlie']);
+  assert.match(msg, /@alice/);
+  assert.match(msg, /@bob/);
+  assert.match(msg, /@charlie/);
+  assert.match(msg, /Glad you're all here/);
+});
+
+test('large arrival bursts welcome everybody without chat flooding', () => {
+  const names = Array.from({ length: 25 }, (_, i) => `viewer${i + 1}`);
+  const msg = formatJoinWelcome(names);
+  assert.match(msg, /@viewer1/);
+  assert.match(msg, /and 17 more/);
+  assert.match(msg, /welcome everybody/i);
+  assert.ok(msg.length < 500);
+});
+
+test('reconnect warmup prevents greeting the entire existing room', () => {
+  let now = 1_000_000;
+  const batcher = new JoinWelcomeBatcher({
+    warmupMs: 20_000,
+    now: () => now,
+  });
+
+  assert.equal(batcher.add('#saevond', 'alice', now + 5_000), false);
+  now += 21_000;
+  assert.equal(batcher.add('#saevond', 'alice', now), true);
+  batcher.stop();
+});
+
+test('same viewer is only welcomed once during dedupe window', async () => {
+  let now = 2_000_000;
+  const sent = [];
+  const batcher = new JoinWelcomeBatcher({
+    flushMs: 1,
+    warmupMs: 0,
+    dedupeMs: 6 * 60 * 60 * 1000,
+    now: () => now,
+    onFlush: async (channel, message, names) => sent.push({ channel, message, names }),
+  });
+
+  assert.equal(batcher.add('#saevond', 'alice', now), true);
+  await batcher.flush('#saevond');
+  assert.equal(batcher.hasWelcomed('#saevond', 'alice', now + 1000), true);
+  assert.equal(batcher.add('#saevond', 'alice', now + 1000), false);
+  assert.equal(sent.length, 1);
+
+  now += 6 * 60 * 60 * 1000 + 1;
+  assert.equal(batcher.add('#saevond', 'alice', now), true);
+  batcher.stop();
+});
+
+test('join welcome batch removes duplicate usernames', () => {
+  const msg = formatJoinWelcome(['alice', 'ALICE', 'bob']);
+  assert.equal((msg.match(/@alice/g) || []).length, 1);
+  assert.equal((msg.match(/@bob/g) || []).length, 1);
+});
