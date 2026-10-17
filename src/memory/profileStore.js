@@ -1,7 +1,7 @@
 import { getRedis } from '../storage/redis.js';
 
 const PROFILE_TTL_SECONDS = 30 * 24 * 60 * 60;
-const STATE_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
+const STATE_TTL_SECONDS = 5 * 365 * 24 * 60 * 60;
 const memoryProfiles = new Map();
 const memoryState = new Map();
 
