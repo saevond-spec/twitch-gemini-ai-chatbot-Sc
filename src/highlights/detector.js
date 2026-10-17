@@ -656,16 +656,24 @@ export class HighlightDetector {
       ], { temperature: 0.1, maxTokens: 260 });
       decision = parseJson(response);
     } catch (error) {
-      if (!signals.finalWindow && shouldFallbackClipWithoutAI(signals, this.aiFallbackScoreThreshold)) {
-        const score = Number(signals.mathScore || signals.score || 0);
-        this.addCandidate(state, {
-          elapsed,
-          durationSeconds: 35,
-          title: `${state.gameName || 'Gaming'} reaction spike`,
-          reason: `High-confidence audience anomaly (score ${score}/100) while AI review was unavailable`,
-          score,
-        });
-        log.warn(`Saved high-confidence mathematical highlight without AI review (score=${score})`);
+      if (!signals.finalWindow) {
+        if (shouldFallbackClipWithoutAI(signals, this.aiFallbackScoreThreshold)) {
+          const score = Number(signals.mathScore || signals.score || 0);
+          this.addCandidate(state, {
+            elapsed,
+            durationSeconds: 35,
+            title: `${state.gameName || 'Gaming'} reaction spike`,
+            reason: `High-confidence audience anomaly (score ${score}/100) while AI review was unavailable`,
+            score,
+          });
+          log.warn(`Saved high-confidence mathematical highlight without AI review (score=${score})`);
+          return;
+        }
+        // Do not burn the long highlight cooldown when the model is unavailable.
+        // Keep accumulating evidence so a stronger moment can cross the deterministic
+        // fallback threshold on the very next chat event.
+        state.lastAiAt = 0;
+        log.warn('AI highlight review unavailable; retaining live evidence for stronger mathematical fallback');
         return;
       }
       throw error;
