@@ -516,6 +516,8 @@ async function handleMessage({ channel, user, message, self }) {
 
   const analyticalAutoComment = config.auto.analyticalAutoComment
     && !isCommand
+    && !directInteraction
+    && !proactiveWelcome
     && analyticalMomentGate.allow(channel, moment);
 
   const shouldReply = directInteraction || proactiveWelcome || analyticalAutoComment;
