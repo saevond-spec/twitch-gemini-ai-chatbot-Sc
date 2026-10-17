@@ -3,6 +3,16 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const appPath = path.join(root, 'src/app.js');
+const runtimeDetectorPath = path.join(root, 'src/highlights/detector.js');
+
+// The current app has a first-class detector in src/. Do not replace its queue-backed
+// runtime with the legacy compatibility copy from the repository root.
+if (fs.existsSync(runtimeDetectorPath) &&
+    fs.readFileSync(appPath, 'utf8').includes("from './highlights/detector.js'")) {
+  console.log('Native highlight detector already installed; runtime files left intact.');
+  process.exit(0);
+}
 
 function replaceOnce(filePath, needle, replacement) {
   const current = fs.readFileSync(filePath, 'utf8');
