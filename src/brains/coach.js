@@ -7,6 +7,8 @@ export class CoachBrain {
       maxTokens: 1024,
     };
   }
+  static async processResponse(reply) { return reply; }
+
   static async score({ message }) {
     const lower = message.toLowerCase();
     const keywords = ['naraka','weapon','combo','blade','hero','skill','ability','damage','heal','attack','dodge','parry'];
