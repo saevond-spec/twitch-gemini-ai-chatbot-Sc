@@ -33,6 +33,9 @@ import { HighlightDetector } from './highlights/detector.js';
 import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
 import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
 import { ProactiveWelcomeLimiter } from './chat/proactiveWelcomeLimiter.js';
+import { StreamMomentTracker } from './chat/streamMomentTracker.js';
+import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
+import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
@@ -54,6 +57,11 @@ let eventSubClient = null;
 let pollinations = new PollinationsClient();
 let highlightDetector = null;
 const incomingDeduper = new IncomingMessageDeduper();
+const streamMomentTracker = new StreamMomentTracker();
+const analyticalMomentGate = new AnalyticalMomentGate({
+  cooldownMs: config.auto.analyticalCooldownSeconds * 1000,
+  minScore: 72,
+});
 const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
   maxPerWindow: Number(process.env.PROACTIVE_WELCOME_MAX_PER_MINUTE || 3),
   windowMs: 60_000,
@@ -61,17 +69,19 @@ const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
 
 const AUTO_ENABLED = config.auto.enabled;
-const AUTO_INTERVAL = config.auto.interval * 1000;
 const AUTO_USE_DEEPSEEK = config.auto.useDeepSeek;
-const AUTO_QUIET_THRESHOLD = config.auto.quietThreshold * 1000;
+const AUTO_CHAT_TICK_MS = Math.max(10_000, config.auto.tickSeconds * 1000);
+const AUTO_CHAT_MIN_QUIET_MS = Math.max(60_000, config.auto.minQuietSeconds * 1000);
+const AUTO_CHAT_MAX_QUIET_MS = Math.max(AUTO_CHAT_MIN_QUIET_MS + 60_000, config.auto.maxQuietSeconds * 1000);
+const AUTO_CHAT_BOT_GAP_MS = Math.max(60_000, config.auto.botGapSeconds * 1000);
+const AUTO_CHAT_RECENT_BOT_WINDOW_MS = Math.max(AUTO_CHAT_BOT_GAP_MS, config.auto.recentBotWindowSeconds * 1000);
 const AUTO_WELCOME = config.auto.welcome;
 const FALLBACK_MESSAGES = [
-  "Just vibing in the chat! How's everyone doing?",
-  "Anyone else hyped for the next game?",
-  "I'm SweatyClanker, your friendly neighborhood bot!",
-  "What's your favourite game right now?",
-  "I'm learning new things every day – thanks for chatting with me!",
-  "Feeling lucky today – who's ready for some PogChamp moments?",
+  "Quick read, chat: push the next fight or reset and play safe?",
+  "Prediction check: clean win next fight or maximum chaos?",
+  "What weapon or loadout are you trusting right now?",
+  "Rate the last sequence 1–10 — my circuits need a verdict.",
+  "What’s one adjustment you’d make before the next fight?",
 ];
 let fallbackIndex = 0;
 const oauthStates = new Map();
@@ -253,54 +263,119 @@ app.post('/api/media/image', requireAdmin, async (req, res) => {
   }
 });
 
-async function generateSpontaneousMessage(channel) {
+async function generateSpontaneousMessage(channel, mode, streamContext, history, moment) {
   if (!deepseek || !AUTO_USE_DEEPSEEK) {
     const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
     fallbackIndex++;
     return msg;
   }
-  const systemPrompt = `You are SweatyClanker, a Twitch chatter. Say something spontaneous, fun, and engaging to the chat. Keep it short.`;
+
+  const systemPrompt = [
+    'You are SweatyClanker, a concise Twitch gaming companion.',
+    'The channel is quiet, so restart participation without sounding automated or desperate.',
+    'Never ask for follows, subs, money, or personal information in an idle message.',
+    'Do not claim you saw gameplay unless the supplied context explicitly proves it.',
+    'Prefer one useful observation, prediction, or easy question over generic hype.',
+    quietPrompt(mode, streamContext),
+  ].join(' ');
+
+  const recentChat = history
+    .filter(entry => entry.role === 'user')
+    .slice(-6)
+    .map(entry => `${entry.username || 'viewer'}: ${entry.content}`)
+    .join('\n');
+
   const messages = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: 'Say something random to the chat.' }
+    {
+      role: 'user',
+      content: JSON.stringify({
+        mode,
+        game: streamContext.gameName || null,
+        streamTitle: streamContext.streamTitle || null,
+        moment,
+        recentChat: recentChat || null,
+      })
+    }
   ];
+
   try {
     const start = Date.now();
-    const reply = await deepseek.chat(messages, { temperature: 0.9 });
+    const reply = await deepseek.chat(messages, { temperature: mode === 'analysis-recap' ? 0.45 : 0.8, maxTokens: 180 });
     promMetrics.aiLatency.observe((Date.now() - start) / 1000);
     promMetrics.aiCalls.inc();
     return reply;
   } catch (err) {
-    log.error('Failed to generate spontaneous message', err);
+    log.error('Failed to generate adaptive quiet message', err);
     promMetrics.aiErrors.inc();
-    return FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
+    const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
+    fallbackIndex++;
+    return msg;
   }
 }
 
 function startAutoMessages() {
   if (!AUTO_ENABLED) return;
   if (global._autoMessageTimer) clearInterval(global._autoMessageTimer);
+
   global._autoMessageTimer = setInterval(async () => {
     const twitchClient = global.twitchClient;
     if (!twitchClient || !twitchClient.connected) return;
+
     const now = Date.now();
     for (const channel of twitchClient.channels) {
-      const last = await ConversationStore.getLastActivity(channel);
-      if (now - last < AUTO_QUIET_THRESHOLD) continue;
-      const msg = await generateSpontaneousMessage(channel);
+      const streamContext = highlightDetector?.getLiveContext(channel) || {};
+      if (config.auto.requireLive && !streamContext.live) continue;
+
+      const lastHumanAt = await ConversationStore.getLastActivity(channel);
+      const silenceMs = lastHumanAt ? now - lastHumanAt : AUTO_CHAT_MAX_QUIET_MS;
+      if (silenceMs < AUTO_CHAT_MIN_QUIET_MS) continue;
+
+      const history = await ConversationStore.getHistory(channel, 40);
+      const recentBotEntries = history.filter(entry =>
+        (entry.role === 'bot' || entry.role === 'assistant')
+        && Number(entry.ts || 0) >= now - AUTO_CHAT_RECENT_BOT_WINDOW_MS
+      );
+      const lastBotAt = recentBotEntries.reduce((max, entry) => Math.max(max, Number(entry.ts || 0)), 0);
+      if (lastBotAt && now - lastBotAt < AUTO_CHAT_BOT_GAP_MS) continue;
+
+      const probability = quietSpeakProbability({
+        silenceMs,
+        tickMs: AUTO_CHAT_TICK_MS,
+        recentBotMessages: recentBotEntries.length,
+        minQuietMs: AUTO_CHAT_MIN_QUIET_MS,
+        maxQuietMs: AUTO_CHAT_MAX_QUIET_MS,
+      });
+      promMetrics.quietSpeakProbability.observe(probability);
+      if (Math.random() >= probability) continue;
+
+      const moment = streamMomentTracker.snapshot(channel, now);
+      const mode = chooseQuietMode({ history, streamContext, moment });
+      const msg = await generateSpontaneousMessage(channel, mode, streamContext, history, moment);
       if (!msg) continue;
-      let finalMsg = msg;
+
+      let finalMsg = msg.trim();
+      if (!finalMsg) continue;
       if (config.emotes.enable) {
         const emote = getRandomEmote(channel);
         if (emote) finalMsg += ` ${emote}`;
       }
+
       if (messageQueue) messageQueue.enqueue(channel, finalMsg);
       else await twitchClient.say(channel, finalMsg);
+
       promMetrics.messagesSent.inc();
+      promMetrics.quietMessages.inc();
+      if (mode === 'analysis-recap') promMetrics.quietAnalysisRecaps.inc();
+      else if (mode === 'prediction') promMetrics.quietPredictionPrompts.inc();
+      else promMetrics.quietCommunityQuestions.inc();
+
       await ConversationStore.pushMessage(channel, 'bot', finalMsg);
+      log.info(`Adaptive quiet message sent in ${channel} (mode: ${mode}, p=${probability.toFixed(3)})`);
     }
-  }, AUTO_INTERVAL);
-  log.info(`Auto‑messages started (interval: ${AUTO_INTERVAL/1000}s)`);
+  }, AUTO_CHAT_TICK_MS);
+
+  log.info(`Adaptive auto-chat started (tick: ${AUTO_CHAT_TICK_MS / 1000}s, quiet range: ${AUTO_CHAT_MIN_QUIET_MS / 1000}-${AUTO_CHAT_MAX_QUIET_MS / 1000}s)`);
 }
 
 async function loadCustomCommandsIntoMemory() {
@@ -332,6 +407,9 @@ async function handleMessage({ channel, user, message, self }) {
   if (modResult.riskScore > 40) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
   }
+
+  const moment = streamMomentTracker.observe(channel, { username, message, now: Date.now() });
+  promMetrics.streamMomentScore.observe(moment.score);
 
   // Preserve surrounding chat and track new-viewer engagement without calling out silent lurkers.
   const priorHistory = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
@@ -435,20 +513,31 @@ async function handleMessage({ channel, user, message, self }) {
   });
   const proactiveWelcome = proactiveWelcomeCandidate && proactiveWelcomeLimiter.allow(channel);
   if (proactiveWelcomeCandidate && !proactiveWelcome) promMetrics.proactiveWelcomesSuppressed.inc();
-  const shouldReply = directInteraction || proactiveWelcome;
+
+  const analyticalAutoComment = config.auto.analyticalAutoComment
+    && !isCommand
+    && analyticalMomentGate.allow(channel, moment);
+
+  const shouldReply = directInteraction || proactiveWelcome || analyticalAutoComment;
   if (!shouldReply || viewerProfile.proactiveOptOut) {
-    log.debug('Skipping AI: no direct interaction or eligible first-chat welcome');
+    log.debug('Skipping AI: no direct interaction, eligible first-chat welcome, or analytical moment');
     return;
   }
   const cooldownKey = `${channel}:${login}`;
   if (!cooldown.check(cooldownKey)) return;
-  const brainName = await scoreBrains(channel, user, message);
+  const streamContext = highlightDetector?.getLiveContext(channel) || {};
+  const brainName = analyticalAutoComment
+    ? 'analyst'
+    : await scoreBrains(channel, user, message, { moment, streamContext });
   const Brain = getBrain(brainName);
-  const brainConfig = Brain.getConfig();
+  const brainConfig = Brain.getConfig({ moment, streamContext });
   const history = priorHistory;
   let systemPrompt = brainConfig.systemPrompt;
   if (proactiveWelcome) {
     systemPrompt += `\n\nNEW VIEWER GUIDANCE: ${firstChatInstruction(username, message)}`;
+  }
+  if (brainName === 'analyst') {
+    systemPrompt += `\n\nLIVE CONTEXT: game=${streamContext.gameName || 'unknown'}; title=${streamContext.streamTitle || 'unknown'}; momentScore=${moment.score}; chatSpikeZ=${moment.poissonZ}; recentMessages=${moment.recentMessages}; uniqueUsers=${moment.uniqueUsers}; tacticalHits=${moment.tacticalHits}; excitementHits=${moment.excitementHits}. Treat these as indirect chat signals, not visual proof.`;
   }
   const offerFollow = shouldOfferFollow({
     profile: viewerProfile,
@@ -483,6 +572,8 @@ async function handleMessage({ channel, user, message, self }) {
     if (!finalReply.trim()) finalReply = getFallbackResponse();
     if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
     if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
+    if (brainName === 'analyst') promMetrics.analyticalReplies.inc();
+    if (analyticalAutoComment) promMetrics.analyticalAutoComments.inc();
     if (offerFollow) promMetrics.followPrompts.inc();
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, {
@@ -493,7 +584,7 @@ async function handleMessage({ channel, user, message, self }) {
       const emote = getRandomEmote(channel);
       if (emote) finalReply += ` ${emote}`;
     }
-    if (messageQueue) messageQueue.enqueue(channel, finalReply, { priority: directInteraction ? 'high' : 'normal' });
+    if (messageQueue) messageQueue.enqueue(channel, finalReply, { priority: (directInteraction || analyticalAutoComment) ? 'high' : 'normal' });
     else await global.twitchClient.say(channel, finalReply);
     promMetrics.messagesSent.inc();
   } catch (err) {
