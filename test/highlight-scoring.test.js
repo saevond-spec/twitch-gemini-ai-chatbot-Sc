@@ -24,7 +24,7 @@ test('quiet-stream multi-viewer hype becomes a high-confidence anomaly', () => {
   assert.ok(signals.poissonZ > 3);
   assert.ok(signals.score >= 80);
   assert.equal(shouldEvaluateAutoClip(signals, 64), true);
-  assert.equal(shouldFallbackClipWithoutAI(signals, 84), false, '84 fallback remains intentionally stricter');
+  assert.equal(shouldFallbackClipWithoutAI(signals, 84), true, 'three independent strong reactions clear the strict no-AI fallback');
 });
 
 test('one excited spammer does not beat the auto-clip threshold', () => {
