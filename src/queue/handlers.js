@@ -50,13 +50,14 @@ async function publishSocial({ clipId, filePath, title, reason, twitchUrl }) {
     }));
   }
 
-  if (!Object.keys(results).length) {
-    const reason = 'No upload destination is enabled; enable YouTube, TikTok, or Discord in the service configuration.';
+  const uploadDestinations = Object.keys(results).filter((platform) => platform === 'youtube' || platform === 'tiktok');
+  if (!uploadDestinations.length) {
+    const reason = 'No video upload destination is enabled; enable YOUTUBE_UPLOAD_ENABLED for YouTube or TIKTOK_UPLOAD_ENABLED for TikTok.';
     log.warn(`Clip ${clipId} is ready but will not be uploaded`, reason);
-    return { uploaded: false, skipped: true, reason, destinations: [] };
+    return { ...results, uploaded: false, skipped: true, reason, uploadDestinations: [] };
   }
 
-  return results;
+  return { ...results, uploaded: true, skipped: false, uploadDestinations };
 }
 
 async function processOfficialTwitchClip(data) {
@@ -78,7 +79,8 @@ async function processOfficialTwitchClip(data) {
     if (result?.uploaded === false) {
       log.warn(`Twitch clip ${clipId} was processed but not uploaded: ${result.reason}`);
     } else {
-      log.info(`Completed clip delivery for ${clipId} to ${Object.keys(result || {}).join(', ') || 'configured destinations'}`);
+      const destinations = result?.uploadDestinations?.join(', ') || Object.keys(result || {}).join(', ') || 'configured destinations';
+      log.info(`Completed clip delivery for ${clipId} to ${destinations}`);
     }
     return result;
   } finally {
