@@ -85,6 +85,22 @@ export class HighlightDetector {
     return this.states.get(cleanChannel);
   }
 
+  getLiveContext(channel) {
+    const state = this.stateFor(channel);
+    return {
+      live: Boolean(state.live),
+      gameName: state.gameName || '',
+      streamTitle: state.streamTitle || '',
+      streamId: state.streamId || null,
+      recentChat: (state.messages || []).slice(-8).map(entry => ({
+        username: entry.username,
+        message: entry.message,
+        excitement: entry.excitement,
+      })),
+      candidateCount: (state.candidates || []).length,
+    };
+  }
+
   async start() {
     if (!this.enabled) {
       log.info('AI highlight detection is disabled by configuration');
