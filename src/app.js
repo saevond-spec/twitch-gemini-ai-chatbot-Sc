@@ -36,6 +36,7 @@ import { ProactiveWelcomeLimiter } from './chat/proactiveWelcomeLimiter.js';
 import { StreamMomentTracker } from './chat/streamMomentTracker.js';
 import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
 import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
+import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 
 const log = createLogger('APP');
@@ -58,6 +59,7 @@ let pollinations = new PollinationsClient();
 let highlightDetector = null;
 const incomingDeduper = new IncomingMessageDeduper();
 const streamMomentTracker = new StreamMomentTracker();
+const engagementAttribution = new EngagementAttribution();
 const analyticalMomentGate = new AnalyticalMomentGate({
   cooldownMs: config.auto.analyticalCooldownSeconds * 1000,
   minScore: 72,
@@ -371,6 +373,7 @@ function startAutoMessages() {
       else promMetrics.quietCommunityQuestions.inc();
 
       await ConversationStore.pushMessage(channel, 'bot', finalMsg);
+      engagementAttribution.recordQuiet(channel, mode, Date.now());
       log.info(`Adaptive quiet message sent in ${channel} (mode: ${mode}, p=${probability.toFixed(3)})`);
     }
   }, AUTO_CHAT_TICK_MS);
@@ -406,6 +409,14 @@ async function handleMessage({ channel, user, message, self }) {
   }
   if (modResult.riskScore > 40) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
+  }
+
+  const attributedResponse = engagementAttribution.recordHuman(channel, Date.now());
+  if (attributedResponse.quietMode) {
+    promMetrics.quietResponses.inc({ mode: attributedResponse.quietMode });
+  }
+  if (attributedResponse.analytical) {
+    promMetrics.analyticalAutoResponses.inc();
   }
 
   const moment = streamMomentTracker.observe(channel, { username, message, now: Date.now() });
@@ -575,7 +586,10 @@ async function handleMessage({ channel, user, message, self }) {
     if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
     if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
     if (brainName === 'analyst') promMetrics.analyticalReplies.inc();
-    if (analyticalAutoComment) promMetrics.analyticalAutoComments.inc();
+    if (analyticalAutoComment) {
+      promMetrics.analyticalAutoComments.inc();
+      engagementAttribution.recordAnalytical(channel, Date.now());
+    }
     if (offerFollow) promMetrics.followPrompts.inc();
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, {
