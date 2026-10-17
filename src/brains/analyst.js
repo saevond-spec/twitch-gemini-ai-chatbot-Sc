@@ -15,6 +15,8 @@ Keep replies to 1-3 short sentences and sound conversational, not like a lecture
       maxTokens: 360,
     };
   }
+  static async processResponse(reply) { return reply; }
+
 
   static async score({ message, context = {} }) {
     const text = String(message || '');
