@@ -91,13 +91,13 @@ services:
       - key: AUTO_CHAT_TICK_SECONDS
         value: "30"
       - key: AUTO_CHAT_MIN_QUIET_SECONDS
-        value: "150"
+        value: "90"
       - key: AUTO_CHAT_MAX_QUIET_SECONDS
-        value: "720"
+        value: "360"
       - key: AUTO_CHAT_BOT_GAP_SECONDS
-        value: "180"
+        value: "120"
       - key: AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS
-        value: "900"
+        value: "600"
       - key: AUTO_CHAT_REQUIRE_LIVE
         value: "true"
       - key: ANALYTICAL_AUTO_COMMENT_ENABLED
