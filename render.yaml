@@ -104,6 +104,26 @@ services:
         value: "true"
       - key: ANALYTICAL_MOMENT_COOLDOWN_SECONDS
         value: "90"
+      - key: HIGHLIGHT_DETECTION_ENABLED
+        value: "true"
+      - key: HIGHLIGHT_WINDOW_SECONDS
+        value: "20"
+      - key: HIGHLIGHT_COOLDOWN_SECONDS
+        value: "150"
+      - key: HIGHLIGHT_MAX_CLIPS
+        value: "5"
+      - key: HIGHLIGHT_AUTO_SCORE_THRESHOLD
+        value: "64"
+      - key: HIGHLIGHT_AI_FALLBACK_SCORE
+        value: "84"
+      - key: MANUAL_CLIP_SECONDS
+        value: "35"
+      - key: MANUAL_CLIP_COOLDOWN_SECONDS
+        value: "45"
+      - key: VIEWER_CLIP_VOTE_WINDOW_SECONDS
+        value: "12"
+      - key: VIEWER_CLIP_VOTES_REQUIRED
+        value: "2"
       - key: WELCOME_ON_JOIN
         value: "true"
       - key: JOIN_WELCOME_BATCH_MS

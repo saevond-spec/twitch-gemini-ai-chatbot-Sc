@@ -12,6 +12,7 @@ async function loadHighlightDetector(t) {
   t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const detector = await fs.readFile(path.join(sourceRoot, 'src/highlights/detector.js'), 'utf8');
+  const scoring = await fs.readFile(path.join(sourceRoot, 'src/highlights/scoring.js'), 'utf8');
   const helper = await fs.readFile(path.join(sourceRoot, 'highlight-window.js'), 'utf8');
   const files = {
     'package.json': JSON.stringify({ type: 'module' }),
@@ -24,6 +25,7 @@ async function loadHighlightDetector(t) {
     'src/bus/index.js': "const bus = { on() {}, off() {} }; export default bus;",
     'src/clips/twitchClipService.js': "export async function createClipFromVod() { return { id: 'stub', url: 'https://clips.twitch.tv/stub' }; }",
     'src/queue/index.js': "export async function enqueueTask() { return { id: 'stub' }; }",
+    'src/highlights/scoring.js': scoring,
     'src/highlights/detector.js': detector,
     'highlight-window.js': helper
   };

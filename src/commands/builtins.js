@@ -5,7 +5,7 @@ import { getRedis } from '../storage/redis.js';
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return `Commands: !help, !uptime, !bot, !about, !brain <${brainList}>, !commands, and custom commands.`;
+  return `Commands: !help, !uptime, !bot, !about, !brain <${brainList}>, !clip [title], !commands, and custom commands.`;
 }, 'Shows this help');
 
 registerBuiltin('!uptime', async (user, channel, client) => {
@@ -48,3 +48,11 @@ registerBuiltin('!commands', async () => {
   const list = cmds.filter(Boolean).join(', ');
   return list ? `Custom commands: ${list}` : 'No custom commands.';
 }, 'List custom commands');
+
+
+registerBuiltin('!clip', async (user, channel, client, message, context = {}) => {
+  const detector = context.highlightDetector;
+  if (!detector) return '🎬 Clip system is still starting.';
+  const result = await detector.requestManualClip({ channel, user, message });
+  return result?.message || '🎬 Clip request processed.';
+}, 'Create a Twitch clip or cast a viewer clip vote');

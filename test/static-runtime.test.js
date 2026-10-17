@@ -190,3 +190,22 @@ test('join welcomes are wired into production runtime', () => {
   assert.match(render, /WELCOME_ON_JOIN\n\s+value: "true"/);
   assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "60"/);
 });
+
+
+test('!clip command and mathematical auto-detection are wired', () => {
+  const builtins = fs.readFileSync(path.join(root, 'src/commands/builtins.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const detector = fs.readFileSync(path.join(root, 'src/highlights/detector.js'), 'utf8');
+  const scoring = fs.readFileSync(path.join(root, 'src/highlights/scoring.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(builtins, /registerBuiltin\('!clip'/);
+  assert.match(app, /highlightDetector \}/);
+  assert.match(detector, /requestManualClip/);
+  assert.match(detector, /computeHighlightSignals/);
+  assert.match(detector, /shouldFallbackClipWithoutAI/);
+  assert.match(scoring, /Gamma-Poisson/);
+  assert.match(scoring, /spamPenalty/);
+  assert.match(render, /HIGHLIGHT_AUTO_SCORE_THRESHOLD\n\s+value: "64"/);
+  assert.match(render, /VIEWER_CLIP_VOTES_REQUIRED\n\s+value: "2"/);
+});
