@@ -38,6 +38,7 @@ import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
 import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
 import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
+import { CommerceEngine } from './commerce/engine.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -64,6 +65,7 @@ const analyticalMomentGate = new AnalyticalMomentGate({
   cooldownMs: config.auto.analyticalCooldownSeconds * 1000,
   minScore: 72,
 });
+const commerceEngine = new CommerceEngine({ enabled: config.sales.enabled });
 const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
   maxPerWindow: Number(process.env.PROACTIVE_WELCOME_MAX_PER_MINUTE || 3),
   windowMs: 60_000,
@@ -191,7 +193,7 @@ app.get('/metrics', requireAdmin, async (req, res) => {
 app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const state = await createOAuthState();
-  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts channel:manage:clips';
+  const scope = 'chat:read chat:edit user:bot user:read:chat user:write:chat moderation:read channel:manage:moderators moderator:read:followers moderator:manage:shoutouts channel:manage:clips channel:read:subscriptions bits:read';
   const url = `https://id.twitch.tv/oauth2/authorize?client_id=${config.twitch.clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
   res.redirect(url);
 });
@@ -249,6 +251,23 @@ app.delete('/api/commands/:name', requireAdmin, async (req, res) => {
   await deleteCustomCommand(req.params.name);
   await loadCustomCommandsIntoMemory();
   res.json({ success: true });
+});
+
+app.get('/api/commerce/stats', requireAdmin, async (req, res) => {
+  res.json({ offers: commerceEngine.catalog.map(({ id, type, category, title }) => ({ id, type, category, title })), arms: await commerceEngine.stats() });
+});
+
+app.post('/api/commerce/conversion', requireAdmin, async (req, res) => {
+  const channel = String(req.body?.channel || config.twitch.channels[0] || '').replace(/^#?/, '#').toLowerCase();
+  const viewer = String(req.body?.viewer || '').toLowerCase();
+  const offerId = String(req.body?.offerId || '');
+  if (!viewer || !offerId || !commerceEngine.catalog.some(offer => offer.id === offerId)) {
+    return res.status(400).json({ error: 'Valid viewer and offerId required' });
+  }
+  const result = await commerceEngine.recordConversion({ channel, viewer, expectedOfferId: offerId, value: Number(req.body?.value || 0) });
+  promMetrics.commerceConversions.inc({ offer: offerId, source: 'external', attributed: String(Boolean(result.attributed)) });
+  if (result.attributed) await ProfileStore.update(channel, viewer, { lastCommercialConversionAt: Date.now() });
+  res.json(result);
 });
 
 app.post('/api/media/image', requireAdmin, async (req, res) => {
@@ -438,6 +457,14 @@ async function handleMessage({ channel, user, message, self }) {
     else await global.twitchClient.say(channel, response);
     return;
   }
+  if (!previousProfile.commercialOptOut && commerceEngine.isOptOut(message)) {
+    promMetrics.commerceOptOuts.inc();
+    await ProfileStore.update(channel, login, { commercialOptOut: true });
+    const response = `@${username} got it — no promo or sales messages from me.`;
+    if (messageQueue) messageQueue.enqueue(channel, response);
+    else await global.twitchClient.say(channel, response);
+    return;
+  }
   // Custom commands
   const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
   if (cmdKey) {
@@ -517,6 +544,7 @@ async function handleMessage({ channel, user, message, self }) {
   // AI chat: direct mentions/replies plus low-pressure first-chat welcome.
   const personaNames = [config.twitch.username.toLowerCase(), 'clanker', 'sweaty clanker'];
   const directInteraction = shouldRespond(message, personaNames, user);
+  const commercialIntent = !viewerProfile.commercialOptOut && commerceEngine.hasIntent(message);
   const proactiveWelcomeCandidate = AUTO_WELCOME && shouldProactivelyWelcome({
     profile: viewerProfile,
     message,
@@ -531,7 +559,7 @@ async function handleMessage({ channel, user, message, self }) {
     && !proactiveWelcome
     && analyticalMomentGate.allow(channel, moment);
 
-  const shouldReply = directInteraction || proactiveWelcome || analyticalAutoComment;
+  const shouldReply = directInteraction || proactiveWelcome || analyticalAutoComment || commercialIntent;
   if (!shouldReply || viewerProfile.proactiveOptOut) {
     log.debug('Skipping AI: no direct interaction, eligible first-chat welcome, or analytical moment');
     return;
@@ -557,6 +585,33 @@ async function handleMessage({ channel, user, message, self }) {
     message,
     directInteraction,
   });
+  const salesSelection = await commerceEngine.consider({
+    channel,
+    viewer: login,
+    profile: viewerProfile,
+    message,
+    directInteraction: directInteraction || commercialIntent,
+    proactiveWelcome,
+    offerFollow,
+    now: Date.now(),
+  });
+  if (!salesSelection.eligible && (directInteraction || commercialIntent)) {
+    promMetrics.commerceSuppressed.inc({ reason: salesSelection.reason || 'policy' });
+  }
+  if (commercialIntent && salesSelection.eligible) {
+    const response = `@${username} ${salesSelection.text}`;
+    await commerceEngine.recordImpression({ channel, viewer: login, selection: salesSelection });
+    promMetrics.commerceImpressions.inc({ offer: salesSelection.offer.id });
+    promMetrics.commerceBanditScore.observe(salesSelection.banditScore);
+    await ProfileStore.update(channel, login, {
+      lastCommercialPromptAt: Date.now(),
+      commercialPromptCount: Number(viewerProfile.commercialPromptCount || 0) + 1,
+    });
+    if (messageQueue) messageQueue.enqueue(channel, response, { priority: 'high' });
+    else await global.twitchClient.say(channel, response);
+    promMetrics.messagesSent.inc();
+    return;
+  }
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
   const userPrompt = buildUserPrompt(message, username, history);
@@ -584,6 +639,7 @@ async function handleMessage({ channel, user, message, self }) {
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
     if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
+    if (salesSelection.eligible) finalReply = `${finalReply} ${salesSelection.text}`;
     if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
     if (brainName === 'analyst') promMetrics.analyticalReplies.inc();
     if (analyticalAutoComment) {
@@ -591,10 +647,17 @@ async function handleMessage({ channel, user, message, self }) {
       engagementAttribution.recordAnalytical(channel, Date.now());
     }
     if (offerFollow) promMetrics.followPrompts.inc();
+    if (salesSelection.eligible) {
+      await commerceEngine.recordImpression({ channel, viewer: login, selection: salesSelection });
+      promMetrics.commerceImpressions.inc({ offer: salesSelection.offer.id });
+      promMetrics.commerceBanditScore.observe(salesSelection.banditScore);
+    }
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, {
       botInteractions: viewerProfile.botInteractions + 1,
       followPromptedAt: offerFollow ? Date.now() : viewerProfile.followPromptedAt,
+      lastCommercialPromptAt: salesSelection.eligible ? Date.now() : viewerProfile.lastCommercialPromptAt,
+      commercialPromptCount: Number(viewerProfile.commercialPromptCount || 0) + (salesSelection.eligible ? 1 : 0),
     });
     if (config.emotes.enable) {
       const emote = getRandomEmote(channel);
@@ -625,6 +688,20 @@ async function handleUserNotice({ channel, user, msg, tags }) {
     const reply = `Thanks for the sub, ${subName}! Much love <3`;
     if (messageQueue) messageQueue.enqueue(channel, reply);
     else await global.twitchClient.say(channel, reply);
+  }
+}
+
+async function recordNativeCommerceConversion(event, expectedOfferId, source) {
+  const channel = `#${String(event?.broadcaster_user_login || config.twitch.channels[0] || '').replace(/^#/, '').toLowerCase()}`;
+  const viewer = String(event?.user_login || '').toLowerCase();
+  if (!viewer) {
+    promMetrics.commerceConversions.inc({ offer: expectedOfferId, source, attributed: 'false' });
+    return;
+  }
+  const result = await commerceEngine.recordConversion({ channel, viewer, expectedOfferId });
+  promMetrics.commerceConversions.inc({ offer: expectedOfferId, source, attributed: String(Boolean(result.attributed)) });
+  if (result.attributed) {
+    await ProfileStore.update(channel, viewer, { lastCommercialConversionAt: Date.now() });
   }
 }
 
@@ -697,6 +774,15 @@ async function initializeBot() {
     } catch (err) {
       log.warn('Failed to record follower state', err.message);
     }
+  });
+  bus.on('eventsub.channel.subscribe', (event) => {
+    recordNativeCommerceConversion(event, 'twitch_sub', 'subscription').catch(err => log.warn('Subscription conversion tracking failed', err.message));
+  });
+  bus.on('eventsub.channel.subscription.gift', (event) => {
+    recordNativeCommerceConversion(event, 'twitch_sub', 'gift_subscription').catch(err => log.warn('Gift subscription conversion tracking failed', err.message));
+  });
+  bus.on('eventsub.channel.bits.use', (event) => {
+    recordNativeCommerceConversion(event, 'twitch_bits', 'bits').catch(err => log.warn('Bits conversion tracking failed', err.message));
   });
 
   // Load plugins
