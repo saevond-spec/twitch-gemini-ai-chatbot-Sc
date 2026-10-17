@@ -38,6 +38,7 @@ import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
 import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
 import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
+import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 
@@ -798,12 +799,15 @@ async function initializeBot() {
   });
   bus.on('twitch.join', ({ channel, username, self }) => {
     try {
-      const login = String(username || '').toLowerCase();
-      if (self || !login) return;
-      if (login === configuredBotLogin()) return;
-      if (config.twitch.ignoredUsers.includes(login)) return;
       if (!config.auto.welcomeOnJoin) return;
-      joinWelcomeBatcher.add(channel, login);
+      if (!shouldWelcomeJoin({
+        channel,
+        username,
+        self,
+        botLogin: configuredBotLogin(),
+        ignoredUsers: config.twitch.ignoredUsers,
+      })) return;
+      joinWelcomeBatcher.add(channel, String(username).toLowerCase());
     } catch (err) {
       log.warn('Failed to queue join welcome', err.message);
     }
