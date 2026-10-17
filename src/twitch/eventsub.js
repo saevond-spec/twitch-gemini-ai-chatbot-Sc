@@ -218,6 +218,9 @@ export class EventSubClient {
     const subscriptions = [
       this.helix.subscribeFollow(broadcasterId, moderatorId),
       this.helix.subscribeShoutout(broadcasterId, moderatorId),
+      this.helix.subscribeChannelSubscribe(broadcasterId),
+      this.helix.subscribeSubscriptionGift(broadcasterId),
+      this.helix.subscribeBitsUse(broadcasterId),
     ];
 
     const results = await Promise.allSettled(subscriptions);
