@@ -518,7 +518,7 @@ async function handleMessage({ channel, user, message, self }) {
     const cmd = builtins.get(builtinKey);
     const cooldownKey = `${channel}:${login}`;
     if (!cooldown.check(cooldownKey)) return;
-    const response = await cmd.handler(user, channel, global.twitchClient, message);
+    const response = await cmd.handler(user, channel, global.twitchClient, message, { highlightDetector });
     if (response) {
       if (messageQueue) messageQueue.enqueue(channel, response);
       else await global.twitchClient.say(channel, response);
