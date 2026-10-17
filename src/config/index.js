@@ -50,6 +50,7 @@ const optional = {
   AUTO_CHAT_MAX_QUIET_SECONDS: 720,
   AUTO_CHAT_BOT_GAP_SECONDS: 180,
   AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS: 900,
+  AUTO_CHAT_REQUIRE_LIVE: 'true',
   ANALYTICAL_MOMENT_COOLDOWN_SECONDS: 90,
   ANALYTICAL_AUTO_COMMENT_ENABLED: 'true',
   AUTO_WELCOME: 'true',
@@ -100,6 +101,7 @@ const convert = {
   ENABLE_FFZ_EMOTES: Boolean,
   AUTO_MESSAGE_ENABLED: Boolean,
   AUTO_USE_DEEPSEEK: Boolean,
+  AUTO_CHAT_REQUIRE_LIVE: Boolean,
   ANALYTICAL_AUTO_COMMENT_ENABLED: Boolean,
   AUTO_WELCOME: Boolean,
 };
@@ -156,6 +158,7 @@ export const config = {
     maxQuietSeconds: env.AUTO_CHAT_MAX_QUIET_SECONDS,
     botGapSeconds: env.AUTO_CHAT_BOT_GAP_SECONDS,
     recentBotWindowSeconds: env.AUTO_CHAT_RECENT_BOT_WINDOW_SECONDS,
+    requireLive: env.AUTO_CHAT_REQUIRE_LIVE,
     analyticalCooldownSeconds: env.ANALYTICAL_MOMENT_COOLDOWN_SECONDS,
     analyticalAutoComment: env.ANALYTICAL_AUTO_COMMENT_ENABLED,
     welcome: env.AUTO_WELCOME,
