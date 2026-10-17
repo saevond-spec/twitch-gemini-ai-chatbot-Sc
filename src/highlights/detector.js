@@ -269,6 +269,9 @@ export class HighlightDetector {
       followEvents: (state.followEvents || [])
         .filter((at) => Number.isFinite(Number(at)) && Number(at) >= Date.now() - CHAT_RECOVERY_WINDOW_MS)
         .slice(-MAX_PERSISTED_CHAT_MESSAGES),
+      clipVotes: (state.clipVotes || [])
+        .filter((vote) => Number.isFinite(Number(vote?.at)) && Date.now() - Number(vote.at) <= this.viewerClipVoteWindowMs),
+      lastManualClipAt: Number(state.lastManualClipAt || 0),
       pendingFinalize: Boolean(state.pendingFinalize)
     };
     const serialized = JSON.stringify(payload);
