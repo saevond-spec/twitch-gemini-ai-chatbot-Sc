@@ -1,0 +1,236 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { HighlightDetector } from '../src/highlights/detector.js';
+
+process.env.HIGHLIGHT_DETECTION_ENABLED = 'true';
+
+function makeDetector(ai) {
+  const detector = new HighlightDetector(ai);
+  const scheduled = [];
+  const scheduledIds = new Set();
+  detector.restore = async () => {};
+  detector.persist = async () => {};
+  detector.scheduleFinalize = (snapshot) => {
+    if (scheduledIds.has(snapshot.streamId)) return;
+    scheduledIds.add(snapshot.streamId);
+    scheduled.push(snapshot);
+  };
+  detector.helix = async (pathname) => pathname === '/streams' ? [] : [];
+  return { detector, scheduled };
+}
+
+function startLiveStream(detector, { id = 'vod-old', startedAt = Date.now() - 60_000, messages = [] } = {}) {
+  const state = detector.stateFor('saevond');
+  Object.assign(state, {
+    broadcasterId: 'broadcaster-1',
+    live: true,
+    ending: false,
+    streamId: id,
+    startedAt: new Date(startedAt).toISOString(),
+    streamTitle: `Stream ${id}`,
+    gameName: 'Game'
+  });
+  state.messages = messages;
+  state.followEvents = [];
+  state.candidates = [];
+  state.lastAiAt = 0;
+  return state;
+}
+
+test('the offline poll reviews quiet final chat at its observed timestamp before clearing it', async () => {
+  const requests = [];
+  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+    requests.push(JSON.parse(messages[1].content));
+    return JSON.stringify({ highlight: true, score: 82, title: 'Clutch finish',
+      reason: 'Two viewers reacted to the final play', durationSeconds: 20 });
+  } });
+  const startedAt = Date.now() - 6 * 60 * 60 * 1000;
+  const state = startLiveStream(detector, { startedAt, messages: [
+    { at: startedAt + 119_000, username: 'viewer-a', message: 'That was close', excitement: 1 },
+    { at: startedAt + 123_000, username: 'viewer-b', message: 'Nice play', excitement: 1 }
+  ] });
+
+  await detector.checkChannel(state);
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].signals.finalWindow, true);
+  assert.equal(requests[0].streamOffsetSeconds, 123);
+  assert.equal(state.live, false);
+  assert.equal(state.messages.length, 0);
+  assert.equal(state.pendingFinalize, true);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].candidates[0].endSeconds, 128);
+});
+
+test('empty final chat schedules the VOD without inventing an AI candidate', async () => {
+  let calls = 0;
+  const { detector, scheduled } = makeDetector({ chat: async () => {
+    calls += 1;
+    return JSON.stringify({ highlight: true, score: 99, title: 'Invented', reason: 'None', durationSeconds: 20 });
+  } });
+  const startedAt = Date.now() - 10 * 60 * 1000;
+  const state = startLiveStream(detector, { startedAt, messages: [
+    { at: startedAt + 200_000, username: 'viewer', message: '   ', excitement: 0 }
+  ] });
+
+  await detector.checkChannel(state);
+
+  assert.equal(calls, 0);
+  assert.equal(state.live, false);
+  assert.equal(state.pendingFinalize, true);
+  assert.equal(scheduled.length, 1);
+  assert.deepEqual(scheduled[0].candidates, []);
+});
+
+test('a failed final review preserves evidence for the next poll', async () => {
+  let attempts = 0;
+  const { detector } = makeDetector({ chat: async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('temporary model outage');
+    return JSON.stringify({ highlight: false, score: 0, title: '', reason: '', durationSeconds: 20 });
+  } });
+  const startedAt = Date.now() - 15 * 60 * 1000;
+  const state = startLiveStream(detector, { startedAt, messages: [
+    { at: startedAt + 300_000, username: 'viewer', message: 'Hmm', excitement: 0 }
+  ] });
+
+  await detector.checkChannel(state);
+  assert.equal(state.live, true);
+  assert.equal(state.ending, false);
+  assert.equal(state.messages.length, 1);
+
+  await detector.checkChannel(state);
+  assert.equal(attempts, 2);
+  assert.equal(state.live, false);
+  assert.equal(state.messages.length, 0);
+});
+
+test('a new stream ID finishes the previous stream before resetting its final chat', async () => {
+  const requests = [];
+  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+    requests.push(JSON.parse(messages[1].content));
+    return JSON.stringify({ highlight: true, score: 81, title: 'Final play',
+      reason: 'Chat reacted to the final play', durationSeconds: 20 });
+  } });
+  const startedAt = Date.now() - 25 * 60 * 1000;
+  const state = startLiveStream(detector, { id: 'vod-before', startedAt, messages: [
+    { at: startedAt + 410_000, username: 'viewer-a', message: 'No way', excitement: 1 },
+    { at: startedAt + 415_000, username: 'viewer-b', message: 'Clip that', excitement: 6 }
+  ] });
+  detector.helix = async (pathname) => pathname === '/streams'
+    ? [{ id: 'vod-after', started_at: new Date().toISOString(), title: 'New game', game_name: 'Game' }]
+    : [];
+
+  await detector.checkChannel(state);
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].streamTitle, 'Stream vod-before');
+  assert.ok(scheduled.some((snapshot) => snapshot.streamId === 'vod-before'));
+  assert.equal(state.streamId, 'vod-after');
+  assert.deepEqual(state.messages, []);
+});
+
+test('a five-year finalization simulation recovers transient failures and never fabricates empty-chat clips', async () => {
+  const DAYS = 1826;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const START = Date.parse('2026-10-17T00:00:00.000Z');
+  const originalNow = Date.now;
+  let simulatedNow = START;
+  Date.now = () => simulatedNow;
+
+  const callsByDay = new Map();
+  const failuresByDay = new Set();
+  const { detector, scheduled } = makeDetector({ chat: async (messages) => {
+    const request = JSON.parse(messages[1].content);
+    const day = Number(request.streamTitle.match(/#(\d+)$/)?.[1]);
+    const attempt = (callsByDay.get(day) || 0) + 1;
+    callsByDay.set(day, attempt);
+    if (day % 37 === 0 && day % 11 !== 0 && attempt === 1) {
+      failuresByDay.add(day);
+      throw new Error('simulated transient model outage');
+    }
+    const approved = day % 5 !== 0;
+    return JSON.stringify({
+      highlight: approved,
+      score: approved ? 82 : 0,
+      title: approved ? `Observed moment ${day}` : '',
+      reason: approved ? 'Model approved the supplied chat evidence' : '',
+      durationSeconds: 25
+    });
+  } });
+  detector.helix = async (pathname) => pathname === '/streams' ? [] : [];
+
+  let nonemptyStreams = 0;
+  let emptyStreams = 0;
+  let recoveredFinalReviews = 0;
+  let approvedStreams = 0;
+  try {
+    for (let day = 1; day <= DAYS; day += 1) {
+      const startedAt = START + (day - 1) * DAY_MS;
+      const observedOffsetSeconds = 120 + (day % 1800);
+      simulatedNow = startedAt + 6 * 60 * 60 * 1000; // delayed offline poll
+      const state = detector.stateFor('saevond');
+      Object.assign(state, {
+        broadcasterId: 'broadcaster-1',
+        live: true,
+        ending: false,
+        checking: false,
+        streamId: `vod-${day}`,
+        startedAt: new Date(startedAt).toISOString(),
+        streamTitle: `Five-year stream #${day}`,
+        gameName: 'Simulation'
+      });
+      state.candidates = [];
+      state.followEvents = [];
+      state.lastAiAt = 0;
+      state.messages = day % 11 === 0 ? [
+        { at: startedAt + observedOffsetSeconds * 1000, username: 'viewer', message: '   ', excitement: 0 }
+      ] : [
+        { at: startedAt + (observedOffsetSeconds - 4) * 1000, username: 'viewer-a', message: 'That was close', excitement: 1 },
+        { at: startedAt + observedOffsetSeconds * 1000, username: 'viewer-b', message: 'Nice play', excitement: 1 }
+      ];
+
+      const hasEvidence = day % 11 !== 0;
+      if (hasEvidence) nonemptyStreams += 1;
+      else emptyStreams += 1;
+      const shouldRetry = hasEvidence && day % 37 === 0;
+
+      await detector.checkChannel(state);
+      if (shouldRetry) {
+        assert.equal(state.live, true, `stream ${day} remains active after a failed review`);
+        assert.equal(state.ending, false, `stream ${day} can retry after a failed review`);
+        assert.ok(state.messages.length > 0, `stream ${day} preserves evidence for retry`);
+        await detector.checkChannel(state);
+        recoveredFinalReviews += 1;
+      }
+
+      assert.equal(state.live, false, `stream ${day} finishes`);
+      assert.equal(state.messages.length, 0, `stream ${day} clears evidence only after review`);
+      assert.equal(state.pendingFinalize, true, `stream ${day} waits for its VOD`);
+      if (!hasEvidence) assert.equal(state.candidates.length, 0, `empty stream ${day} creates no candidate`);
+
+      const snapshot = scheduled.at(-1);
+      assert.equal(snapshot.streamId, `vod-${day}`);
+      if (snapshot.candidates.length) {
+        approvedStreams += 1;
+        assert.equal(snapshot.candidates.length, 1);
+        assert.equal(snapshot.candidates[0].endSeconds, observedOffsetSeconds + 5,
+          `stream ${day} uses the last observed chat timestamp, not the delayed poll`);
+        assert.equal(snapshot.candidates[0].startSeconds, observedOffsetSeconds + 5 - 25);
+        assert.ok(snapshot.candidates[0].startSeconds >= 0);
+      }
+    }
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(scheduled.length, DAYS, 'one VOD finalization is scheduled per stream');
+  assert.equal(new Set(scheduled.map((item) => item.streamId)).size, DAYS, 'no stream is scheduled twice');
+  assert.equal(nonemptyStreams, 1660);
+  assert.equal(emptyStreams, 166);
+  assert.equal(recoveredFinalReviews, 45);
+  assert.equal(failuresByDay.size, recoveredFinalReviews);
+  assert.equal(approvedStreams, 1328);
+  assert.equal(callsByDay.size, nonemptyStreams);
+  assert.equal([...callsByDay.values()].reduce((sum, count) => sum + count, 0), nonemptyStreams + recoveredFinalReviews);
+});
