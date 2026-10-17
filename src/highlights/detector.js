@@ -6,6 +6,7 @@ import { createLogger } from '../logger/index.js';
 import bus from '../bus/index.js';
 import { createClipFromVod } from '../clips/twitchClipService.js';
 import { enqueueTask } from '../queue/index.js';
+import { finalWindowOffsetSeconds, finalWindowSignals } from '../../highlight-window.js';
 
 const log = createLogger('HIGHLIGHTS');
 const HELIX_BASE = 'https://api.twitch.tv/helix';
@@ -75,6 +76,7 @@ export class HighlightDetector {
         channel: cleanChannel,
         live: false,
         checking: false,
+        ending: false,
         messages: [],
         followEvents: [],
         candidates: [],
@@ -147,7 +149,7 @@ export class HighlightDetector {
       const raw = await redis.get(`highlights:${state.channel}`);
       if (!raw) return;
       const saved = JSON.parse(raw);
-      Object.assign(state, saved, { messages: [], checking: false, restored: true });
+      Object.assign(state, saved, { messages: [], checking: false, ending: false, restored: true });
       log.info(`Restored ${state.candidates?.length || 0} highlight candidates for ${state.channel}`);
     } catch (error) {
       log.warn('Could not restore highlight state', error.message);
@@ -195,6 +197,10 @@ export class HighlightDetector {
       if (stream) {
         const isNewStream = !state.live || state.streamId !== stream.id;
         if (isNewStream) {
+          if (state.live && state.streamId && state.streamId !== stream.id) {
+            const finished = await this.finishStream(state);
+            if (!finished) return;
+          }
           if (state.pendingFinalize && state.candidates?.length) {
             this.scheduleFinalize({ ...state, candidates: [...state.candidates] }, 1000);
           }
@@ -212,13 +218,7 @@ export class HighlightDetector {
           await this.persist(state);
         }
       } else if (state.live) {
-        state.live = false;
-        state.messages = [];
-        state.followEvents = [];
-        state.pendingFinalize = true;
-        await this.persist(state);
-        this.scheduleFinalize({ ...state, candidates: [...(state.candidates || [])] });
-        log.info(`Stream ended for ${state.channel}; waiting for the VOD`);
+        await this.finishStream(state);
       }
     } catch (error) {
       log.warn(`Could not check ${state.channel}`, error.message);
@@ -227,11 +227,42 @@ export class HighlightDetector {
     }
   }
 
+  async finishStream(state) {
+    if (state.evaluating) {
+      state.ending = true;
+      return false;
+    }
+    state.ending = true;
+    const finalSignals = finalWindowSignals(state.messages, state.followEvents);
+    try {
+      if (finalSignals) {
+        state.evaluating = true;
+        state.lastAiAt = Date.now();
+        log.info(`Reviewing ${state.messages.length} remaining chat messages at stream end for ${state.channel}`);
+        await this.evaluate(state, finalSignals);
+      }
+    } catch (error) {
+      state.ending = false;
+      throw error;
+    } finally {
+      state.evaluating = false;
+    }
+    state.live = false;
+    state.ending = false;
+    state.messages = [];
+    state.followEvents = [];
+    state.pendingFinalize = true;
+    await this.persist(state);
+    this.scheduleFinalize({ ...state, candidates: [...(state.candidates || [])] });
+    log.info(`Stream ended for ${state.channel}; waiting for the VOD`);
+    return true;
+  }
+
   async observe({ channel, user, message }) {
     if (!this.enabled) return;
     const state = this.stateFor(channel);
     await this.restore(state);
-    if (!state.live) return;
+    if (!state.live || state.ending) return;
     const now = Date.now();
     state.messages.push({
       at: now,
@@ -265,7 +296,7 @@ export class HighlightDetector {
     if (!config.twitch.channels.some((value) => value.replace(/^#/, '').toLowerCase() === channel)) return;
     const state = this.stateFor(channel);
     await this.restore(state);
-    if (!state.live || (state.broadcasterId && state.broadcasterId !== event.broadcaster_user_id)) return;
+    if (!state.live || state.ending || (state.broadcasterId && state.broadcasterId !== event.broadcaster_user_id)) return;
     const now = Date.now();
     state.followEvents = [...(state.followEvents || []).filter((at) => at >= now - this.windowMs), now];
     // A follow alone does not identify a visual highlight; chat context is required for AI review.
@@ -284,7 +315,9 @@ export class HighlightDetector {
   }
 
   async evaluate(state, signals) {
-    const elapsed = Math.max(0, (Date.now() - Date.parse(state.startedAt)) / 1000);
+    const elapsed = signals.finalWindow
+      ? finalWindowOffsetSeconds(state.startedAt, state.messages)
+      : Math.max(0, (Date.now() - Date.parse(state.startedAt)) / 1000);
     const chat = state.messages.map((entry) => ({
       secondsAgo: Math.round((Date.now() - entry.at) / 1000),
       user: entry.username,
