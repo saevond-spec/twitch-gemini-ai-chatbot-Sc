@@ -41,6 +41,7 @@ import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
 import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
+import { ConversationRetentionEngine } from './chat/conversationRetention.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -68,6 +69,12 @@ const analyticalMomentGate = new AnalyticalMomentGate({
   minScore: 72,
 });
 const commerceEngine = new CommerceEngine({ enabled: config.sales.enabled });
+const retentionEngine = new ConversationRetentionEngine({
+  enabled: config.retention.enabled,
+  minScore: config.retention.minScore,
+  minPromptGapMs: config.retention.minPromptGapSeconds * 1000,
+  replyWindowMs: config.retention.replyWindowSeconds * 1000,
+});
 const joinWelcomeBatcher = new JoinWelcomeBatcher({
   flushMs: config.auto.joinWelcomeBatchMs,
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
@@ -463,6 +470,14 @@ async function handleMessage({ channel, user, message, self }) {
     promMetrics.analyticalAutoResponses.inc();
   }
 
+  if (!String(message || '').trim().startsWith('!')) {
+    const retentionReply = await retentionEngine.recordReply({ channel, viewer: login, at: Date.now() });
+    if (retentionReply.attributed) {
+      promMetrics.retentionReplies.inc({ strategy: retentionReply.strategy });
+      promMetrics.retentionReplyLatency.observe(retentionReply.latencyMs / 1000);
+    }
+  }
+
   const moment = streamMomentTracker.observe(channel, { username, message, now: Date.now() });
   promMetrics.streamMomentScore.observe(moment.score);
 
@@ -638,6 +653,29 @@ async function handleMessage({ channel, user, message, self }) {
     promMetrics.messagesSent.inc();
     return;
   }
+  const retentionSelection = await retentionEngine.select({
+    channel,
+    viewer: login,
+    profile: viewerProfile,
+    message,
+    directInteraction,
+    proactiveWelcome,
+    offerFollow,
+    salesEligible: salesSelection.eligible,
+    history,
+    streamContext,
+    moment,
+    now: Date.now(),
+  });
+  if (retentionSelection.opportunity != null) {
+    promMetrics.retentionOpportunityScore.observe(retentionSelection.opportunity);
+  }
+  if (!retentionSelection.eligible && directInteraction) {
+    promMetrics.retentionSuppressed.inc({ reason: retentionSelection.reason || 'policy' });
+  }
+  if (retentionSelection.eligible) {
+    systemPrompt += `\n\nCONVERSATIONAL RETENTION GUIDANCE: ${retentionSelection.instruction} Do not mention retention, engagement scoring, experiments, tracking, or strategy selection. Keep the response natural and short.`;
+  }
   const temperature = brainConfig.temperature || 0.7;
   const maxTokens = brainConfig.maxTokens || 1024;
   const userPrompt = buildUserPrompt(message, username, history);
@@ -678,12 +716,22 @@ async function handleMessage({ channel, user, message, self }) {
       promMetrics.commerceImpressions.inc({ offer: salesSelection.offer.id });
       promMetrics.commerceBanditScore.observe(salesSelection.banditScore);
     }
+    const sentAt = Date.now();
+    if (retentionSelection.eligible) {
+      await retentionEngine.recordImpression({ channel, viewer: login, selection: retentionSelection, at: sentAt });
+      promMetrics.retentionPrompts.inc({ strategy: retentionSelection.strategy });
+      promMetrics.retentionBanditScore.observe(retentionSelection.banditScore);
+    }
     await ConversationStore.pushMessage(channel, 'assistant', finalReply);
     await ProfileStore.update(channel, login, {
       botInteractions: viewerProfile.botInteractions + 1,
-      followPromptedAt: offerFollow ? Date.now() : viewerProfile.followPromptedAt,
-      lastCommercialPromptAt: salesSelection.eligible ? Date.now() : viewerProfile.lastCommercialPromptAt,
+      followPromptedAt: offerFollow ? sentAt : viewerProfile.followPromptedAt,
+      lastCommercialPromptAt: salesSelection.eligible ? sentAt : viewerProfile.lastCommercialPromptAt,
       commercialPromptCount: Number(viewerProfile.commercialPromptCount || 0) + (salesSelection.eligible ? 1 : 0),
+      lastBotReplyAt: sentAt,
+      lastRetentionPromptAt: retentionSelection.eligible ? sentAt : viewerProfile.lastRetentionPromptAt,
+      lastRetentionStrategy: retentionSelection.eligible ? retentionSelection.strategy : viewerProfile.lastRetentionStrategy,
+      retentionPromptCount: Number(viewerProfile.retentionPromptCount || 0) + (retentionSelection.eligible ? 1 : 0),
     });
     if (config.emotes.enable) {
       const emote = getRandomEmote(channel);
@@ -701,9 +749,36 @@ async function handleMessage({ channel, user, message, self }) {
       log.error('AI chat error', err);
     }
     promMetrics.aiErrors.inc();
-    const fallback = (status === 402 || code === 'insufficient_balance')
-      ? getContextualFallbackResponse(message, username)
-      : getFallbackResponse();
+    const fallback = retentionSelection?.eligible
+      ? retentionEngine.localFallback({
+          username,
+          message,
+          strategy: retentionSelection.strategy,
+          questionAllowed: retentionSelection.questionAllowed,
+        })
+      : ((status === 402 || code === 'insufficient_balance')
+          ? getContextualFallbackResponse(message, username)
+          : getFallbackResponse());
+
+    const sentAt = Date.now();
+    if (retentionSelection?.eligible) {
+      await retentionEngine.recordImpression({ channel, viewer: login, selection: retentionSelection, at: sentAt });
+      promMetrics.retentionPrompts.inc({ strategy: retentionSelection.strategy });
+      promMetrics.retentionBanditScore.observe(retentionSelection.banditScore);
+      await ProfileStore.update(channel, login, {
+        botInteractions: viewerProfile.botInteractions + 1,
+        lastBotReplyAt: sentAt,
+        lastRetentionPromptAt: sentAt,
+        lastRetentionStrategy: retentionSelection.strategy,
+        retentionPromptCount: Number(viewerProfile.retentionPromptCount || 0) + 1,
+      });
+      await ConversationStore.pushMessage(channel, 'assistant', fallback);
+    } else {
+      await ProfileStore.update(channel, login, {
+        botInteractions: viewerProfile.botInteractions + 1,
+        lastBotReplyAt: sentAt,
+      });
+    }
     if (messageQueue) messageQueue.enqueue(channel, fallback, { priority: directInteraction ? 'high' : 'normal' });
     else await global.twitchClient.say(channel, fallback);
     promMetrics.messagesSent.inc();
