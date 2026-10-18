@@ -232,3 +232,24 @@ test('conversational retention is wired into production runtime', () => {
   assert.match(render, /RETENTION_ENGINE_ENABLED\n\s+value: "true"/);
   assert.match(render, /RETENTION_REPLY_WINDOW_SECONDS\n\s+value: "120"/);
 });
+
+
+test('multilingual retention mirrors viewer language and segments learning', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const language = fs.readFileSync(path.join(root, 'src/chat/language.js'), 'utf8');
+  const retention = fs.readFileSync(path.join(root, 'src/chat/conversationRetention.js'), 'utf8');
+  const store = fs.readFileSync(path.join(root, 'src/chat/retentionStore.js'), 'utf8');
+
+  assert.match(app, /detectLanguage/);
+  assert.match(app, /languageInstruction\(responseLanguage\)/);
+  assert.match(app, /localizedGenericFallback/);
+  assert.match(app, /language: responseLanguage/);
+  assert.match(language, /localizedRetentionFallback/);
+  assert.match(language, /Japanese/);
+  assert.match(language, /Chinese/);
+  assert.match(language, /Korean/);
+  assert.match(language, /Hindi/);
+  assert.match(retention, /getStrategyStats\(strategy, language\)/);
+  assert.match(store, /Empirical-Bayes shrinkage/);
+  assert.match(store, /retention:strategy:\$\{normalizeLanguage\(language\)\}/);
+});
