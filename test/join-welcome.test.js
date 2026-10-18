@@ -2,28 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JoinWelcomeBatcher, formatJoinWelcome } from '../src/chat/joinWelcomeBatcher.js';
 
-test('single incoming viewer gets a direct welcome', () => {
-  assert.equal(
-    formatJoinWelcome(['Alice']),
-    "Welcome in @alice! 🤖 Glad you're here."
-  );
+test('single incoming viewer gets a generic low-pressure welcome without being named', () => {
+  const msg = formatJoinWelcome(['Alice']);
+  assert.match(msg, /Welcome in/i);
+  assert.match(msg, /chat whenever/i);
+  assert.doesNotMatch(msg, /@alice/i);
 });
 
-test('multiple incoming viewers are welcomed together', () => {
+test('multiple incoming viewers are welcomed together without exposing usernames', () => {
   const msg = formatJoinWelcome(['Alice', 'Bob', 'Charlie']);
-  assert.match(msg, /@alice/);
-  assert.match(msg, /@bob/);
-  assert.match(msg, /@charlie/);
-  assert.match(msg, /Glad you're all here/);
+  assert.match(msg, /Welcome in, everyone/i);
+  assert.match(msg, /no pressure to type/i);
+  assert.doesNotMatch(msg, /@alice|@bob|@charlie/i);
 });
 
-test('large arrival bursts welcome everybody without chat flooding', () => {
+test('large arrival bursts welcome everybody without chat flooding or naming lurkers', () => {
   const names = Array.from({ length: 25 }, (_, i) => `viewer${i + 1}`);
   const msg = formatJoinWelcome(names);
-  assert.match(msg, /@viewer1/);
-  assert.match(msg, /and 17 more/);
-  assert.match(msg, /welcome everybody/i);
-  assert.ok(msg.length < 500);
+  assert.match(msg, /Welcome in, everyone/i);
+  assert.doesNotMatch(msg, /@viewer/i);
+  assert.ok(msg.length < 180);
 });
 
 test('reconnect warmup prevents greeting the entire existing room', () => {
@@ -61,8 +59,7 @@ test('same viewer is only welcomed once during dedupe window', async () => {
   batcher.stop();
 });
 
-test('join welcome batch removes duplicate usernames', () => {
+test('join welcome text never reveals silent usernames', () => {
   const msg = formatJoinWelcome(['alice', 'ALICE', 'bob']);
-  assert.equal((msg.match(/@alice/g) || []).length, 1);
-  assert.equal((msg.match(/@bob/g) || []).length, 1);
+  assert.doesNotMatch(msg, /alice|bob|@/i);
 });
