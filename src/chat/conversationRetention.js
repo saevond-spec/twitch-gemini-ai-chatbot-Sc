@@ -9,10 +9,10 @@ import { RetentionStore } from './retentionStore.js';
 export const RETENTION_STRATEGIES = Object.freeze(['reflect', 'humor', 'analysis', 'prediction']);
 
 const INSTRUCTIONS = Object.freeze({
-  reflect: 'Retention style: reflect the viewer’s actual point in one short sentence and add one relevant thought. Do not force a question.',
-  humor: 'Retention style: respond with one playful, game-relevant reaction that feels natural in Twitch chat. Leave an opening for them to continue, but do not force a question.',
-  analysis: 'Retention style: give one concise useful tactical observation based only on available chat/stream context. If you ask anything, ask at most one easy question.',
-  prediction: 'Retention style: ask one very easy either/or prediction about what happens next. Keep it answerable in a few words and do not sound like a survey.',
+  reflect: 'Retention style: reflect the viewer’s actual point in one short sentence and add one relevant thought. Do not force a question. Keep it mobile-friendly and under two short sentences.',
+  humor: 'Retention style: respond with one playful, game-relevant reaction that feels natural in Twitch chat. Leave an opening for them to continue, but do not force a question. Keep it mobile-friendly and under two short sentences.',
+  analysis: 'Retention style: give one concise useful tactical observation based only on available chat/stream context. If you ask anything, ask at most one easy question. Keep it mobile-friendly and under two short sentences.',
+  prediction: 'Retention style: ask one very easy either/or prediction about what happens next. Keep it answerable in a few words, mobile-friendly, and do not sound like a survey.',
 });
 
 function recentSignals(history = [], viewer = '', now = Date.now()) {
@@ -149,7 +149,9 @@ export class ConversationRetentionEngine {
       return `${name}🤖 Quick prediction: next play goes clean or full chaos?`;
     }
     if (strategy === 'analysis') {
-      return `${name}🤖 I’m on backup circuits, but I’m tracking the conversation. What part of that play stood out most to you?`;
+      return questionAllowed
+        ? `${name}🤖 I’m on backup circuits, but I’m tracking the conversation. What part of that play stood out most to you?`
+        : `${name}🤖 I’m on backup circuits, but that sounded like a timing/positioning moment worth watching.`;
     }
     if (strategy === 'humor') {
       return `${name}⚡ ${/lol|lmao|haha/i.test(text) ? 'Okay, that got the chrome laughing too.' : 'The chaos meter definitely moved on that one.'}`;
