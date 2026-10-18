@@ -148,6 +148,17 @@ export class LurkerActivationEngine {
       };
     }
 
+    // Treat opportunity as a per-check hazard rather than an instruction to
+    // always speak. This keeps prompts sparse even when silent users are present.
+    if (this.rng() > opportunity) {
+      return {
+        eligible: false,
+        reason: 'stochastic_hold',
+        silentUsers,
+        opportunity,
+      };
+    }
+
     const context = {
       gameName: streamContext?.gameName || '',
       tactical: Number(moment?.tacticalHits || 0) > 0,
