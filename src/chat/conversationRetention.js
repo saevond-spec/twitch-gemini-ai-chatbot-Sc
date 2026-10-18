@@ -119,7 +119,9 @@ export class ConversationRetentionEngine {
       strategy: selected.strategy,
       banditScore: selected.score,
       sampledReplyProbability: selected.sampledReplyProbability,
-      instruction: INSTRUCTIONS[selected.strategy],
+      instruction: questionAllowed
+        ? INSTRUCTIONS[selected.strategy]
+        : `${INSTRUCTIONS[selected.strategy]} Do not ask a question this turn; the viewer has already received enough questions recently.`,
     };
   }
 
