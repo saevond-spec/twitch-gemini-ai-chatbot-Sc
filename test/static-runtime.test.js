@@ -209,3 +209,26 @@ test('!clip command and mathematical auto-detection are wired', () => {
   assert.match(render, /HIGHLIGHT_AUTO_SCORE_THRESHOLD\n\s+value: "64"/);
   assert.match(render, /VIEWER_CLIP_VOTES_REQUIRED\n\s+value: "2"/);
 });
+
+
+test('conversational retention is wired into production runtime', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const engine = fs.readFileSync(path.join(root, 'src/chat/conversationRetention.js'), 'utf8');
+  const math = fs.readFileSync(path.join(root, 'src/chat/retentionMath.js'), 'utf8');
+  const store = fs.readFileSync(path.join(root, 'src/chat/retentionStore.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(app, /new ConversationRetentionEngine/);
+  assert.match(app, /retentionEngine\.select/);
+  assert.match(app, /retentionEngine\.recordReply/);
+  assert.match(app, /retentionEngine\.recordImpression/);
+  assert.match(app, /\/api\/retention\/stats/);
+  assert.match(engine, /RETENTION_STRATEGIES/);
+  assert.match(engine, /Do not ask a question this turn/);
+  assert.match(math, /sampleBeta/);
+  assert.match(math, /retentionOpportunityScore/);
+  assert.match(store, /retention:strategy:/);
+  assert.match(store, /retention:attribution:/);
+  assert.match(render, /RETENTION_ENGINE_ENABLED\n\s+value: "true"/);
+  assert.match(render, /RETENTION_REPLY_WINDOW_SECONDS\n\s+value: "120"/);
+});
