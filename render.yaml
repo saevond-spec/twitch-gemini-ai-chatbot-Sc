@@ -182,3 +182,15 @@ services:
         value: "45"
       - key: RETENTION_REPLY_WINDOW_SECONDS
         value: "120"
+      - key: LURKER_ACTIVATION_ENABLED
+        value: "true"
+      - key: LURKER_MIN_SILENT_SECONDS
+        value: "180"
+      - key: LURKER_PROMPT_GAP_SECONDS
+        value: "240"
+      - key: LURKER_REPLY_WINDOW_SECONDS
+        value: "120"
+      - key: LURKER_MIN_OPPORTUNITY
+        value: "0.42"
+      - key: LURKER_TRACKING_WARMUP_SECONDS
+        value: "90"
