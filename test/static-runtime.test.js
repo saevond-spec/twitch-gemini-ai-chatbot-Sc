@@ -253,3 +253,29 @@ test('multilingual retention mirrors viewer language and segments learning', () 
   assert.match(store, /Empirical-Bayes shrinkage/);
   assert.match(store, /retention:strategy:\$\{normalizeLanguage\(language\)\}/);
 });
+
+
+test('low-pressure lurker activation is wired into production', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const engine = fs.readFileSync(path.join(root, 'src/chat/lurkerActivation.js'), 'utf8');
+  const math = fs.readFileSync(path.join(root, 'src/chat/lurkerActivationMath.js'), 'utf8');
+  const store = fs.readFileSync(path.join(root, 'src/chat/lurkerActivationStore.js'), 'utf8');
+  const welcome = fs.readFileSync(path.join(root, 'src/chat/joinWelcomeBatcher.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(app, /new LurkerActivationEngine/);
+  assert.match(app, /lurkerActivationEngine\.onJoin/);
+  assert.match(app, /lurkerActivationEngine\.onPart/);
+  assert.match(app, /lurkerActivationEngine\.onMessage/);
+  assert.match(app, /lurkerActivationEngine\.consider/);
+  assert.match(app, /\/api\/lurker-activation\/stats/);
+  assert.match(engine, /LURKER_PROMPT_ARMS/);
+  assert.match(engine, /stochastic_hold/);
+  assert.match(math, /sampleBeta/);
+  assert.match(math, /activationOpportunity/);
+  assert.match(store, /successCredited/);
+  assert.match(welcome, /Never expose silent usernames/);
+  assert.doesNotMatch(welcome, /Welcome in @\$\{/);
+  assert.match(render, /LURKER_ACTIVATION_ENABLED\n\s+value: "true"/);
+  assert.match(render, /LURKER_PROMPT_GAP_SECONDS\n\s+value: "240"/);
+});
