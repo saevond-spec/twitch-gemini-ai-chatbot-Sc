@@ -282,6 +282,18 @@ app.get('/api/commerce/stats', requireAdmin, async (req, res) => {
   res.json({ offers: commerceEngine.catalog.map(({ id, type, category, title }) => ({ id, type, category, title })), arms: await commerceEngine.stats() });
 });
 
+app.get('/api/retention/stats', requireAdmin, async (req, res) => {
+  const strategies = await retentionEngine.stats();
+  res.json({
+    strategies: strategies.map(row => ({
+      ...row,
+      observedReplyRate: row.impressions ? row.replies / row.impressions : null,
+    })),
+    replyWindowSeconds: config.retention.replyWindowSeconds,
+    minOpportunityScore: config.retention.minScore,
+  });
+});
+
 app.post('/api/commerce/conversion', requireAdmin, async (req, res) => {
   const channel = String(req.body?.channel || config.twitch.channels[0] || '').replace(/^#?/, '#').toLowerCase();
   const viewer = String(req.body?.viewer || '').toLowerCase();
