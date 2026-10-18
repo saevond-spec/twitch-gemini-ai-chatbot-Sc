@@ -5,6 +5,7 @@ import {
   scoreRetentionArm,
 } from './retentionMath.js';
 import { RetentionStore } from './retentionStore.js';
+import { localizedRetentionFallback } from './language.js';
 
 export const RETENTION_STRATEGIES = Object.freeze(['reflect', 'humor', 'analysis', 'prediction']);
 
@@ -56,6 +57,7 @@ export class ConversationRetentionEngine {
     history = [],
     streamContext = {},
     moment = {},
+    language = 'en',
     now = Date.now(),
   }) {
     if (!this.enabled) return { eligible: false, reason: 'disabled' };
@@ -97,7 +99,7 @@ export class ConversationRetentionEngine {
 
     const arms = [];
     for (const strategy of RETENTION_STRATEGIES) {
-      const stats = await RetentionStore.getStrategyStats(strategy);
+      const stats = await RetentionStore.getStrategyStats(strategy, language);
       const scored = scoreRetentionArm({
         strategy,
         alpha: stats.alpha,
@@ -117,6 +119,7 @@ export class ConversationRetentionEngine {
       opportunity,
       questionAllowed,
       strategy: selected.strategy,
+      language,
       banditScore: selected.score,
       sampledReplyProbability: selected.sampledReplyProbability,
       instruction: questionAllowed
@@ -131,6 +134,7 @@ export class ConversationRetentionEngine {
       channel,
       viewer,
       strategy: selection.strategy,
+      language: selection.language || 'en',
       at,
       replyWindowMs: this.replyWindowMs,
     });
@@ -140,24 +144,16 @@ export class ConversationRetentionEngine {
     return RetentionStore.recordReply({ channel, viewer, at });
   }
 
-  async stats() {
-    return RetentionStore.getAllStats(RETENTION_STRATEGIES);
+  async stats(language = 'global') {
+    return RetentionStore.getAllStats(RETENTION_STRATEGIES, language);
   }
 
-  localFallback({ username = '', message = '', strategy = 'reflect', questionAllowed = true } = {}) {
-    const name = username ? `@${username} ` : '';
-    const text = String(message || '').trim();
-    if (strategy === 'prediction' && questionAllowed) {
-      return `${name}🤖 Quick prediction: next play goes clean or full chaos?`;
-    }
-    if (strategy === 'analysis') {
-      return questionAllowed
-        ? `${name}🤖 I’m on backup circuits, but I’m tracking the conversation. What part of that play stood out most to you?`
-        : `${name}🤖 I’m on backup circuits, but that sounded like a timing/positioning moment worth watching.`;
-    }
-    if (strategy === 'humor') {
-      return `${name}⚡ ${/lol|lmao|haha/i.test(text) ? 'Okay, that got the chrome laughing too.' : 'The chaos meter definitely moved on that one.'}`;
-    }
-    return `${name}🤖 I’m with you on that. Keep the read coming.`;
+  localFallback({ username = '', strategy = 'reflect', questionAllowed = true, language = 'en' } = {}) {
+    return localizedRetentionFallback({
+      code: language,
+      username,
+      strategy,
+      questionAllowed,
+    });
   }
 }
