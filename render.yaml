@@ -174,3 +174,11 @@ services:
         value: ""
       - key: BRANDED_CONTENT_DISCLOSURE_CONFIRMED
         value: "false"
+      - key: RETENTION_ENGINE_ENABLED
+        value: "true"
+      - key: RETENTION_MIN_SCORE
+        value: "0.56"
+      - key: RETENTION_MIN_PROMPT_GAP_SECONDS
+        value: "45"
+      - key: RETENTION_REPLY_WINDOW_SECONDS
+        value: "120"
