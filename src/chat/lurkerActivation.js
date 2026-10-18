@@ -24,7 +24,8 @@ export class LurkerActivationEngine {
     this.minPromptGapMs = Math.max(120_000, Number(minPromptGapMs) || 240_000);
     this.replyWindowMs = Math.max(30_000, Number(replyWindowMs) || 120_000);
     this.minOpportunity = Math.max(0.05, Math.min(0.95, Number(minOpportunity) || 0.42));
-    this.warmupMs = Math.max(0, Number(warmupMs) || 90_000);
+    const parsedWarmupMs = Number(warmupMs);
+    this.warmupMs = Math.max(0, Number.isFinite(parsedWarmupMs) ? parsedWarmupMs : 90_000);
     this.rng = rng;
     this.now = now;
     this.startedAt = this.now();
