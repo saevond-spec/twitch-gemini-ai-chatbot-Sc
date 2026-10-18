@@ -19,6 +19,7 @@ import { metrics as promMetrics, getMetrics } from './utils/metrics.js';
 import { getBrain } from './brains/index.js';
 import { scoreBrains } from './brains/router.js';
 import { enqueueTask, startWorker, drainQueues } from './queue/index.js';
+import { enabledWorkerQueues, estimatedMonthlyIdlePolls, workerRedisBudget } from './queue/workerPolicy.js';
 import { jobHandlers } from './queue/handlers.js';
 import bus from './bus/index.js';
 import { loadPlugins } from './plugins/index.js';
@@ -192,7 +193,7 @@ app.get('/readyz', async (req, res) => {
   let attempts = 0;
   while (attempts < 20) {
     const twitchReady = !!global.twitchClient?.connected;
-    const redisRequired = Boolean(config.redis.url || process.env.WORKERS_ENABLED === 'true');
+    const redisRequired = process.env.REDIS_REQUIRED === 'true';
     const redisReady = !redisRequired || !!getRedis();
     const deepseekReady = !!deepseek;
     const authReady = isAuthorized();
@@ -950,15 +951,23 @@ async function initializeBot() {
   log.info('Loading custom commands...');
   await loadCustomCommandsIntoMemory();
   if (process.env.WORKERS_ENABLED === 'true') {
-    log.info('Starting BullMQ workers...');
-    const queueNames = Object.keys(jobHandlers);
-    for (const q of queueNames) {
-      const worker = startWorker(q, jobHandlers[q], 1);
-      workers.push(worker);
+    const queueNames = enabledWorkerQueues(Object.keys(jobHandlers));
+    if (!getRedis()) {
+      log.warn('BullMQ workers skipped because Redis is unavailable; core chat stays online');
+    } else if (!queueNames.length) {
+      log.info('No BullMQ workers are needed for the currently enabled delivery features');
+    } else {
+      log.info('Starting demand-driven BullMQ workers...');
+      for (const q of queueNames) {
+        const worker = startWorker(q, jobHandlers[q], 1);
+        if (worker) workers.push(worker);
+      }
+      const budget = workerRedisBudget();
+      const estimatedPolls = estimatedMonthlyIdlePolls(queueNames.length, budget);
+      log.info(`Task workers started for: ${queueNames.join(', ')} (estimated idle polls/month ≈ ${estimatedPolls})`);
     }
-    log.info('Task queue workers started for: ' + queueNames.join(', '));
   } else {
-    log.info('Placeholder BullMQ workers disabled to avoid idle Redis requests');
+    log.info('BullMQ workers disabled');
   }
 
   // Register bus listeners before plugins

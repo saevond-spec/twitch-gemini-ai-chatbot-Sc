@@ -20,7 +20,22 @@ export async function connectRedis() {
   redis.on('connect', () => log.info('Connected to Redis'));
   redis.on('error', (err) => log.error('Redis error', err));
   redis.on('close', () => log.warn('Redis connection closed'));
-  await redis.ping();
-  return redis;
+
+  try {
+    await redis.ping();
+    return redis;
+  } catch (err) {
+    const message = String(err?.message || err || '');
+    const quotaBlocked = /max requests limit exceeded|quota|rate limit/i.test(message);
+    log.warn(
+      quotaBlocked
+        ? 'Redis request quota is unavailable; continuing with in-memory/file fallbacks'
+        : `Redis startup check failed; continuing with fallbacks: ${message}`
+    );
+    const failed = redis;
+    redis = null;
+    try { failed.disconnect(); } catch {}
+    return null;
+  }
 }
 export function getRedis() { return redis; }

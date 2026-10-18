@@ -279,3 +279,27 @@ test('low-pressure lurker activation is wired into production', () => {
   assert.match(render, /LURKER_ACTIVATION_ENABLED\n\s+value: "true"/);
   assert.match(render, /LURKER_PROMPT_GAP_SECONDS\n\s+value: "240"/);
 });
+
+
+test('Redis quota failure keeps core chat alive and workers demand-driven', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const queue = fs.readFileSync(path.join(root, 'src/queue/index.js'), 'utf8');
+  const policy = fs.readFileSync(path.join(root, 'src/queue/workerPolicy.js'), 'utf8');
+  const redis = fs.readFileSync(path.join(root, 'src/storage/redis.js'), 'utf8');
+  const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+  assert.match(app, /enabledWorkerQueues/);
+  assert.match(app, /REDIS_REQUIRED === 'true'/);
+  assert.match(app, /No BullMQ workers are needed/);
+  assert.match(queue, /drainDelay:/);
+  assert.match(queue, /stalledInterval:/);
+  assert.match(queue, /Skipping queue .* no active worker policy/);
+  assert.match(policy, /WORKER_QUEUES \|\| 'auto'/);
+  assert.match(policy, /deliveryEnabled/);
+  assert.match(redis, /max requests limit exceeded/);
+  assert.match(redis, /continuing with in-memory\/file fallbacks/);
+  assert.match(render, /WORKER_QUEUES\n\s+value: "auto"/);
+  assert.match(render, /BULLMQ_DRAIN_DELAY_SECONDS\n\s+value: "120"/);
+  assert.match(render, /BULLMQ_STALLED_INTERVAL_SECONDS\n\s+value: "300"/);
+  assert.match(render, /REDIS_REQUIRED\n\s+value: "false"/);
+});
