@@ -39,6 +39,14 @@ export const metrics = {
   retentionOpportunityScore: new client.Histogram({ name: 'retention_opportunity_score', help: 'Estimated conversational reply opportunity score', buckets: [0.2, 0.4, 0.56, 0.7, 0.8, 0.9, 1] }),
   retentionBanditScore: new client.Histogram({ name: 'retention_bandit_score', help: 'Thompson-sampling score for selected conversation strategy', buckets: [0.05, 0.1, 0.2, 0.4, 0.8, 1.2, 1.8] }),
   retentionReplyLatency: new client.Histogram({ name: 'retention_reply_latency_seconds', help: 'Seconds until a viewer replies to a retention-styled response', buckets: [5, 15, 30, 60, 90, 120] }),
+  lurkerActivationPrompts: new client.Counter({ name: 'lurker_activation_prompts_total', help: 'Low-pressure silent-user activation prompts sent', labelNames: ['arm'] }),
+  lurkerActivations: new client.Counter({ name: 'lurker_activations_total', help: 'Previously silent chat-connected users who first chatted inside an activation window', labelNames: ['arm'] }),
+  lurkerOrganicFirstChats: new client.Counter({ name: 'lurker_organic_first_chats_total', help: 'Previously silent chat-connected users who first chatted without an active activation prompt' }),
+  lurkerActivationSuppressed: new client.Counter({ name: 'lurker_activation_suppressed_total', help: 'Silent-user activation prompts suppressed by policy or stochastic hold', labelNames: ['reason'] }),
+  lurkerActivationOpportunityScore: new client.Histogram({ name: 'lurker_activation_opportunity_score', help: 'Probability-style opportunity score for low-pressure silent-user prompts', buckets: [0.1, 0.2, 0.3, 0.42, 0.55, 0.7, 0.85] }),
+  lurkerActivationBanditScore: new client.Histogram({ name: 'lurker_activation_bandit_score', help: 'Thompson-sampling score for selected silent-user prompt style', buckets: [0.01, 0.03, 0.05, 0.1, 0.2, 0.4, 0.8] }),
+  lurkerActivationLatency: new client.Histogram({ name: 'lurker_activation_latency_seconds', help: 'Seconds from low-pressure prompt to first chat by a previously silent chat-connected user', buckets: [5, 15, 30, 60, 90, 120] }),
+  lurkerSilentUsers: new client.Gauge({ name: 'lurker_silent_chat_users', help: 'Silent chat-connected users eligible for activation prompts; not equivalent to viewer count', labelNames: ['channel'] }),
 };
 register.registerMetric(metrics.messagesReceived);
 register.registerMetric(metrics.messagesSent);
@@ -76,4 +84,12 @@ register.registerMetric(metrics.retentionSuppressed);
 register.registerMetric(metrics.retentionOpportunityScore);
 register.registerMetric(metrics.retentionBanditScore);
 register.registerMetric(metrics.retentionReplyLatency);
+register.registerMetric(metrics.lurkerActivationPrompts);
+register.registerMetric(metrics.lurkerActivations);
+register.registerMetric(metrics.lurkerOrganicFirstChats);
+register.registerMetric(metrics.lurkerActivationSuppressed);
+register.registerMetric(metrics.lurkerActivationOpportunityScore);
+register.registerMetric(metrics.lurkerActivationBanditScore);
+register.registerMetric(metrics.lurkerActivationLatency);
+register.registerMetric(metrics.lurkerSilentUsers);
 export function getMetrics() { return register.metrics(); }

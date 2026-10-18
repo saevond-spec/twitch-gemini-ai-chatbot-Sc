@@ -42,6 +42,7 @@ import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 import { ConversationRetentionEngine } from './chat/conversationRetention.js';
+import { LurkerActivationEngine } from './chat/lurkerActivation.js';
 import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
 
 const log = createLogger('APP');
@@ -76,6 +77,7 @@ const retentionEngine = new ConversationRetentionEngine({
   minPromptGapMs: config.retention.minPromptGapSeconds * 1000,
   replyWindowMs: config.retention.replyWindowSeconds * 1000,
 });
+const lurkerActivationEngine = new LurkerActivationEngine();
 const joinWelcomeBatcher = new JoinWelcomeBatcher({
   flushMs: config.auto.joinWelcomeBatchMs,
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
@@ -297,6 +299,20 @@ app.get('/api/retention/stats', requireAdmin, async (req, res) => {
   });
 });
 
+app.get('/api/lurker-activation/stats', requireAdmin, async (req, res) => {
+  const channel = String(req.query?.channel || config.twitch.channels[0] || '').replace(/^#?/, '#').toLowerCase();
+  const arms = await lurkerActivationEngine.stats(channel);
+  res.json({
+    channel,
+    arms: arms.map(row => ({
+      ...row,
+      observedPromptSuccessRate: row.impressions ? row.successes / row.impressions : null,
+      activatedUsersPerPrompt: row.impressions ? row.activatedUsers / row.impressions : null,
+    })),
+    note: 'Tracks silent chat-connected users, not confirmed video viewers.',
+  });
+});
+
 app.post('/api/commerce/conversion', requireAdmin, async (req, res) => {
   const channel = String(req.body?.channel || config.twitch.channels[0] || '').replace(/^#?/, '#').toLowerCase();
   const viewer = String(req.body?.viewer || '').toLowerCase();
@@ -400,6 +416,48 @@ function startAutoMessages() {
       const lastBotAt = recentBotEntries.reduce((max, entry) => Math.max(max, Number(entry.ts || 0)), 0);
       if (lastBotAt && now - lastBotAt < AUTO_CHAT_BOT_GAP_MS) continue;
 
+      const moment = streamMomentTracker.snapshot(channel, now);
+      const recentHumanMessages = history.filter(entry =>
+        entry.role === 'user'
+        && Number(entry.ts || 0) >= now - 5 * 60_000
+      ).length;
+
+      const lurkerSelection = await lurkerActivationEngine.consider({
+        channel,
+        silenceMs,
+        recentHumanMessages,
+        recentBotMessages: recentBotEntries.length,
+        streamContext,
+        moment,
+        now,
+      });
+      if (lurkerSelection.opportunity != null) {
+        promMetrics.lurkerActivationOpportunityScore.observe(lurkerSelection.opportunity);
+      }
+      promMetrics.lurkerSilentUsers.set({ channel }, lurkerSelection.silentUsers || 0);
+
+      if (lurkerSelection.eligible) {
+        let activationMsg = lurkerSelection.message.trim();
+        if (config.emotes.enable) {
+          const emote = getRandomEmote(channel);
+          if (emote) activationMsg += ` ${emote}`;
+        }
+
+        if (messageQueue) messageQueue.enqueue(channel, activationMsg);
+        else await twitchClient.say(channel, activationMsg);
+
+        promMetrics.messagesSent.inc();
+        promMetrics.quietMessages.inc();
+        promMetrics.lurkerActivationPrompts.inc({ arm: lurkerSelection.arm });
+        promMetrics.lurkerActivationBanditScore.observe(lurkerSelection.banditScore);
+        await ConversationStore.pushMessage(channel, 'bot', activationMsg);
+        await lurkerActivationEngine.recordPrompt({ channel, selection: lurkerSelection, at: now });
+        log.info(`Low-pressure silent-user activation prompt sent in ${channel} (arm=${lurkerSelection.arm}, silent=${lurkerSelection.silentUsers}, p=${lurkerSelection.opportunity.toFixed(3)})`);
+        continue;
+      } else if (lurkerSelection.reason && lurkerSelection.reason !== 'no_silent_users') {
+        promMetrics.lurkerActivationSuppressed.inc({ reason: lurkerSelection.reason });
+      }
+
       const probability = quietSpeakProbability({
         silenceMs,
         tickMs: AUTO_CHAT_TICK_MS,
@@ -410,7 +468,6 @@ function startAutoMessages() {
       promMetrics.quietSpeakProbability.observe(probability);
       if (Math.random() >= probability) continue;
 
-      const moment = streamMomentTracker.snapshot(channel, now);
       const mode = chooseQuietMode({ history, streamContext, moment });
       const msg = await generateSpontaneousMessage(channel, mode, streamContext, history, moment);
       if (!msg) continue;
@@ -475,6 +532,18 @@ async function handleMessage({ channel, user, message, self }) {
   }
   if (modResult.riskScore > 40) {
     enqueueTask('moderation-review', { channel, user: username, message, riskScore: modResult.riskScore });
+  }
+
+  const silentActivation = await lurkerActivationEngine.onMessage({
+    channel,
+    username: login,
+    now: Date.now(),
+  });
+  if (silentActivation.attributed) {
+    promMetrics.lurkerActivations.inc({ arm: silentActivation.arm });
+    promMetrics.lurkerActivationLatency.observe(silentActivation.latencyMs / 1000);
+  } else if (silentActivation.wasSilent && silentActivation.reason === 'organic_first_chat') {
+    promMetrics.lurkerOrganicFirstChats.inc();
   }
 
   const attributedResponse = engagementAttribution.recordHuman(channel, Date.now());
@@ -899,7 +968,6 @@ async function initializeBot() {
   });
   bus.on('twitch.join', ({ channel, username, self }) => {
     try {
-      if (!config.auto.welcomeOnJoin) return;
       if (!shouldWelcomeJoin({
         channel,
         username,
@@ -907,10 +975,20 @@ async function initializeBot() {
         botLogin: configuredBotLogin(),
         ignoredUsers: config.twitch.ignoredUsers,
       })) return;
-      joinWelcomeBatcher.add(channel, String(username).toLowerCase());
+
+      const login = String(username).toLowerCase();
+      lurkerActivationEngine.onJoin({ channel, username: login });
+
+      if (config.auto.welcomeOnJoin) {
+        joinWelcomeBatcher.add(channel, login);
+      }
     } catch (err) {
-      log.warn('Failed to queue join welcome', err.message);
+      log.warn('Failed to process Twitch join', err.message);
     }
+  });
+  bus.on('twitch.part', ({ channel, username, self }) => {
+    if (self) return;
+    lurkerActivationEngine.onPart({ channel, username });
   });
   bus.on('twitch.usernotice', async (...args) => {
     try { await handleUserNotice(...args); } catch (err) { log.error('Error in handleUserNotice', err); }
@@ -1000,6 +1078,7 @@ async function shutdown() {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   if (messageQueue) messageQueue.stop();
   joinWelcomeBatcher.stop();
+  lurkerActivationEngine.stop();
   if (highlightDetector) highlightDetector.stop();
   if (eventSubClient) eventSubClient.disconnect();
   await drainQueues();

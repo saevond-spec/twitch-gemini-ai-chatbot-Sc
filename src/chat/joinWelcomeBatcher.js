@@ -1,14 +1,13 @@
 export function formatJoinWelcome(names = []) {
   const clean = [...new Set(names.map(name => String(name || '').trim().toLowerCase()).filter(Boolean))];
   if (!clean.length) return null;
-  if (clean.length === 1) return `Welcome in @${clean[0]}! 🤖 Glad you're here.`;
 
-  const shown = clean.slice(0, 8).map(name => `@${name}`);
-  const extra = clean.length - shown.length;
-  if (extra > 0) {
-    return `Welcome in ${shown.join(', ')} and ${extra} more — welcome everybody! 🤖`;
+  // Never expose silent usernames. A generic welcome preserves the user's
+  // "welcome everybody" preference without making a lurker feel singled out.
+  if (clean.length === 1) {
+    return 'Welcome in! 🤖 Make yourself comfortable — chat whenever you feel like it.';
   }
-  return `Welcome in ${shown.join(', ')}! 🤖 Glad you're all here.`;
+  return 'Welcome in, everyone! 🤖 Grab a seat — no pressure to type, jump in whenever you want.';
 }
 
 export class JoinWelcomeBatcher {
