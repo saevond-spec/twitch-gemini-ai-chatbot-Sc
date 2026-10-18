@@ -21,7 +21,7 @@ const HINTS = Object.freeze({
   it: /\b(ciao|grazie|come|gioco|bella|bello|molto|questo|questa|perché|anche|puoi|bene|ma|che)\b/i,
 });
 
-const VIETNAMESE_MARKS = /[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/i;
+const VIETNAMESE_MARKS = /[ăâđêôơưạảãấầẩẫậắằẳẵặẹẻẽếềểễệịỉĩọỏõốồổỗộớờởỡợụủũứừửữựỳỷỹỵ]/i;
 const SPANISH_MARKS = /[ñ¿¡]/i;
 const FRENCH_MARKS = /[àâçéèêëîïôûùüÿœæ]/i;
 const PORTUGUESE_MARKS = /[ãõçáàâéêíóôú]/i;
