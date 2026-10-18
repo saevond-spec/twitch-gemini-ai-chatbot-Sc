@@ -64,6 +64,10 @@ const optional = {
   SALES_CONVERSION_COOLDOWN_DAYS: 30,
   SALES_OFFERS_JSON: '',
   BRANDED_CONTENT_DISCLOSURE_CONFIRMED: 'false',
+  RETENTION_ENGINE_ENABLED: 'true',
+  RETENTION_MIN_SCORE: 0.56,
+  RETENTION_MIN_PROMPT_GAP_SECONDS: 45,
+  RETENTION_REPLY_WINDOW_SECONDS: 120,
   IMAGE_COMMAND_NAME: '!image',
   VIDEO_COMMAND_NAME: '!video',
   TTS_COMMAND_NAME: '!tts',
@@ -109,6 +113,9 @@ const convert = {
   SALES_VIEWER_COOLDOWN_DAYS: Number,
   SALES_CHANNEL_COOLDOWN_MINUTES: Number,
   SALES_CONVERSION_COOLDOWN_DAYS: Number,
+  RETENTION_MIN_SCORE: Number,
+  RETENTION_MIN_PROMPT_GAP_SECONDS: Number,
+  RETENTION_REPLY_WINDOW_SECONDS: Number,
   PORT: Number,
   ALLOW_LINKS: Boolean,
   ENABLE_EMOTE_APPENDING: Boolean,
@@ -123,6 +130,7 @@ const convert = {
   WELCOME_ON_JOIN: Boolean,
   SALES_ENGINE_ENABLED: Boolean,
   BRANDED_CONTENT_DISCLOSURE_CONFIRMED: Boolean,
+  RETENTION_ENGINE_ENABLED: Boolean,
 };
 
 for (const [key, fn] of Object.entries(convert)) {
@@ -193,6 +201,12 @@ export const config = {
     conversionCooldownDays: env.SALES_CONVERSION_COOLDOWN_DAYS,
     offersJson: env.SALES_OFFERS_JSON || '',
     brandedContentConfirmed: env.BRANDED_CONTENT_DISCLOSURE_CONFIRMED,
+  },
+  retention: {
+    enabled: env.RETENTION_ENGINE_ENABLED,
+    minScore: env.RETENTION_MIN_SCORE,
+    minPromptGapSeconds: env.RETENTION_MIN_PROMPT_GAP_SECONDS,
+    replyWindowSeconds: env.RETENTION_REPLY_WINDOW_SECONDS,
   },
   media: {
     imageCommand: env.IMAGE_COMMAND_NAME || '!image',
