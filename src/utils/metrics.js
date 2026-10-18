@@ -33,6 +33,12 @@ export const metrics = {
   commerceSuppressed: new client.Counter({ name: 'commerce_suppressed_total', help: 'Commercial prompts suppressed by policy', labelNames: ['reason'] }),
   commerceOptOuts: new client.Counter({ name: 'commerce_opt_outs_total', help: 'Viewers opting out of commercial prompts' }),
   commerceBanditScore: new client.Histogram({ name: 'commerce_bandit_score', help: 'Thompson-sampling value score for selected offers', buckets: [0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2] }),
+  retentionPrompts: new client.Counter({ name: 'retention_prompts_total', help: 'Conversation-retention replies sent', labelNames: ['strategy'] }),
+  retentionReplies: new client.Counter({ name: 'retention_replies_total', help: 'Viewer replies attributed to a retention strategy', labelNames: ['strategy'] }),
+  retentionSuppressed: new client.Counter({ name: 'retention_suppressed_total', help: 'Retention moves suppressed by policy', labelNames: ['reason'] }),
+  retentionOpportunityScore: new client.Histogram({ name: 'retention_opportunity_score', help: 'Estimated conversational reply opportunity score', buckets: [0.2, 0.4, 0.56, 0.7, 0.8, 0.9, 1] }),
+  retentionBanditScore: new client.Histogram({ name: 'retention_bandit_score', help: 'Thompson-sampling score for selected conversation strategy', buckets: [0.05, 0.1, 0.2, 0.4, 0.8, 1.2, 1.8] }),
+  retentionReplyLatency: new client.Histogram({ name: 'retention_reply_latency_seconds', help: 'Seconds until a viewer replies to a retention-styled response', buckets: [5, 15, 30, 60, 90, 120] }),
 };
 register.registerMetric(metrics.messagesReceived);
 register.registerMetric(metrics.messagesSent);
@@ -64,4 +70,10 @@ register.registerMetric(metrics.commerceConversions);
 register.registerMetric(metrics.commerceSuppressed);
 register.registerMetric(metrics.commerceOptOuts);
 register.registerMetric(metrics.commerceBanditScore);
+register.registerMetric(metrics.retentionPrompts);
+register.registerMetric(metrics.retentionReplies);
+register.registerMetric(metrics.retentionSuppressed);
+register.registerMetric(metrics.retentionOpportunityScore);
+register.registerMetric(metrics.retentionBanditScore);
+register.registerMetric(metrics.retentionReplyLatency);
 export function getMetrics() { return register.metrics(); }
