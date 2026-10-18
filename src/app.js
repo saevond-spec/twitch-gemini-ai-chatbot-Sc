@@ -42,6 +42,7 @@ import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 import { ConversationRetentionEngine } from './chat/conversationRetention.js';
+import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -283,8 +284,10 @@ app.get('/api/commerce/stats', requireAdmin, async (req, res) => {
 });
 
 app.get('/api/retention/stats', requireAdmin, async (req, res) => {
-  const strategies = await retentionEngine.stats();
+  const language = String(req.query?.language || 'global').toLowerCase();
+  const strategies = await retentionEngine.stats(language);
   res.json({
+    language,
     strategies: strategies.map(row => ({
       ...row,
       observedReplyRate: row.impressions ? row.replies / row.impressions : null,
@@ -496,7 +499,14 @@ async function handleMessage({ channel, user, message, self }) {
   // Preserve surrounding chat and track new-viewer engagement without calling out silent lurkers.
   const priorHistory = await ConversationStore.getHistory(channel, config.deepseek.maxHistory);
   const previousProfile = await ProfileStore.get(channel, login);
+  const detectedLanguage = detectLanguage(message, previousProfile.preferredLanguage);
   const viewerProfile = nextViewerProfile(previousProfile, message);
+  if (detectedLanguage.confidence >= 0.75 || !viewerProfile.preferredLanguage) {
+    viewerProfile.preferredLanguage = detectedLanguage.code;
+    viewerProfile.languageConfidence = detectedLanguage.confidence;
+    viewerProfile.languageUpdatedAt = Date.now();
+  }
+  const responseLanguage = viewerProfile.preferredLanguage || detectedLanguage.code || 'en';
   await ProfileStore.update(channel, login, viewerProfile);
   await ConversationStore.pushMessage(channel, 'user', message, username);
 
@@ -627,6 +637,7 @@ async function handleMessage({ channel, user, message, self }) {
   const brainConfig = Brain.getConfig({ moment, streamContext });
   const history = priorHistory;
   let systemPrompt = brainConfig.systemPrompt;
+  systemPrompt += `\n\n${languageInstruction(responseLanguage)}`;
   if (proactiveWelcome) {
     systemPrompt += `\n\nNEW VIEWER GUIDANCE: ${firstChatInstruction(username, message)}`;
   }
@@ -677,6 +688,7 @@ async function handleMessage({ channel, user, message, self }) {
     history,
     streamContext,
     moment,
+    language: responseLanguage,
     now: Date.now(),
   });
   if (retentionSelection.opportunity != null) {
@@ -767,9 +779,10 @@ async function handleMessage({ channel, user, message, self }) {
           message,
           strategy: retentionSelection.strategy,
           questionAllowed: retentionSelection.questionAllowed,
+          language: responseLanguage,
         })
       : ((status === 402 || code === 'insufficient_balance')
-          ? getContextualFallbackResponse(message, username)
+          ? localizedGenericFallback({ code: responseLanguage, username })
           : getFallbackResponse());
 
     const sentAt = Date.now();
