@@ -75,7 +75,7 @@ registerBuiltin('!music', (user, channel, client, message, context = {}) => {
 }, 'Show status and control NCS stream music');
 
 registerBuiltin('!play', (user, channel, client, message, context = {}) => {
-  return handleMusicCommand(user, '!music play', context.musicPlayerUrl);
+  return handleMusicCommand(user, message, context.musicPlayerUrl);
 }, 'Start NCS stream music (moderators)');
 
 registerBuiltin('!skip', (user) => {
