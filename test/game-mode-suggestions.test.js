@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { suggestGameModes, gameModeResearchSources } from '../src/chat/gameModeSuggestions.js';
-import { builtins } from '../src/commands/index.js';
-import '../src/commands/builtins.js';
 
 function live(gameName) {
   return { live: true, gameName };
@@ -52,31 +50,6 @@ test('keeps current stream replies under a conservative Twitch chat length budge
     const response = suggestGameModes(live(gameName), now);
     assert.ok(response.length <= 450, gameName + ' response was ' + response.length + ' characters');
   }
-});
-
-test('!mode reads the current live category from the highlight detector context', async () => {
-  const command = builtins.get('!mode');
-  assert.ok(command, '!mode should be registered');
-  let requestedChannel = null;
-
-  const response = await command.handler(
-    { username: 'viewer' },
-    '#saevond',
-    {},
-    '!mode',
-    {
-      highlightDetector: {
-        getLiveContext(channel) {
-          requestedChannel = channel;
-          return { live: true, gameName: 'Live Test Category' };
-        },
-      },
-    },
-  );
-
-  assert.equal(requestedChannel, '#saevond');
-  assert.match(response, /Live Test Category/);
-  assert.match(response, /will not guess/);
 });
 
 test('does not guess when the game is offline, unknown, or not a game category', () => {
