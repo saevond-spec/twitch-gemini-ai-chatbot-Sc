@@ -17,6 +17,7 @@ h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 3rem); }
 .now-playing { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .now-playing h2 { margin: 0; font-size: clamp(1.1rem, 3vw, 1.5rem); overflow-wrap: anywhere; }
 #station-name, .setup p, .setup li, .commands p, footer p { color: #c7c6ce; line-height: 1.55; }
+.route-note { padding: 12px 14px; border-left: 3px solid #f0b86a; border-radius: 6px; background: rgba(240, 184, 106, 0.08); }
 #station-name { margin: 7px 0 0; }
 a { color: #d4c2ff; }
 .player-frame { width: min(100%, 760px); margin: 18px auto 0; overflow: hidden; border-radius: 12px; background: #000; aspect-ratio: 16 / 9; }
