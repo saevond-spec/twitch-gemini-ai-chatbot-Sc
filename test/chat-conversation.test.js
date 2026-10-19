@@ -111,7 +111,10 @@ test('outgoing queue retries messages refused during a temporary disconnect', as
     queue.enqueue('#saevond', 'welcome @alice');
     await queue.process();
 
-    assert.deepEqual(queue.queue.get('#saevond'), ['welcome @alice']);
+    assert.deepEqual(
+      queue.queue.get('#saevond').map(entry => typeof entry === 'string' ? entry : entry.message),
+      ['welcome @alice'],
+    );
     assert.equal(queue.globalBucket.tokens, startingTokens);
     assert.equal(queue.lastSentAt.has('#saevond'), false);
 
