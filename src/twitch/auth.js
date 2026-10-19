@@ -7,6 +7,7 @@ import {
   durableTokenVaultConfigured,
   loadBestToken,
   persistToken,
+  repairTokenCopies,
 } from './tokenVault.js';
 import { createLogger } from '../logger/index.js';
 
@@ -18,6 +19,7 @@ const REQUEST_TIMEOUT_MS = 10000;
 let currentToken = null;
 let refreshTimer = null;
 let refreshPromise = null;
+let persistenceRetryTimer = null;
 let persistenceState = {
   durableConfigured: durableTokenVaultConfigured(),
   durableHealthy: false,
@@ -75,6 +77,10 @@ async function revokeAccessToken(accessToken) {
 
 async function clearStoredToken({ legacy = false } = {}) {
   if (!legacy) {
+    if (persistenceRetryTimer) {
+      clearTimeout(persistenceRetryTimer);
+      persistenceRetryTimer = null;
+    }
     await clearTokenVault();
     persistenceState = {
       ...persistenceState,
@@ -121,6 +127,29 @@ async function loadLegacyToken() {
   return readJSON(LEGACY_TOKEN_FILE, null);
 }
 
+function schedulePersistenceRepair(token, attempt = 0) {
+  if (!durableTokenVaultConfigured() || !token?.access_token) return;
+  if (persistenceRetryTimer) clearTimeout(persistenceRetryTimer);
+
+  const delay = Math.min(300_000, 15_000 * (2 ** Math.min(5, Math.max(0, attempt))));
+  persistenceRetryTimer = setTimeout(async () => {
+    persistenceRetryTimer = null;
+    const result = await repairTokenCopies(token);
+    if (result.durable) {
+      persistenceState = {
+        ...persistenceState,
+        durableHealthy: true,
+        lastDurableSaveAt: Date.now(),
+        lastSource: 'postgres',
+      };
+      log.info(`Recovered durable Twitch OAuth persistence for generation ${token.vault_generation}`);
+      return;
+    }
+    schedulePersistenceRepair(token, attempt + 1);
+  }, delay);
+  persistenceRetryTimer.unref?.();
+}
+
 async function saveToken(tokenData) {
   const result = await persistToken(tokenData, {
     previousGeneration: currentToken?.vault_generation || tokenData?.vault_generation || 0,
@@ -133,8 +162,13 @@ async function saveToken(tokenData) {
   };
 
   if (persistenceState.durableConfigured && !result.durable) {
-    log.error('Twitch token updated but durable OAuth vault write failed; do not intentionally redeploy until storage recovers');
+    log.error('Twitch token updated but durable OAuth vault write failed; automatic persistence repair scheduled');
+    schedulePersistenceRepair(result.token);
   } else if (result.durable) {
+    if (persistenceRetryTimer) {
+      clearTimeout(persistenceRetryTimer);
+      persistenceRetryTimer = null;
+    }
     log.info(`Twitch token persisted durably (generation ${result.token.vault_generation})`);
   }
 
