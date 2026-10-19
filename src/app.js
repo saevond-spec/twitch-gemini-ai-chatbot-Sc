@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config/index.js';
 import { logger, createLogger } from './logger/index.js';
 import { connectRedis, getRedis } from './storage/redis.js';
-import { initAuth, exchangeCodeForToken, isAuthorized, BOT_SCOPES, configuredBotLogin } from './twitch/auth.js';
+import { initAuth, exchangeCodeForToken, isAuthorized, BOT_SCOPES, configuredBotLogin, getAuthPersistenceStatus } from './twitch/auth.js';
 import { DeepSeekClient } from './ai/client.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { builtins, loadCustomCommands, saveCustomCommand, deleteCustomCommand } from './commands/index.js';
@@ -198,7 +198,10 @@ app.get('/readyz', async (req, res) => {
     const deepseekReady = !!deepseek;
     const authReady = isAuthorized();
     if (twitchReady && redisReady && deepseekReady && authReady) {
-      return res.status(200).json({ status: 'ready' });
+      return res.status(200).json({
+        status: 'ready',
+        oauthPersistence: getAuthPersistenceStatus(),
+      });
     }
     await new Promise(resolve => setTimeout(resolve, 500));
     attempts++;
@@ -208,12 +211,20 @@ app.get('/readyz', async (req, res) => {
     twitch: global.twitchClient?.connected || false,
     deepseek: !!deepseek,
     auth: isAuthorized(),
+    oauthPersistence: getAuthPersistenceStatus(),
   });
 });
 
 app.get('/metrics', requireAdmin, async (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(await getMetrics());
+});
+
+app.get('/api/auth/status', requireAdmin, (req, res) => {
+  res.json({
+    account: configuredBotLogin(),
+    ...getAuthPersistenceStatus(),
+  });
 });
 
 app.get('/auth/login', async (req, res) => {
