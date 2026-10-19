@@ -190,3 +190,40 @@ test('offline !clip gives a clear response and creates nothing', async (t) => {
   assert.equal(result.status, 'offline');
   assert.equal(clipModule.calls.length, 0);
 });
+
+test('live game category changes update context without resetting stream evidence', async (t) => {
+  const { HighlightDetector } = await loadDetector(t);
+  const detector = new HighlightDetector({ chat: async () => '{}' });
+  const { state } = primeLive(detector);
+  const message = { at: Date.now(), username: 'viewer1', message: 'nice clutch', excitement: 2 };
+  const candidate = { startSeconds: 10, endSeconds: 45, title: 'NARAKA clutch', reason: 'chat spike', score: 88 };
+  const vote = { username: 'viewer1', at: Date.now() };
+  state.messages = [message];
+  state.messageHistory = [message];
+  state.candidates = [candidate];
+  state.clipVotes = [vote];
+  state.lastAiAt = 1234;
+
+  let persistCalls = 0;
+  detector.persist = async () => { persistCalls += 1; };
+  detector.helix = async (pathname) => pathname === '/streams'
+    ? [{
+      id: state.streamId,
+      started_at: state.startedAt,
+      title: 'ARC Raiders extraction run',
+      game_name: 'ARC Raiders',
+    }]
+    : [];
+
+  await detector.checkChannel(state);
+
+  assert.equal(state.gameName, 'ARC Raiders');
+  assert.equal(state.streamTitle, 'ARC Raiders extraction run');
+  assert.equal(state.streamId, 'stream-live');
+  assert.equal(state.messages[0], message);
+  assert.equal(state.messageHistory[0], message);
+  assert.equal(state.candidates[0], candidate);
+  assert.equal(state.clipVotes[0], vote);
+  assert.equal(state.lastAiAt, 1234);
+  assert.equal(persistCalls, 1);
+});

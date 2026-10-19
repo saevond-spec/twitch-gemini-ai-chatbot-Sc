@@ -336,6 +336,20 @@ export class HighlightDetector {
           state.pendingFinalize = false;
           log.info(`Tracking highlights for ${state.channel} stream ${state.streamId}`);
           await this.persist(state);
+        } else {
+          const nextStreamTitle = cleanText(stream.title, 140);
+          const nextGameName = cleanText(stream.game_name, 80);
+          const gameChanged = state.gameName !== nextGameName;
+          const contextChanged = gameChanged || state.streamTitle !== nextStreamTitle;
+          if (contextChanged) {
+            const previousGameName = state.gameName || 'unknown';
+            state.streamTitle = nextStreamTitle;
+            state.gameName = nextGameName;
+            await this.persist(state);
+            if (gameChanged) {
+              log.info(`Live game category changed for ${state.channel}: ${previousGameName} -> ${nextGameName || 'unknown'}`);
+            }
+          }
         }
       } else if (state.live) {
         await this.finishStream(state);
