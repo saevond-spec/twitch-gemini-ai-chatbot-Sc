@@ -45,6 +45,7 @@ function durableState(profile) {
     followed: Boolean(profile.followed),
     followedAt: profile.followedAt || null,
     followPromptedAt: profile.followPromptedAt || null,
+    subscriptionPromptedAt: profile.subscriptionPromptedAt || null,
     proactiveOptOut: Boolean(profile.proactiveOptOut),
     commercialOptOut: Boolean(profile.commercialOptOut),
     lastCommercialPromptAt: profile.lastCommercialPromptAt || null,
