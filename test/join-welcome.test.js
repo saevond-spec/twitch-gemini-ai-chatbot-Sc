@@ -9,16 +9,19 @@ test('join welcomes use a short batching window and one-minute rejoin dedupe', (
   batcher.stop();
 });
 
-test('single-viewer greetings rotate through distinct cuh-flavored lines', () => {
-  const greetings = Array.from({ length: 5 }, (_, index) => formatJoinWelcome(['Alice'], index));
-  assert.equal(new Set(greetings).size, 5);
+test('single-viewer greetings provide 75 unique cuh-flavored lines before cycling', () => {
+  const greetings = Array.from({ length: 75 }, (_, index) => formatJoinWelcome(['Alice'], index));
+  assert.equal(new Set(greetings).size, 75);
   assert.ok(greetings.every(message => message.includes('@alice') && message.includes('cuh')));
+  assert.equal(formatJoinWelcome(['Alice'], 75), greetings[0]);
+  assert.ok(greetings.every(message => !/@\\s/.test(message)));
 });
 
-test('group greetings also rotate without changing burst acknowledgement', () => {
-  const greetings = Array.from({ length: 4 }, (_, index) => formatJoinWelcome(['Alice', 'Bob'], index));
-  assert.equal(new Set(greetings).size, 4);
+test('group greetings provide 75 unique lines and preserve named burst acknowledgement', () => {
+  const greetings = Array.from({ length: 75 }, (_, index) => formatJoinWelcome(['Alice', 'Bob'], index));
+  assert.equal(new Set(greetings).size, 75);
   assert.ok(greetings.every(message => message.includes('@alice') && message.includes('@bob') && message.includes('cuh')));
+  assert.equal(formatJoinWelcome(['Alice', 'Bob'], 75), greetings[0]);
 });
 
 test('each channel rotates its greeting across consecutive join batches', async () => {
@@ -58,10 +61,11 @@ test('multiple incoming viewers are welcomed together by username', () => {
 });
 
 test('large arrival bursts batch named welcomes without flooding chat', () => {
-  const names = Array.from({ length: 25 }, (_, i) => `viewer${i + 1}`);
+  const names = Array.from({ length: 75 }, (_, i) => `viewer${i + 1}`);
   const msg = formatJoinWelcome(names);
   assert.match(msg, /@viewer1/);
-  assert.match(msg, /and 17 more/);
+  assert.match(msg, /@viewer8/);
+  assert.match(msg, /and 67 more/);
   assert.ok(msg.length < 500);
 });
 
