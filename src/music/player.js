@@ -48,13 +48,13 @@ export function createMusicController(options = {}) {
 
   function handleMusicCommand(user, message, musicPlayerUrl = '') {
     const parts = String(message || '').trim().toLowerCase().split(/\s+/);
-    const action = parts[1] || 'status';
+    const action = parts[0] === '!play' ? 'play' : (parts[1] || 'status');
 
     if (action === 'status') {
       const current = state.currentTrack ? ' Now playing: ' + state.currentTrack + '.' : '';
       const player = musicPlayerUrl ? ' Player page: ' + musicPlayerUrl + '.' : ' Open the /music-player page.';
       return 'Music player is ' + (state.playing ? 'set to play' : 'paused') + ' — ' + getState().stationLabel + '.' + current
-        + ' Viewers hear it only when player audio is routed into the broadcast.' + player + ' Chat: !music dubstep, !music club, !music play, !music pause, !skip, !song. Station changes and skip are mod-only.';
+        + ' Viewers hear it only when player audio is routed into the broadcast.' + player + ' Chat: !play, !music dubstep, !music club, !music play, !music pause, !skip, !song. Station changes and skip are mod-only.';
     }
 
     if (action === 'club' || action === 'dubstep') {
@@ -73,7 +73,7 @@ export function createMusicController(options = {}) {
         : 'Stream music paused.';
     }
 
-    return 'Use !music [club|dubstep|play|pause], !skip, or !song.';
+    return 'Use !play, !music [club|dubstep|play|pause], !skip, or !song.';
   }
 
   function handleSkipCommand(user) {
