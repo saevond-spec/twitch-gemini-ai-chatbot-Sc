@@ -28,13 +28,14 @@ function renderState() {
   if (/^[A-Za-z0-9_-]{10,80}$/.test(musicState.playlistId || '')) {
     linkNode.href = 'https://www.youtube.com/playlist?list=' + musicState.playlistId;
   }
-  enableButton.disabled = !playerReady || !stateReceived || userEnabledAudio || playbackStarted;
+  const gestureRetryNeeded = autoplayBlocked && !playbackStarted;
+  enableButton.disabled = !playerReady || !stateReceived || playbackStarted || (userEnabledAudio && !gestureRetryNeeded);
   enableButton.textContent = playbackStarted
     ? 'Audio playing'
-    : userEnabledAudio
-      ? 'Audio enabled'
-      : autoplayBlocked
-        ? 'Tap to start audio'
+    : autoplayBlocked
+      ? 'Tap to start audio'
+      : userEnabledAudio
+        ? 'Audio enabled'
         : 'Auto-start pending';
 }
 
@@ -86,6 +87,9 @@ function enableAudio() {
 function onPlayerStateChange(event) {
   if (!window.YT || !player) return;
   if (event.data === window.YT.PlayerState.CUED) {
+    playbackStarted = false;
+    autoplayBlocked = false;
+    renderState();
     player.setLoop(true);
     player.setShuffle(true);
     if (musicState && musicState.playing) {
