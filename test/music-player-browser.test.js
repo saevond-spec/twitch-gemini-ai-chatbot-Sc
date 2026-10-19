@@ -96,8 +96,8 @@ test('player tries audible autoplay and offers a one-tap fallback when blocked',
   const button = elements.get('enable-audio');
   const status = elements.get('connection-status');
 
-  assert.ok(player.calls.some(call => Array.isArray(call) && call[0] === 'setLoop' && call[1] === true));
   player.options.events.onStateChange({ data: 5 });
+  assert.ok(player.calls.some(call => Array.isArray(call) && call[0] === 'setLoop' && call[1] === true));
   assert.ok(player.calls.includes('playVideo'), 'cued playlist should attempt to start automatically');
 
   player.options.events.onAutoplayBlocked();
