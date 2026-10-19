@@ -32,7 +32,7 @@ import { writeFile } from 'fs/promises';
 import { randomBytes } from 'crypto';
 import { HighlightDetector } from './highlights/detector.js';
 import { IncomingMessageDeduper } from './chat/incomingDeduper.js';
-import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
+import { nextViewerProfile, shouldProactivelyWelcome, shouldOfferFollow, followLineFor, shouldOfferSubscription, subscriptionLineFor, firstChatInstruction } from './chat/viewerEngagement.js';
 import { ProactiveWelcomeLimiter } from './chat/proactiveWelcomeLimiter.js';
 import { StreamMomentTracker } from './chat/streamMomentTracker.js';
 import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
@@ -730,6 +730,25 @@ async function handleMessage({ channel, user, message, self }) {
     message,
     directInteraction,
   });
+  const growthAt = Date.now();
+  const growthCutoff = growthAt - 10 * 60 * 1000;
+  const recentHumanTurns = history.filter(entry =>
+    entry.role === 'user'
+    && String(entry.username || '').toLowerCase() === login
+    && Number(entry.ts || 0) >= growthCutoff
+  ).length + 1;
+  const recentBotReplies = history.filter(entry =>
+    (entry.role === 'bot' || entry.role === 'assistant')
+    && Number(entry.ts || 0) >= growthCutoff
+  ).length;
+  const offerSubscription = shouldOfferSubscription({
+    profile: viewerProfile,
+    message,
+    directInteraction,
+    isSubscriber: Boolean(user.badges?.subscriber),
+    recentHumanTurns,
+    recentBotReplies,
+  });
   const salesSelection = await commerceEngine.consider({
     channel,
     viewer: login,
@@ -765,6 +784,7 @@ async function handleMessage({ channel, user, message, self }) {
     directInteraction,
     proactiveWelcome,
     offerFollow,
+    offerSubscription,
     salesEligible: salesSelection.eligible,
     history,
     streamContext,
@@ -808,6 +828,7 @@ async function handleMessage({ channel, user, message, self }) {
     let finalReply = processedReply || reply;
     if (!finalReply.trim()) finalReply = getFallbackResponse();
     if (offerFollow) finalReply = `${finalReply} ${followLineFor(login)}`;
+    if (offerSubscription) finalReply = `${finalReply} ${subscriptionLineFor()}`;
     if (salesSelection.eligible) finalReply = `${finalReply} ${salesSelection.text}`;
     if (proactiveWelcome) promMetrics.viewerWelcomes.inc();
     if (brainName === 'analyst') promMetrics.analyticalReplies.inc();
@@ -816,6 +837,7 @@ async function handleMessage({ channel, user, message, self }) {
       engagementAttribution.recordAnalytical(channel, Date.now());
     }
     if (offerFollow) promMetrics.followPrompts.inc();
+    if (offerSubscription) promMetrics.subscriptionPrompts.inc();
     if (salesSelection.eligible) {
       await commerceEngine.recordImpression({ channel, viewer: login, selection: salesSelection });
       promMetrics.commerceImpressions.inc({ offer: salesSelection.offer.id });
@@ -831,6 +853,7 @@ async function handleMessage({ channel, user, message, self }) {
     await ProfileStore.update(channel, login, {
       botInteractions: viewerProfile.botInteractions + 1,
       followPromptedAt: offerFollow ? sentAt : viewerProfile.followPromptedAt,
+      subscriptionPromptedAt: offerSubscription ? sentAt : viewerProfile.subscriptionPromptedAt,
       lastCommercialPromptAt: salesSelection.eligible ? sentAt : viewerProfile.lastCommercialPromptAt,
       commercialPromptCount: Number(viewerProfile.commercialPromptCount || 0) + (salesSelection.eligible ? 1 : 0),
       lastBotReplyAt: sentAt,
