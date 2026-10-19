@@ -1,75 +1,93 @@
-const SINGLE_WELCOME_OPENERS = [
-  name => `Ayy @${name}, welcome in!`,
-  name => `Yo @${name}, you made it!`,
-  name => `What's good, @${name}?`,
-  name => `Look who pulled up — @${name}!`,
-  name => `@${name} just joined the chaos!`,
-  name => `Hey @${name}, glad you found the stream!`,
-  name => `Welcome to the lobby, @${name}!`,
-  name => `The stream just got better — @${name} is here!`,
-  name => `Big welcome to @${name}!`,
-  name => `We got company — welcome in, @${name}!`,
-  name => `@${name} rolled into chat!`,
-  name => `Fresh energy in chat — welcome, @${name}!`,
-  name => `The squad's got a new face: @${name}!`,
-  name => `Welcome aboard, @${name}!`,
-  name => `Make some room — @${name} just pulled up!`,
-];
-
-const SINGLE_WELCOME_CLOSERS = [
-  "Glad you're here, cuh 😎",
-  "Good to see you in chat, cuh 🤖",
-  "Settle in and enjoy the stream, cuh 🎮",
-  "Kick back and enjoy the chaos, cuh 😂",
-  "Make yourself at home, cuh!",
-];
-
-const GROUP_WELCOME_OPENERS = [
-  viewers => `Ayy, welcome in ${viewers}!`,
-  viewers => `Yo ${viewers}, glad you made it!`,
-  viewers => `Look who pulled up: ${viewers}!`,
-  viewers => `${viewers} just joined the chaos!`,
-  viewers => `Welcome to the lobby, ${viewers}!`,
-  viewers => `The stream just got livelier — welcome, ${viewers}!`,
-  viewers => `Big welcome to ${viewers}!`,
-  viewers => `We got company — ${viewers} are here!`,
-  viewers => `Fresh energy in chat: ${viewers}!`,
-  viewers => `The squad's growing — welcome, ${viewers}!`,
-  viewers => `Welcome aboard, ${viewers}!`,
-  viewers => `${viewers} rolled into chat!`,
-  viewers => `Make some room — ${viewers} just pulled up!`,
-  viewers => `The chat's picking up — welcome in, ${viewers}!`,
-  viewers => `Hey ${viewers}, happy to have you here!`,
-];
-
-const GROUP_WELCOME_CLOSERS = [
-  "Glad you're all here, cuh 😎",
-  "Good to see you all in chat, cuh 🤖",
-  "Settle in and enjoy the stream, cuh 🎮",
-  "Kick back and enjoy the chaos, cuh 😂",
-  "Make yourselves at home, cuh!",
+// Individually written full messages keep the rotation varied for regular viewers.
+const WELCOME_VARIANTS = [
+  "Ayy, welcome in, {{audience}}! Glad you made it, cuh 😎",
+  "Yo, {{audience}}—good to see you in chat, cuh 🤖",
+  "{{audience}} pulled up! Settle in and enjoy the chaos, cuh 🎮",
+  "What's good, {{audience}}? Hope you're having a good one, cuh 😄",
+  "Welcome to the lobby, {{audience}}! Let's see what happens next, cuh 🎮",
+  "Glad you caught us live, {{audience}}; kick back and enjoy, cuh 😎",
+  "Big welcome to {{audience}}! The gameplay starts now, cuh 🎮",
+  "Hey, {{audience}}—glad you're hanging out with us, cuh 🤖",
+  "Chat just got livelier with {{audience}} here—welcome, cuh 😄",
+  "Welcome aboard, {{audience}}! Settle in for some action, cuh 🎮",
+  "Ayy {{audience}}, hope the stream treats you right, cuh 😎",
+  "Yo, welcome to the chaos, {{audience}}! Glad you're here, cuh 😂",
+  "{{audience}}, you're right on time—welcome in, cuh 🤖",
+  "Good vibes, good game, and {{audience}} in chat—welcome, cuh 😎",
+  "Hey there, {{audience}}! Kick back and enjoy the show, cuh 🤖",
+  "{{audience}} made it to the stream—good to have you, cuh 🎮",
+  "Ayy, the party's better with {{audience}} here, cuh 😎",
+  "Welcome in, {{audience}}! Hope we get a highlight for you, cuh 🎮",
+  "{{audience}}, glad you found this corner of Twitch—welcome, cuh 🤖",
+  "Yo {{audience}}, good timing—the stream's getting interesting, cuh 😄",
+  "Make some room in chat—{{audience}} just arrived, cuh 😂",
+  "Hey {{audience}}, welcome to the stream! Glad you found us, cuh 🤖",
+  "Ayy {{audience}}, good timing—welcome in, cuh 😎",
+  "Welcome to today's stream, {{audience}}! Enjoy the ride, cuh 🎮",
+  "{{audience}}, glad you're here for the next match, cuh 😄",
+  "Yo, chat says welcome, {{audience}}—glad you made it, cuh 🤖",
+  "Ayy {{audience}}, the vibes are right—welcome in, cuh 😎",
+  "Here's a warm welcome, {{audience}}; enjoy the stream, cuh 😄",
+  "{{audience}}, welcome to the chat—settle in at your own pace, cuh 🤖",
+  "Welcome, {{audience}}! Let's see if we can clutch this, cuh 🎮",
+  "Yo {{audience}}, hope the next play is a banger, cuh 😄",
+  "Ayy, welcome to the hangout, {{audience}}! Chill and enjoy, cuh 😎",
+  "{{audience}}, thanks for dropping by—hope you enjoy the stream, cuh 😄",
+  "Welcome in, {{audience}}! No pressure, just vibes, cuh 😎",
+  "What's up, {{audience}}? Glad you're here—make yourself comfy, cuh 🤖",
+  "Welcome to the watch party, {{audience}}! Glad you're here, cuh 🎮",
+  "Ayy, welcome to the stream, {{audience}}—glad you rolled through, cuh 😎",
+  "Yo {{audience}}, settle in and enjoy the match, cuh 🎮",
+  "It's a W having {{audience}} in chat—welcome, cuh 😎",
+  "The chat's looking good with {{audience}} here—welcome, cuh 🤖",
+  "Ayy, welcome aboard, {{audience}}; we're glad you're here, cuh 😄",
+  "Glad you've joined us, {{audience}}; let's have some fun, cuh 😎",
+  "Come catch a vibe with us, {{audience}}—welcome in, cuh 🤖",
+  "{{audience}}, we're rolling—glad you joined us, cuh 🎮",
+  "Welcome, {{audience}}! Hope you catch a clutch moment, cuh 🎮",
+  "Welcome in, {{audience}}; chat's open whenever you feel like jumping in, cuh 🤖",
+  "The stream just got a fresh boost—welcome, {{audience}}, cuh 😎",
+  "Yo {{audience}}, glad you rolled through; enjoy the gameplay, cuh 🎮",
+  "Ayy {{audience}}, good to have you here—stay comfy, cuh 😄",
+  "Welcome to the squad, {{audience}}! Enjoy the gameplay, cuh 🎮",
+  "Good to have you, {{audience}}—welcome in and enjoy the ride, cuh 😎",
+  "Good to have you here, {{audience}}; the chaos awaits, cuh 😂",
+  "Welcome in, {{audience}}! Let's make this a fun one, cuh 🤖",
+  "Ayy {{audience}}, thanks for joining the stream—good to have you, cuh 😎",
+  "Hey {{audience}}, perfect timing—welcome in, cuh 😄",
+  "Yo, the stream is more fun with {{audience}} here—welcome, cuh 😎",
+  "{{audience}}, welcome to the channel! Let's enjoy this moment, cuh 🎮",
+  "Ayy {{audience}}, good to have you along for the match, cuh 🎮",
+  "Welcome in, {{audience}}! Hope you enjoy this little gaming detour, cuh 😄",
+  "Yo {{audience}}, let's see if the next play makes the highlight reel, cuh 🎮",
+  "{{audience}}, pull up and catch the action—welcome to the stream, cuh 😎",
+  "Ayy, glad to have {{audience}} in here—welcome, cuh 🤖",
+  "Welcome to our little corner of Twitch, {{audience}}; enjoy the show, cuh 😄",
+  "Yo {{audience}}, enjoy the gameplay and the occasional chaos, cuh 😂",
+  "Ayy, you made it, {{audience}}! Time for the good stuff, cuh 😎",
+  "Welcome, {{audience}}; you're always welcome to hang out here, cuh 🤖",
+  "{{audience}}, take in the stream at your own pace—glad you're here, cuh 😄",
+  "Yo {{audience}}, you've got front-row seats to the chaos, cuh 😂",
+  "Ayy, glad you joined us, {{audience}}; let the match begin, cuh 🎮",
+  "Welcome in, {{audience}}! The chat's got room for your emotes, cuh 🤖",
+  "What's good, {{audience}}? We're happy to have you here, cuh 😎",
+  "Hey {{audience}}, hope the stream brings a smile—welcome in, cuh 😄",
+  "Ayy {{audience}}, good energy in chat—welcome to the stream, cuh 🤖",
+  "{{audience}}, thanks for being part of this moment; enjoy the stream, cuh 😎",
+  "Yo {{audience}}, glad you landed here—kick back and catch the action, cuh 🎮",
 ];
 
 export function formatJoinWelcome(names = [], variantIndex = 0) {
   const clean = [...new Set(names.map(name => String(name || '').trim().toLowerCase()).filter(Boolean))];
   if (!clean.length) return null;
 
-  if (clean.length === 1) {
-    const index = Math.abs(Math.trunc(Number(variantIndex) || 0))
-      % (SINGLE_WELCOME_OPENERS.length * SINGLE_WELCOME_CLOSERS.length);
-    const opener = SINGLE_WELCOME_OPENERS[Math.floor(index / SINGLE_WELCOME_CLOSERS.length)](clean[0]);
-    const closer = SINGLE_WELCOME_CLOSERS[index % SINGLE_WELCOME_CLOSERS.length];
-    return `${opener} ${closer}`;
-  }
-
   const shown = clean.slice(0, 8).map(name => `@${name}`);
   const extra = clean.length - shown.length;
-  const viewers = extra > 0 ? `${shown.join(', ')} and ${extra} more` : shown.join(', ');
-  const index = Math.abs(Math.trunc(Number(variantIndex) || 0))
-    % (GROUP_WELCOME_OPENERS.length * GROUP_WELCOME_CLOSERS.length);
-  const opener = GROUP_WELCOME_OPENERS[Math.floor(index / GROUP_WELCOME_CLOSERS.length)](viewers);
-  const closer = GROUP_WELCOME_CLOSERS[index % GROUP_WELCOME_CLOSERS.length];
-  return `${opener} ${closer}`;
+  const audience = clean.length === 1
+    ? shown[0]
+    : extra > 0 ? `${shown.join(', ')} and ${extra} more` : shown.join(', ');
+  const index = Math.abs(Math.trunc(Number(variantIndex) || 0)) % WELCOME_VARIANTS.length;
+  return WELCOME_VARIANTS[index].replaceAll('{{audience}}', audience);
 }
 
 export class JoinWelcomeBatcher {

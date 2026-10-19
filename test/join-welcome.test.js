@@ -17,11 +17,13 @@ test('single-viewer greetings provide 75 unique cuh-flavored lines before cyclin
   assert.ok(greetings.every(message => !/@\\s/.test(message)));
 });
 
-test('group greetings provide 75 unique lines and preserve named burst acknowledgement', () => {
-  const greetings = Array.from({ length: 75 }, (_, index) => formatJoinWelcome(['Alice', 'Bob'], index));
+test('group greetings provide 75 unique lines for a 75-viewer burst', () => {
+  const names = ['Alice', 'Bob', ...Array.from({ length: 73 }, (_, index) => `viewer${index + 3}`)];
+  const greetings = Array.from({ length: 75 }, (_, index) => formatJoinWelcome(names, index));
   assert.equal(new Set(greetings).size, 75);
-  assert.ok(greetings.every(message => message.includes('@alice') && message.includes('@bob') && message.includes('cuh')));
-  assert.equal(formatJoinWelcome(['Alice', 'Bob'], 75), greetings[0]);
+  assert.ok(greetings.every(message => message.includes('@alice') && message.includes('@bob')
+    && message.includes('@viewer8') && message.includes('and 67 more') && message.includes('cuh')));
+  assert.equal(formatJoinWelcome(names, 75), greetings[0]);
 });
 
 test('each channel rotates its greeting across consecutive join batches', async () => {
