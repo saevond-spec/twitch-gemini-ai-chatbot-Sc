@@ -303,3 +303,13 @@ test('Redis quota failure keeps core chat alive and workers demand-driven', () =
   assert.match(render, /BULLMQ_STALLED_INTERVAL_SECONDS\n\s+value: "300"/);
   assert.match(render, /REDIS_REQUIRED\n\s+value: "false"/);
 });
+
+
+test('auto-chat ready listener is registered before plugin load', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const listener = app.indexOf("bus.on('twitch.ready'");
+  const plugins = app.indexOf("await loadPlugins(bus, config)");
+  assert.ok(listener >= 0);
+  assert.ok(plugins >= 0);
+  assert.ok(listener < plugins, 'twitch.ready listener must exist before plugin emits the event');
+});
