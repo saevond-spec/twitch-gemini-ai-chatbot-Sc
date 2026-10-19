@@ -73,17 +73,15 @@ export class MessageQueue {
       return this.processPromise;
     }
 
-    this.processPromise = (async () => {
-      do {
-        this.processRequested = false;
-        await this._processQueue();
-      } while (this.processRequested);
-    })();
-
+    this.processPromise = this._processQueue();
     try {
       await this.processPromise;
     } finally {
       this.processPromise = null;
+      if (this.processRequested) {
+        this.processRequested = false;
+        await this.process();
+      }
     }
   }
 
