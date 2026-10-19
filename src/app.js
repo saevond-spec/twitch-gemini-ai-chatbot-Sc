@@ -40,7 +40,7 @@ import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quie
 import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
 import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
-import { buildFollowThankYou } from './chat/followThankYou.js';
+import { FollowThankYouRotator } from './chat/followThankYou.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 import { ConversationRetentionEngine } from './chat/conversationRetention.js';
@@ -81,6 +81,7 @@ const retentionEngine = new ConversationRetentionEngine({
   replyWindowMs: config.retention.replyWindowSeconds * 1000,
 });
 const lurkerActivationEngine = new LurkerActivationEngine();
+const followThankYouRotator = new FollowThankYouRotator();
 const joinWelcomeBatcher = new JoinWelcomeBatcher({
   flushMs: config.auto.joinWelcomeBatchMs,
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
@@ -1110,7 +1111,7 @@ async function initializeBot() {
   });
   bus.on('eventsub.channel.follow', async (event) => {
     try {
-      const follow = buildFollowThankYou(event);
+      const follow = followThankYouRotator.build(event);
       if (!follow) {
         log.warn('Ignoring Twitch follow event without valid channel or viewer login');
         return;
