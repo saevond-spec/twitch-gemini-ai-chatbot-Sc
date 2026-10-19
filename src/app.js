@@ -7,7 +7,7 @@ import { config } from './config/index.js';
 import { logger, createLogger } from './logger/index.js';
 import { connectRedis, getRedis } from './storage/redis.js';
 import { initAuth, exchangeCodeForToken, isAuthorized, BOT_SCOPES, configuredBotLogin, getAuthPersistenceStatus } from './twitch/auth.js';
-import { DeepSeekClient } from './ai/client.js';
+import { createAIClient } from './ai/client.js';
 import { buildUserPrompt } from './ai/prompt.js';
 import { builtins, loadCustomCommands, saveCustomCommand, deleteCustomCommand } from './commands/index.js';
 import './commands/builtins.js';
@@ -52,7 +52,7 @@ const wsInstance = expressWs(app);
 app.set('trust proxy', config.server.trustProxy || 1);
 
 let botInitialized = false;
-let deepseek = null;
+let ai = null;
 let moderation = null;
 let cooldown = new CooldownManager(config.cooldown);
 let customCommands = new Map();
@@ -195,11 +195,12 @@ app.get('/readyz', async (req, res) => {
     const twitchReady = !!global.twitchClient?.connected;
     const redisRequired = process.env.REDIS_REQUIRED === 'true';
     const redisReady = !redisRequired || !!getRedis();
-    const deepseekReady = !!deepseek;
+    const aiReady = !!ai;
     const authReady = isAuthorized();
-    if (twitchReady && redisReady && deepseekReady && authReady) {
+    if (twitchReady && redisReady && aiReady && authReady) {
       return res.status(200).json({
         status: 'ready',
+        ai: ai.getHealth(),
         oauthPersistence: getAuthPersistenceStatus(),
       });
     }
@@ -209,7 +210,7 @@ app.get('/readyz', async (req, res) => {
   res.status(503).json({
     redis: !!getRedis(),
     twitch: global.twitchClient?.connected || false,
-    deepseek: !!deepseek,
+    ai: ai ? ai.getHealth() : null,
     auth: isAuthorized(),
     oauthPersistence: getAuthPersistenceStatus(),
   });
@@ -353,7 +354,7 @@ app.post('/api/media/image', requireAdmin, async (req, res) => {
 });
 
 async function generateSpontaneousMessage(channel, mode, streamContext, history, moment) {
-  if (!deepseek || !AUTO_USE_DEEPSEEK) {
+  if (!ai || !AUTO_USE_DEEPSEEK) {
     const msg = FALLBACK_MESSAGES[fallbackIndex % FALLBACK_MESSAGES.length];
     fallbackIndex++;
     return msg;
@@ -390,7 +391,7 @@ async function generateSpontaneousMessage(channel, mode, streamContext, history,
 
   try {
     const start = Date.now();
-    const reply = await deepseek.chat(messages, { temperature: mode === 'analysis-recap' ? 0.45 : 0.8, maxTokens: 180 });
+    const reply = await ai.chat(messages, { temperature: mode === 'analysis-recap' ? 0.45 : 0.8, maxTokens: 180 });
     promMetrics.aiLatency.observe((Date.now() - start) / 1000);
     promMetrics.aiCalls.inc();
     return reply;
@@ -810,9 +811,9 @@ async function handleMessage({ channel, user, message, self }) {
     { role: 'user', content: userPrompt },
   ];
   try {
-    log.info(`🤖 Sending to DeepSeek (brain: ${brainName})`);
+    log.info(`🤖 Sending through AI provider router (brain: ${brainName})`);
     const start = Date.now();
-    const reply = await deepseek.chat(messages, { temperature, maxTokens });
+    const reply = await ai.chat(messages, { temperature, maxTokens });
     const latency = Date.now() - start;
     promMetrics.aiLatency.observe(latency / 1000);
     promMetrics.aiCalls.inc();
@@ -872,7 +873,7 @@ async function handleMessage({ channel, user, message, self }) {
     const status = Number(err?.status || err?.response?.status || 0) || null;
     const code = String(err?.code || '');
     if (status === 402 || code === 'insufficient_balance') {
-      log.warn('DeepSeek balance unavailable; using local conversational fallback');
+      log.warn('AI provider balance unavailable; using local conversational fallback');
     } else {
       log.error('AI chat error', err);
     }
@@ -975,10 +976,10 @@ async function initializeBot() {
     log.warn('No valid token; bot not starting');
     return;
   }
-  log.info('Initializing DeepSeek client...');
-  deepseek = new DeepSeekClient();
-  log.info('DeepSeek client ready');
-  highlightDetector = new HighlightDetector(deepseek);
+  log.info('Initializing AI provider failover...');
+  ai = createAIClient();
+  log.info('AI provider router ready', ai.getHealth());
+  highlightDetector = new HighlightDetector(ai);
   await highlightDetector.start();
   log.info('Initializing moderation...');
   moderation = new Moderation(config.moderation);
