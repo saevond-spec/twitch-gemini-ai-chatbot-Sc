@@ -12,7 +12,7 @@
     <header>
       <p class="eyebrow">SWEATYCLANKER · STREAM AUDIO</p>
       <h1>NCS music player</h1>
-      <p class="intro">Music plays in your stream mix while the game stays on your PS5. Twitch chat can switch stations and tracks.</p>
+      <p class="intro">Twitch chat can control this NCS player. Viewers hear it only when its audio is mixed into your broadcast.</p>
     </header>
 
     <section class="now-playing" aria-live="polite">
@@ -31,13 +31,10 @@
     <section class="setup">
       <button id="enable-audio" type="button" disabled>Loading YouTube player…</button>
       <p id="connection-status" role="status">Connecting to chat controls…</p>
-      <h2>Free Lightstream setup</h2>
-      <ol>
-        <li>Open this page in a Chrome tab on the computer running Lightstream.</li>
-        <li>In Lightstream choose <strong>Add Layer → Screenshare</strong>, select this Chrome tab, and tick <strong>Share Audio</strong>.</li>
-        <li>Click “Enable audio” once on this page. Keep the audio layer unmuted; you can hide its video layer if you only want the music sound.</li>
-      </ol>
-      <p>If you use OBS instead, add this page as a Browser Source and enable “Control audio via OBS”.</p>
+      <h2>Audio routing</h2>
+      <p class="route-note"><strong>Android + PS5 direct broadcast:</strong> this page plays music on the phone, but PS5 does not mix phone or IRC audio into its broadcast. Viewers will not hear the tracks with that setup.</p>
+      <p>To put music in the broadcast, the player audio must be mixed into the stream by a computer running a stream mixer or by audio-routing hardware. If you have computer access, open this page there and mix its tab audio with the gameplay. Twitch chat can still control the player from Android.</p>
+      <p>Click “Enable audio” once on the device that runs the player. That browser permission only starts playback there; it does not route the sound to Twitch by itself.</p>
     </section>
 
     <section class="commands">
@@ -47,7 +44,7 @@
     </section>
 
     <footer>
-      <p>NCS music is free for eligible independent creators on Twitch when its usage policy is followed. Add <code>Music provided by http://spoti.fi/NCS</code> to the stream description. <a href="https://ncs.io/usage-policy" target="_blank" rel="noopener noreferrer">Read NCS usage policy</a>.</p>
+      <p>NCS licenses eligible independent creators to use its music on Twitch when they follow its usage policy; it is not public-domain music. Add <code>Music provided by http://spoti.fi/NCS</code> to the stream description. <a href="https://ncs.io/usage-policy" target="_blank" rel="noopener noreferrer">Read NCS usage policy</a>.</p>
     </footer>
   </main>
 </body>
