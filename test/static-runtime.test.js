@@ -162,9 +162,12 @@ test('advanced commerce strategy is wired into Twitch runtime', () => {
 
 test('Twitch chat authorization is bound to the configured bot identity', () => {
   const auth = fs.readFileSync(path.join(root, 'src/twitch/auth.js'), 'utf8');
+  const vault = fs.readFileSync(path.join(root, 'src/twitch/tokenVault.js'), 'utf8');
   const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
 
-  assert.match(auth, /twitch:oauth:bot/);
+  assert.match(vault, /twitch:oauth:bot/);
+  assert.match(auth, /loadBestToken/);
+  assert.match(auth, /persistToken/);
   assert.match(auth, /LEGACY_TOKEN_KEY = 'twitch:oauth'/);
   assert.match(auth, /tokenBelongsToConfiguredBot/);
   assert.match(auth, /Wrong Twitch account authorized/);
