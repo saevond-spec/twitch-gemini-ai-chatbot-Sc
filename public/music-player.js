@@ -206,7 +206,7 @@ function createYouTubePlayer() {
       onAutoplayBlocked: function () {
         autoplayBlocked = true;
         renderState();
-        setStatus('Your browser blocked automatic sound. Tap “Tap to start audio” once.');
+        setStatus('Your browser blocked automatic sound. Tap the audio button once.');
       },
       onError: function () {
         embedErrors += 1;
