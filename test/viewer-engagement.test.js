@@ -250,7 +250,7 @@ test('follow events queue a named thank-you and record follow state', () => {
 
   assert.ok(eventsub.includes("bus.emit(`eventsub.${type}`, event)"));
   assert.ok(app.includes("bus.on('eventsub.channel.follow'"));
-  assert.ok(app.includes('buildFollowThankYou(event)'));
+  assert.ok(app.includes('followThankYouRotator.build(event)'));
   assert.ok(app.includes('followed: true'));
   assert.ok(app.includes('messageQueue.enqueue(channel, message, {'));
   assert.ok(app.includes("priority: 'high'"));
