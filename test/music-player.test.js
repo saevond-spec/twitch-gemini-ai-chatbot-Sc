@@ -56,7 +56,7 @@ test('moderators can switch, pause, resume, and skip', () => {
   assert.equal(controller.getState().playing, false);
   assert.equal(events.at(-1).action, 'pause');
 
-  assert.match(controller.handleMusicCommand(broadcaster(), '!music play'), /Music playback requested/);
+  assert.match(controller.handleMusicCommand(broadcaster(), '!music play'), /Playback requested/);
   assert.equal(controller.getState().playing, true);
   assert.equal(events.at(-1).action, 'play');
 
