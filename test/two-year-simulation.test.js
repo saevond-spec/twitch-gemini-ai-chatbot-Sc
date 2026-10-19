@@ -26,6 +26,7 @@ function resetTransientAfterProfileExpiry(profile, gapDays) {
     followed: profile.followed,
     followedAt: profile.followedAt,
     followPromptedAt: profile.followPromptedAt,
+    subscriptionPromptedAt: profile.subscriptionPromptedAt,
     proactiveOptOut: profile.proactiveOptOut,
     seenBefore: true,
   }, profile.lastSeen);

@@ -12,6 +12,7 @@ export function normalizeViewerProfile(profile = {}, now = Date.now()) {
     followed: Boolean(profile.followed),
     followedAt: profile.followedAt || null,
     followPromptedAt: profile.followPromptedAt || null,
+    subscriptionPromptedAt: profile.subscriptionPromptedAt || null,
     proactiveOptOut: Boolean(profile.proactiveOptOut),
     commercialOptOut: Boolean(profile.commercialOptOut),
     lastCommercialPromptAt: profile.lastCommercialPromptAt || null,
@@ -56,6 +57,26 @@ export function shouldOfferFollow({ profile, message, now = Date.now(), directIn
   if (!profile.firstChatAt || now - profile.firstChatAt < 45_000) return false;
   if (NEGATIVE.test(String(message || ''))) return false;
   return POSITIVE.test(String(message || ''));
+}
+
+export function shouldOfferSubscription({
+  profile,
+  message,
+  directInteraction = false,
+  isSubscriber = false,
+  recentHumanTurns = 0,
+  recentBotReplies = 0,
+} = {}) {
+  if (!profile || !profile.followed || isSubscriber || profile.subscriptionPromptedAt) return false;
+  if (profile.proactiveOptOut || profile.commercialOptOut) return false;
+  if (!directInteraction || profile.messageCount < 6 || profile.botInteractions < 3) return false;
+  if (Number(recentHumanTurns) < 3 || Number(recentBotReplies) < 2) return false;
+  if (NEGATIVE.test(String(message || ''))) return false;
+  return POSITIVE.test(String(message || ''));
+}
+
+export function subscriptionLineFor() {
+  return 'If you want the channel perks, a subscription supports the stream; completely optional—thanks for hanging out either way.';
 }
 
 const FOLLOW_LINES = [
