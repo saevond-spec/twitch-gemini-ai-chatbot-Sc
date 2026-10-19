@@ -2,18 +2,30 @@ import axios from 'axios';
 import { config } from '../config/index.js';
 import { getRedis } from '../storage/redis.js';
 import { readJSON, writeJSON } from '../storage/file.js';
+import {
+  clearTokenVault,
+  durableTokenVaultConfigured,
+  loadBestToken,
+  persistToken,
+  repairTokenCopies,
+} from './tokenVault.js';
 import { createLogger } from '../logger/index.js';
 
 const log = createLogger('AUTH');
-const TOKEN_KEY = 'twitch:oauth:bot';
 const LEGACY_TOKEN_KEY = 'twitch:oauth';
-const TOKEN_FILE = './tokens.bot.json';
 const LEGACY_TOKEN_FILE = './tokens.json';
 const REQUEST_TIMEOUT_MS = 10000;
 
 let currentToken = null;
 let refreshTimer = null;
 let refreshPromise = null;
+let persistenceRetryTimer = null;
+let persistenceState = {
+  durableConfigured: durableTokenVaultConfigured(),
+  durableHealthy: false,
+  lastDurableSaveAt: null,
+  lastSource: null,
+};
 
 export const BOT_SCOPES = [
   'chat:read', 'chat:edit',
@@ -64,32 +76,42 @@ async function revokeAccessToken(accessToken) {
 }
 
 async function clearStoredToken({ legacy = false } = {}) {
+  if (!legacy) {
+    if (persistenceRetryTimer) {
+      clearTimeout(persistenceRetryTimer);
+      persistenceRetryTimer = null;
+    }
+    await clearTokenVault();
+    persistenceState = {
+      ...persistenceState,
+      durableHealthy: false,
+      lastDurableSaveAt: null,
+      lastSource: null,
+    };
+    return;
+  }
+
   const redis = getRedis();
-  const key = legacy ? LEGACY_TOKEN_KEY : TOKEN_KEY;
-  const file = legacy ? LEGACY_TOKEN_FILE : TOKEN_FILE;
   try {
-    if (redis) await redis.del(key);
+    if (redis) await redis.del(LEGACY_TOKEN_KEY);
   } catch (err) {
-    log.warn(`Failed to clear ${legacy ? 'legacy ' : ''}Twitch token from Redis`, err.message);
+    log.warn('Failed to clear legacy Twitch token from Redis', err.message);
   }
   try {
-    await writeJSON(file, null);
+    await writeJSON(LEGACY_TOKEN_FILE, null);
   } catch (err) {
-    log.warn(`Failed to clear ${legacy ? 'legacy ' : ''}Twitch token file`, err.message);
+    log.warn('Failed to clear legacy Twitch token file', err.message);
   }
 }
 
 async function loadStoredToken() {
-  const redis = getRedis();
-  if (redis) {
-    try {
-      const data = await redis.get(TOKEN_KEY);
-      if (data) return JSON.parse(data);
-    } catch (err) {
-      log.warn('Failed to load bot token from Redis', err.message);
-    }
+  const token = await loadBestToken();
+  if (token) {
+    persistenceState.lastSource = token.vault_source || 'unknown';
+    persistenceState.durableHealthy = token.vault_source === 'postgres'
+      || (durableTokenVaultConfigured() && persistenceState.durableHealthy);
   }
-  return readJSON(TOKEN_FILE, null);
+  return token;
 }
 
 async function loadLegacyToken() {
@@ -105,23 +127,53 @@ async function loadLegacyToken() {
   return readJSON(LEGACY_TOKEN_FILE, null);
 }
 
-async function saveToken(tokenData) {
-  const redis = getRedis();
-  const expiresIn = tokenData.expires_in || 86400;
-  if (redis) {
-    try {
-      await redis.set(TOKEN_KEY, JSON.stringify(tokenData), 'EX', expiresIn);
-      log.debug('Bot token persisted to Redis');
-    } catch (err) {
-      log.warn('Failed to save bot token to Redis', err.message);
+function schedulePersistenceRepair(token, attempt = 0) {
+  if (!durableTokenVaultConfigured() || !token?.access_token) return;
+  if (persistenceRetryTimer) clearTimeout(persistenceRetryTimer);
+
+  const delay = Math.min(300_000, 15_000 * (2 ** Math.min(5, Math.max(0, attempt))));
+  persistenceRetryTimer = setTimeout(async () => {
+    persistenceRetryTimer = null;
+    const result = await repairTokenCopies(token);
+    if (result.durable) {
+      persistenceState = {
+        ...persistenceState,
+        durableHealthy: true,
+        lastDurableSaveAt: Date.now(),
+        lastSource: 'postgres',
+      };
+      log.info(`Recovered durable Twitch OAuth persistence for generation ${token.vault_generation}`);
+      return;
     }
+    schedulePersistenceRepair(token, attempt + 1);
+  }, delay);
+  persistenceRetryTimer.unref?.();
+}
+
+async function saveToken(tokenData) {
+  const result = await persistToken(tokenData, {
+    previousGeneration: currentToken?.vault_generation || tokenData?.vault_generation || 0,
+  });
+  persistenceState = {
+    durableConfigured: durableTokenVaultConfigured(),
+    durableHealthy: result.durable,
+    lastDurableSaveAt: result.durable ? Date.now() : persistenceState.lastDurableSaveAt,
+    lastSource: result.durable ? 'postgres' : (result.redis ? 'redis' : 'file'),
+  };
+
+  if (persistenceState.durableConfigured && !result.durable) {
+    log.error('Twitch token updated but durable OAuth vault write failed; automatic persistence repair scheduled');
+    schedulePersistenceRepair(result.token);
+  } else if (result.durable) {
+    if (persistenceRetryTimer) {
+      clearTimeout(persistenceRetryTimer);
+      persistenceRetryTimer = null;
+    }
+    log.info(`Twitch token persisted durably (generation ${result.token.vault_generation})`);
   }
-  try {
-    await writeJSON(TOKEN_FILE, tokenData);
-    log.debug('Bot token persisted to file');
-  } catch (err) {
-    log.warn('Failed to save bot token to file', err.message);
-  }
+
+  currentToken = result.token;
+  return result.token;
 }
 
 async function migrateOrRejectLegacyToken() {
@@ -153,9 +205,9 @@ async function migrateOrRejectLegacyToken() {
       login: validation.login,
       scopes: [...granted],
     };
+    currentToken = migrated;
     await saveToken(migrated);
     await clearStoredToken({ legacy: true });
-    currentToken = migrated;
     log.info(`Migrated verified bot token for ${validation.login} to bot-only storage`);
     return true;
   } catch (err) {
@@ -285,16 +337,43 @@ export async function exchangeCodeForToken(code, redirectUri) {
   return tokenData;
 }
 
+async function recoverNewerVaultToken(failedGeneration = 0, failedRefreshToken = '') {
+  const candidate = await loadBestToken();
+  if (!candidate?.access_token) return false;
+
+  const newerGeneration = Number(candidate.vault_generation || 0) > Number(failedGeneration || 0);
+  const differentRefresh = Boolean(
+    candidate.refresh_token
+    && failedRefreshToken
+    && candidate.refresh_token !== failedRefreshToken
+  );
+  if (!newerGeneration && !differentRefresh) return false;
+
+  const previous = currentToken;
+  currentToken = candidate;
+  try {
+    if (await validateToken()) {
+      log.warn(`Recovered newer Twitch OAuth generation ${candidate.vault_generation} after refresh race/stale-token failure`);
+      scheduleRefresh();
+      return true;
+    }
+  } catch {}
+  currentToken = previous;
+  return false;
+}
+
 async function refreshToken() {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
     if (!currentToken) return;
 
+    const refreshBaseGeneration = Number(currentToken.vault_generation || 0);
+    const refreshTokenUsed = currentToken.refresh_token;
     const params = new URLSearchParams({
       client_id: config.twitch.clientId,
       client_secret: config.twitch.clientSecret,
-      refresh_token: currentToken.refresh_token,
+      refresh_token: refreshTokenUsed,
       grant_type: 'refresh_token',
     });
 
@@ -326,11 +405,15 @@ async function refreshToken() {
       currentToken.login = validation.login;
       currentToken.scopes = validation.scopes || currentToken.scopes;
       await saveToken(currentToken);
-      log.info(`Bot token refreshed successfully for ${validation.login}`);
+      log.info(`Bot token refreshed successfully for ${validation.login} (generation ${currentToken.vault_generation})`);
     } catch (err) {
       const status = err.response?.status;
       const errorCode = err.response?.data?.error;
       if ((status === 400 && errorCode === 'invalid_grant') || err.message === 'bot_identity_mismatch') {
+        if (err.message !== 'bot_identity_mismatch') {
+          const recovered = await recoverNewerVaultToken(refreshBaseGeneration, refreshTokenUsed);
+          if (recovered) return;
+        }
         log.error('Bot refresh token invalid/revoked or identity mismatched – manual bot re-authorization required');
         currentToken = null;
         await clearStoredToken();
@@ -375,4 +458,13 @@ export function getAuthenticatedLogin() {
 
 export function isAuthorized() {
   return Boolean(currentToken?.access_token && currentToken?.login === configuredBotLogin());
+}
+
+
+export function getAuthPersistenceStatus() {
+  return {
+    ...persistenceState,
+    currentGeneration: Number(currentToken?.vault_generation || 0),
+    authorized: isAuthorized(),
+  };
 }
