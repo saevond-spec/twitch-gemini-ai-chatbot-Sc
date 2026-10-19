@@ -18,16 +18,13 @@ export class JoinWelcomeBatcher {
   constructor({
     flushMs = 2500,
     dedupeMs = 6 * 60 * 60 * 1000,
-    warmupMs = 20_000,
     onFlush = async () => {},
     now = () => Date.now(),
   } = {}) {
     this.flushMs = Math.max(250, Number(flushMs) || 2500);
     this.dedupeMs = Math.max(60_000, Number(dedupeMs) || 6 * 60 * 60 * 1000);
-    this.warmupMs = Math.max(0, Number(warmupMs) || 0);
     this.onFlush = onFlush;
     this.now = now;
-    this.startedAt = this.now();
     this.pending = new Map();
     this.timers = new Map();
     this.welcomed = new Map();
@@ -50,8 +47,6 @@ export class JoinWelcomeBatcher {
 
   add(channel, username, now = this.now()) {
     if (!channel || !username) return false;
-    if (now - this.startedAt < this.warmupMs) return false;
-
     this._prune(now);
     const key = this._key(channel, username);
     if (this.welcomed.has(key)) return false;
