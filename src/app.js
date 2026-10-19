@@ -1023,7 +1023,13 @@ async function initializeBot() {
       log.warn('Failed to record follower state', err.message);
     }
   });
-  // Load plugins
+  bus.on('twitch.ready', () => {
+    log.info('Twitch client is ready. Starting auto-messages...');
+    startAutoMessages();
+  });
+
+  // Load plugins only after the ready listener exists. The Twitch plugin emits
+  // twitch.ready during registration, so registering this afterward misses it.
   log.info('Loading plugins...');
   await loadPlugins(bus, config);
 
@@ -1042,11 +1048,6 @@ async function initializeBot() {
   } catch (err) {
     log.warn('EventSub unavailable. Continuing without EventSub.', err.message);
   }
-
-  bus.on('twitch.ready', () => {
-    log.info('Twitch client is ready. Starting auto-messages...');
-    startAutoMessages();
-  });
 
   log.info('Bot initialization complete');
   broadcast({ type: 'ready' });
