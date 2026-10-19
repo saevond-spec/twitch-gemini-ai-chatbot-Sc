@@ -91,3 +91,18 @@ test('!song reports current track and pause state', () => {
   controller.updatePlayerStatus({ playing: false });
   assert.equal(controller.handleSongCommand(), 'Music is paused on Dubstep.');
 });
+
+
+test('!play is an unambiguous moderator-only shortcut for music playback', () => {
+  const events = [];
+  const controller = createMusicController({ publisher: event => events.push(event) });
+
+  const denied = controller.handleMusicCommand({ mod: false, badges: {} }, '!play');
+  assert.match(denied, /Only the broadcaster or a moderator/);
+  assert.equal(events.length, 0);
+
+  const response = controller.handleMusicCommand(broadcaster(), '!play');
+  assert.match(response, /Playback requested/);
+  assert.equal(controller.getState().playing, true);
+  assert.equal(events.at(-1).action, 'play');
+});
