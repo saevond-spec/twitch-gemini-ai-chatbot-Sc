@@ -8,6 +8,9 @@ let player = null;
 let playerReady = false;
 let stateReceived = false;
 let userEnabledAudio = false;
+let playbackStarted = false;
+let autoplayBlocked = false;
+let pendingSkip = false;
 let activePlaylistId = '';
 let musicState = null;
 let socket = null;
@@ -25,8 +28,14 @@ function renderState() {
   if (/^[A-Za-z0-9_-]{10,80}$/.test(musicState.playlistId || '')) {
     linkNode.href = 'https://www.youtube.com/playlist?list=' + musicState.playlistId;
   }
-  enableButton.disabled = !playerReady || !stateReceived || userEnabledAudio;
-  enableButton.textContent = userEnabledAudio ? 'Audio enabled' : 'Enable audio once';
+  enableButton.disabled = !playerReady || !stateReceived || userEnabledAudio || playbackStarted;
+  enableButton.textContent = playbackStarted
+    ? 'Audio playing'
+    : userEnabledAudio
+      ? 'Audio enabled'
+      : autoplayBlocked
+        ? 'Tap to start audio'
+        : 'Auto-start pending';
 }
 
 function sendPlayerStatus(playing) {
@@ -57,14 +66,20 @@ function cueCurrentStation() {
 
 function enableAudio() {
   userEnabledAudio = true;
+  autoplayBlocked = false;
   renderState();
   if (!playerReady || !musicState) return;
   if (!activePlaylistId || activePlaylistId !== musicState.playlistId) {
     cueCurrentStation();
   } else if (musicState.playing) {
-    player.playVideo();
+    if (pendingSkip) {
+      pendingSkip = false;
+      player.nextVideo();
+    } else {
+      player.playVideo();
+    }
   } else {
-    setStatus('Audio routing is ready. Music is paused; a moderator can use !music play.');
+    setStatus('Audio is ready. Music is paused; a moderator can use !music play.');
   }
 }
 
@@ -73,12 +88,19 @@ function onPlayerStateChange(event) {
   if (event.data === window.YT.PlayerState.CUED) {
     player.setLoop(true);
     player.setShuffle(true);
-    setStatus('Player ready. Chat can change stations or skip tracks.');
-    if (userEnabledAudio && musicState && musicState.playing) player.playVideo();
+    if (musicState && musicState.playing) {
+      setStatus('Trying to start playback automatically. If your browser blocks it, tap the audio button.');
+      player.playVideo();
+    } else {
+      setStatus('Player ready. Chat can change stations or skip tracks.');
+    }
     return;
   }
   if (event.data === window.YT.PlayerState.PLAYING) {
     embedErrors = 0;
+    playbackStarted = true;
+    autoplayBlocked = false;
+    renderState();
     setStatus('Music is playing in the browser tab.');
     window.setTimeout(function () {
       if (!player || player.getPlayerState() !== window.YT.PlayerState.PLAYING) return;
@@ -92,7 +114,9 @@ function onPlayerStateChange(event) {
     }, 300);
     return;
   }
-  if (event.data === window.YT.PlayerState.PAUSED && userEnabledAudio) {
+  if (event.data === window.YT.PlayerState.PAUSED) {
+    playbackStarted = false;
+    renderState();
     setStatus('Music paused.');
     sendPlayerStatus(false);
   }
@@ -107,17 +131,24 @@ function applyControl(message) {
   if (!playerReady || !musicState) return;
 
   if (message.action === 'station') {
+    pendingSkip = false;
     cueCurrentStation();
   } else if (message.action === 'play') {
     if (!activePlaylistId || activePlaylistId !== musicState.playlistId) cueCurrentStation();
-    else if (userEnabledAudio) player.playVideo();
-    else setStatus('Click “Enable audio” once, then playback can be controlled from chat.');
+    else {
+      player.playVideo();
+      setStatus('Trying to resume playback. Tap the audio button if your browser blocks it.');
+    }
   } else if (message.action === 'pause') {
-    if (userEnabledAudio) player.pauseVideo();
-    else setStatus('Music is paused. Click “Enable audio” once when the stream is ready.');
+    player.pauseVideo();
+    setStatus('Music is paused.');
   } else if (message.action === 'skip') {
-    if (userEnabledAudio) player.nextVideo();
-    else setStatus('The player needs its one-time “Enable audio” click before chat can skip.');
+    if (playbackStarted || userEnabledAudio) {
+      player.nextVideo();
+    } else {
+      pendingSkip = true;
+      setStatus('Skip queued. Tap the audio button to start on the next track.');
+    }
   }
 }
 
@@ -172,6 +203,11 @@ function createYouTubePlayer() {
         renderState();
       },
       onStateChange: onPlayerStateChange,
+      onAutoplayBlocked: function () {
+        autoplayBlocked = true;
+        renderState();
+        setStatus('Your browser blocked automatic sound. Tap “Tap to start audio” once.');
+      },
       onError: function () {
         embedErrors += 1;
         if (embedErrors <= 3 && player) {
