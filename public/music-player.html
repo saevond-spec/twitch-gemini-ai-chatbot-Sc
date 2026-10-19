@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SweatyClanker Stream Music</title>
+  <link rel="stylesheet" href="/public/music-player.css">
+  <script src="/public/music-player.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">SWEATYCLANKER · STREAM AUDIO</p>
+      <h1>NCS music player</h1>
+      <p class="intro">Music plays in your stream mix while the game stays on your PS5. Twitch chat can switch stations and tracks.</p>
+    </header>
+
+    <section class="now-playing" aria-live="polite">
+      <div>
+        <p class="label">NOW PLAYING</p>
+        <h2 id="track-title">Waiting for the player…</h2>
+        <p id="station-name">Connecting to SweatyClanker</p>
+      </div>
+      <a id="playlist-link" href="https://www.youtube.com/playlist?list=PLRBp0Fe2Gpglq-J-Hv0p-y0wk3lQk570u" target="_blank" rel="noopener noreferrer">Open official NCS playlist</a>
+    </section>
+
+    <div class="player-frame">
+      <div id="youtube-player" title="NCS YouTube player"></div>
+    </div>
+
+    <section class="setup">
+      <button id="enable-audio" type="button" disabled>Loading YouTube player…</button>
+      <p id="connection-status" role="status">Connecting to chat controls…</p>
+      <h2>Free Lightstream setup</h2>
+      <ol>
+        <li>Open this page in a Chrome tab on the computer running Lightstream.</li>
+        <li>In Lightstream choose <strong>Add Layer → Screenshare</strong>, select this Chrome tab, and tick <strong>Share Audio</strong>.</li>
+        <li>Click “Enable audio” once on this page. Keep the audio layer unmuted; you can hide its video layer if you only want the music sound.</li>
+      </ol>
+      <p>If you use OBS instead, add this page as a Browser Source and enable “Control audio via OBS”.</p>
+    </section>
+
+    <section class="commands">
+      <h2>Chat controls</h2>
+      <p><code>!music dubstep</code> · <code>!music club</code> · <code>!music play</code> · <code>!music pause</code> · <code>!skip</code> · <code>!song</code></p>
+      <p>Station changes, play/pause, and skip are broadcaster/mod-only. Tracks advance automatically and the playlist loops.</p>
+    </section>
+
+    <footer>
+      <p>NCS music is free for eligible independent creators on Twitch when its usage policy is followed. Add <code>Music provided by http://spoti.fi/NCS</code> to the stream description. <a href="https://ncs.io/usage-policy" target="_blank" rel="noopener noreferrer">Read NCS usage policy</a>.</p>
+    </footer>
+  </main>
+</body>
+</html>
