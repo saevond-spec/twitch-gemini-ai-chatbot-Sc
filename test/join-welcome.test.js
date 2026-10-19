@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JoinWelcomeBatcher, formatJoinWelcome } from '../src/chat/joinWelcomeBatcher.js';
 
-test('join welcomes use a short default batching window', () => {
+test('join welcomes use a short batching window and one-minute rejoin dedupe', () => {
   const batcher = new JoinWelcomeBatcher();
   assert.equal(batcher.flushMs, 100);
+  assert.equal(batcher.dedupeMs, 60_000);
   batcher.stop();
 });
 
@@ -30,7 +31,7 @@ test('large arrival bursts batch named welcomes without flooding chat', () => {
   assert.ok(msg.length < 500);
 });
 
-test('a viewer arriving immediately after startup is not silently dropped', () => {
+test('a viewer arriving immediately after startup is retained and duplicate JOINs are coalesced', () => {
   const batcher = new JoinWelcomeBatcher({
     flushMs: 60_000,
     now: () => 1_000_000,
@@ -38,17 +39,22 @@ test('a viewer arriving immediately after startup is not silently dropped', () =
 
   assert.equal(batcher.add('#saevond', 'alice'), true);
   assert.equal(batcher.hasWelcomed('#saevond', 'alice'), true);
+  assert.equal(batcher.add('#saevond', 'ALICE'), false);
   batcher.stop();
 });
 
-test('same viewer is only welcomed once during dedupe window', async () => {
+test('dedupe starts only after delivery and expires after the configured window', async () => {
   let now = 2_000_000;
   const sent = [];
   const batcher = new JoinWelcomeBatcher({
-    flushMs: 1,
-    dedupeMs: 6 * 60 * 60 * 1000,
+    flushMs: 60_000,
+    dedupeMs: 60_000,
     now: () => now,
-    onFlush: async (channel, message, names) => sent.push({ channel, message, names }),
+    onFlush: async (channel, message, names, delivery) => {
+      sent.push({ channel, message, names });
+      delivery.onDelivered();
+      return true;
+    },
   });
 
   assert.equal(batcher.add('#saevond', 'alice', now), true);
@@ -57,8 +63,32 @@ test('same viewer is only welcomed once during dedupe window', async () => {
   assert.equal(batcher.add('#saevond', 'alice', now + 1000), false);
   assert.equal(sent.length, 1);
 
-  now += 6 * 60 * 60 * 1000 + 1;
+  now += 60_001;
   assert.equal(batcher.add('#saevond', 'alice', now), true);
+  batcher.stop();
+});
+
+test('a failed join welcome is retryable on the next JOIN', async () => {
+  let delivery;
+  const batcher = new JoinWelcomeBatcher({
+    flushMs: 60_000,
+    onFlush: async (_channel, _message, _names, callbacks) => {
+      delivery = callbacks;
+      return true;
+    },
+  });
+
+  assert.equal(batcher.add('#saevond', 'alice'), true);
+  await batcher.flush('#saevond');
+  assert.equal(batcher.hasWelcomed('#saevond', 'alice'), true);
+
+  delivery.onFailed();
+  assert.equal(batcher.hasWelcomed('#saevond', 'alice'), false);
+  assert.equal(batcher.add('#saevond', 'alice'), true);
+
+  await batcher.flush('#saevond');
+  delivery.onDelivered();
+  assert.equal(batcher.hasWelcomed('#saevond', 'alice'), true);
   batcher.stop();
 });
 
