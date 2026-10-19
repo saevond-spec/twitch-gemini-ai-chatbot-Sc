@@ -82,7 +82,6 @@ const lurkerActivationEngine = new LurkerActivationEngine();
 const joinWelcomeBatcher = new JoinWelcomeBatcher({
   flushMs: config.auto.joinWelcomeBatchMs,
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
-  warmupMs: config.auto.joinWelcomeWarmupSeconds * 1000,
   onFlush: async (channel, message) => {
     if (!config.auto.welcomeOnJoin) return;
     if (messageQueue) messageQueue.enqueue(channel, message, { priority: 'normal' });
