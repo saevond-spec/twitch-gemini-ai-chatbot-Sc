@@ -32,16 +32,24 @@ test('recommends ARC Raiders beta options only inside the official test window',
   assert.doesNotMatch(ended, /PvE matchmaking toggle/);
 });
 
-test('uses the published Apex Mixtape rotation only within its listed dates', () => {
+test('includes Apex current event Wildcard and the listed Mixtape rotation', () => {
   const active = suggestGameModes(live('Apex Legends'), Date.parse('2026-10-19T12:00:00Z'));
-  assert.match(active, /Mixtape/);
-  assert.match(active, /TDM/);
-  assert.match(active, /Control/);
-  assert.match(active, /Gun Run/);
+  assert.match(active, /Blood Pact Wildcard/);
+  assert.match(active, /Beast\/Demon abilities/);
+  assert.match(active, /Mixtape: TDM, Control, or Gun Run/);
+  assert.match(active, /Wildcard or Mixtape/);
 
   const ended = suggestGameModes(live('Apex Legends'), Date.parse('2026-11-04T00:00:00Z'));
   assert.match(ended, /not active at this time/);
-  assert.doesNotMatch(ended, /Mixtape/);
+  assert.doesNotMatch(ended, /Blood Pact Wildcard|Mixtape/);
+});
+
+test('keeps current stream replies under a conservative Twitch chat length budget', () => {
+  const now = Date.parse('2026-10-19T12:00:00Z');
+  for (const gameName of ['NARAKA: BLADEPOINT', 'ARC Raiders', 'Apex Legends']) {
+    const response = suggestGameModes(live(gameName), now);
+    assert.ok(response.length <= 450, gameName + ' response was ' + response.length + ' characters');
+  }
 });
 
 test('does not guess when the game is offline, unknown, or not a game category', () => {
@@ -52,7 +60,7 @@ test('does not guess when the game is offline, unknown, or not a game category',
 });
 
 test('keeps source records attached to time-bounded recommendations', () => {
-  assert.equal(gameModeResearchSources.length, 4);
+  assert.equal(gameModeResearchSources.length, 5);
   for (const source of gameModeResearchSources) {
     assert.match(source.source, /^https:\/\/(www\.narakathegame\.com|arcraiders\.com|www\.ea\.com)\//);
     assert.ok(Date.parse(source.startsAt) < Date.parse(source.endsAt));

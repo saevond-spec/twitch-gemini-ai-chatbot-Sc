@@ -40,9 +40,15 @@ const GAME_MODE_NOTES = [
     title: 'Apex Legends',
     notes: [
       {
+        startsAt: '2026-10-13T00:00:00Z',
+        endsAt: '2026-11-04T00:00:00Z',
+        text: 'Try the Blood Pact Wildcard for Beast/Demon abilities on spooky Kings Canyon; the event runs through Nov 3.',
+        source: 'https://www.ea.com/games/apex-legends/apex-legends/news/blood-pact-event',
+      },
+      {
         startsAt: '2026-09-15T00:00:00Z',
         endsAt: '2026-11-04T00:00:00Z',
-        text: 'Try Mixtape: TDM for quick fights, Control for objective play, or Gun Run for a change of pace. EA lists this rotation through Nov 3; check the in-game playlist after that.',
+        text: 'Or choose Mixtape: TDM, Control, or Gun Run; EA lists this rotation through Nov 3. Chat, Wildcard or Mixtape?',
         source: 'https://www.ea.com/games/apex-legends/apex-legends/news/marked-midseason-patch-notes',
       },
     ],
