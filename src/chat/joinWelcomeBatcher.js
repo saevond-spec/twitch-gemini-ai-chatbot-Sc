@@ -1,17 +1,30 @@
-export function formatJoinWelcome(names = []) {
+const SINGLE_WELCOME_VARIANTS = [
+  name => `Ayy @${name}, welcome in! Glad you made it, cuh 😎`,
+  name => `Yo @${name}, good to see you in chat! Make yourself at home, cuh 🤖`,
+  name => `@${name} pulled up! Welcome to the stream, cuh 🎮`,
+  name => `Welcome in, @${name}! Kick back and enjoy the chaos, cuh 😂`,
+  name => `What's good, @${name}? Glad you're here, cuh!`,
+];
+
+const GROUP_WELCOME_VARIANTS = [
+  viewers => `Ayy, welcome in ${viewers}! Glad you made it, cuh 😎`,
+  viewers => `Yo ${viewers}, pull up and enjoy the stream, cuh 🤖`,
+  viewers => `${viewers} just pulled up! Welcome to the chaos, cuh 🎮`,
+  viewers => `Welcome in, ${viewers}! Make yourselves at home, cuh 😄`,
+];
+
+export function formatJoinWelcome(names = [], variantIndex = 0) {
   const clean = [...new Set(names.map(name => String(name || '').trim().toLowerCase()).filter(Boolean))];
   if (!clean.length) return null;
 
-  if (clean.length === 1) {
-    return `Welcome in @${clean[0]}! 🤖 Glad you're here — chat whenever you feel like it.`;
-  }
+  const variants = clean.length === 1 ? SINGLE_WELCOME_VARIANTS : GROUP_WELCOME_VARIANTS;
+  const index = Math.abs(Math.trunc(Number(variantIndex) || 0)) % variants.length;
+  if (clean.length === 1) return variants[index](clean[0]);
 
   const shown = clean.slice(0, 8).map(name => `@${name}`);
   const extra = clean.length - shown.length;
-  if (extra > 0) {
-    return `Welcome in ${shown.join(', ')} and ${extra} more! 🤖 Glad you're all here.`;
-  }
-  return `Welcome in ${shown.join(', ')}! 🤖 Glad you're all here.`;
+  const viewers = extra > 0 ? `${shown.join(', ')} and ${extra} more` : shown.join(', ');
+  return variants[index](viewers);
 }
 
 export class JoinWelcomeBatcher {
@@ -29,6 +42,7 @@ export class JoinWelcomeBatcher {
     this.timers = new Map();
     this.welcomed = new Map();
     this.inFlight = new Set();
+    this.variantSequence = new Map();
   }
 
   _key(channel, username) {
@@ -84,8 +98,10 @@ export class JoinWelcomeBatcher {
     if (timer) clearTimeout(timer);
     this.timers.delete(channelKey);
 
-    const message = formatJoinWelcome(names);
+    const variantIndex = this.variantSequence.get(channelKey) || 0;
+    const message = formatJoinWelcome(names, variantIndex);
     if (!message) return { channel: channelKey, names, message };
+    this.variantSequence.set(channelKey, variantIndex + 1);
 
     for (const name of names) this.inFlight.add(this._key(channelKey, name));
 
