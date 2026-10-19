@@ -43,8 +43,9 @@ test('each channel rotates its greeting across consecutive join batches', async 
 
 test('single incoming viewer gets a named low-pressure welcome', () => {
   const msg = formatJoinWelcome(['Alice']);
-  assert.match(msg, /Welcome in @alice/i);
-  assert.match(msg, /chat whenever/i);
+  assert.match(msg, /@alice/i);
+  assert.match(msg, /welcome/i);
+  assert.match(msg, /cuh/i);
 });
 
 test('multiple incoming viewers are welcomed together by username', () => {
@@ -52,7 +53,8 @@ test('multiple incoming viewers are welcomed together by username', () => {
   assert.match(msg, /@alice/);
   assert.match(msg, /@bob/);
   assert.match(msg, /@charlie/);
-  assert.match(msg, /Glad you're all here/);
+  assert.match(msg, /welcome/i);
+  assert.match(msg, /cuh/i);
 });
 
 test('large arrival bursts batch named welcomes without flooding chat', () => {
