@@ -24,16 +24,14 @@ test('large arrival bursts batch named welcomes without flooding chat', () => {
   assert.ok(msg.length < 500);
 });
 
-test('reconnect warmup prevents greeting the entire existing room', () => {
-  let now = 1_000_000;
+test('a viewer arriving immediately after startup is not silently dropped', () => {
   const batcher = new JoinWelcomeBatcher({
-    warmupMs: 20_000,
-    now: () => now,
+    flushMs: 60_000,
+    now: () => 1_000_000,
   });
 
-  assert.equal(batcher.add('#saevond', 'alice', now + 5_000), false);
-  now += 21_000;
-  assert.equal(batcher.add('#saevond', 'alice', now), true);
+  assert.equal(batcher.add('#saevond', 'alice'), true);
+  assert.equal(batcher.hasWelcomed('#saevond', 'alice'), true);
   batcher.stop();
 });
 
@@ -42,7 +40,6 @@ test('same viewer is only welcomed once during dedupe window', async () => {
   const sent = [];
   const batcher = new JoinWelcomeBatcher({
     flushMs: 1,
-    warmupMs: 0,
     dedupeMs: 6 * 60 * 60 * 1000,
     now: () => now,
     onFlush: async (channel, message, names) => sent.push({ channel, message, names }),

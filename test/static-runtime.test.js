@@ -196,7 +196,7 @@ test('join welcomes are wired into production runtime', () => {
   assert.match(joinPolicy, /login === owner/);
   assert.match(joinPolicy, /SERVICE_ACCOUNTS/);
   assert.match(render, /WELCOME_ON_JOIN\n\s+value: "true"/);
-  assert.match(render, /JOIN_WELCOME_WARMUP_SECONDS\n\s+value: "60"/);
+  assert.doesNotMatch(render, /JOIN_WELCOME_WARMUP_SECONDS/);
 });
 
 

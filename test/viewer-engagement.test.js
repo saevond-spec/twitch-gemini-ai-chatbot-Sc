@@ -10,11 +10,11 @@ import {
   firstChatInstruction,
 } from '../src/chat/viewerEngagement.js';
 
-test('incoming viewers are welcomed from join events with reconnect protection', () => {
+test('incoming viewers are welcomed from join events without a startup blind window', () => {
   const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   assert.match(app, /bus\.on\('twitch\.join'/);
   assert.match(app, /joinWelcomeBatcher\.add/);
-  assert.match(app, /JOIN_WELCOME_WARMUP_SECONDS|joinWelcomeWarmupSeconds/);
+  assert.doesNotMatch(app, /joinWelcomeWarmupSeconds|JOIN_WELCOME_WARMUP_SECONDS/);
 });
 
 test('first-time chatter gets a conversational welcome but no follow CTA', () => {
