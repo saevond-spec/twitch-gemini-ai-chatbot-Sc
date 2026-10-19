@@ -84,26 +84,32 @@ const lurkerActivationEngine = new LurkerActivationEngine();
 const joinWelcomeBatcher = new JoinWelcomeBatcher({
   flushMs: config.auto.joinWelcomeBatchMs,
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
-  onFlush: async (channel, message) => {
-    if (!config.auto.welcomeOnJoin) return;
+  onFlush: async (channel, message, _names, delivery) => {
+    if (!config.auto.welcomeOnJoin) {
+      delivery.onFailed();
+      return false;
+    }
     if (!messageQueue && global.twitchClient) {
       messageQueue = new MessageQueue(global.twitchClient);
       log.info('Message queue initialized while flushing join welcome');
     }
     if (!messageQueue) {
       log.warn(`Unable to queue join welcome for ${channel}: Twitch client is unavailable`);
-      return;
+      delivery.onFailed();
+      return false;
     }
 
     messageQueue.enqueue(channel, message, {
       priority: 'high',
       onDelivered: () => {
+        delivery.onDelivered();
         promMetrics.messagesSent.inc();
         promMetrics.viewerWelcomes.inc();
         log.info(`Join welcome delivered in ${channel}: ${message}`);
       },
     });
     log.info(`Join welcome queued in ${channel}: ${message}`);
+    return true;
   },
 });
 const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
