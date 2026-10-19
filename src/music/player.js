@@ -53,15 +53,15 @@ export function createMusicController(options = {}) {
     if (action === 'status') {
       const current = state.currentTrack ? ' Now playing: ' + state.currentTrack + '.' : '';
       const player = musicPlayerUrl ? ' Player page: ' + musicPlayerUrl + '.' : ' Open the /music-player page.';
-      return 'Music is ' + (state.playing ? 'on' : 'paused') + ' — ' + getState().stationLabel + '.' + current
-        + player + ' Chat: !music dubstep, !music club, !music play, !music pause, !skip, !song. Station changes and skip are mod-only.';
+      return 'Music player is ' + (state.playing ? 'set to play' : 'paused') + ' — ' + getState().stationLabel + '.' + current
+        + ' Viewers hear it only when player audio is routed into the broadcast.' + player + ' Chat: !music dubstep, !music club, !music play, !music pause, !skip, !song. Station changes and skip are mod-only.';
     }
 
     if (action === 'club' || action === 'dubstep') {
       if (!isModerator(user)) return 'Only the broadcaster or a moderator can change stations or skip tracks.';
       state = { ...state, station: action, currentTrack: '', videoId: '', playing: true, updatedAt: now() };
       publishControl('station');
-      return 'Switching the stream music to NCS ' + getState().stationLabel + '.';
+      return 'Switching the player to NCS ' + getState().stationLabel + '.';
     }
 
     if (action === 'play' || action === 'pause') {
@@ -69,7 +69,7 @@ export function createMusicController(options = {}) {
       state = { ...state, playing: action === 'play', updatedAt: now() };
       publishControl(action);
       return action === 'play'
-        ? 'Music playback requested. A new player page needs one click on "Enable audio".'
+        ? 'Playback requested. A new player page needs one click on "Enable audio"; its sound also needs to be routed into the broadcast.'
         : 'Stream music paused.';
     }
 
@@ -80,7 +80,7 @@ export function createMusicController(options = {}) {
     if (!isModerator(user)) return 'Only the broadcaster or a moderator can change stations or skip tracks.';
     state = { ...state, currentTrack: '', videoId: '', updatedAt: now() };
     publishControl('skip');
-    return 'Skipping to the next track.';
+    return 'Skipping to the next player track.';
   }
 
   function handleSongCommand() {
