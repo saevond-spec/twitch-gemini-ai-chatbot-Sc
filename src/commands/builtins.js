@@ -2,11 +2,16 @@
 import { registerBuiltin } from './index.js';
 import { brains, defaultBrain } from '../brains/index.js';
 import { getRedis } from '../storage/redis.js';
+import { formatSupportMessage } from '../chat/supportMessage.js';
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return `Commands: !help, !uptime, !bot, !about, !brain <${brainList}>, !clip [title], !commands, and custom commands.`;
+  return `Commands: !help, !uptime, !bot, !about, !brain <${brainList}>, !clip [title], !support, !commands, and custom commands.`;
 }, 'Shows this help');
+
+registerBuiltin('!support', async (user, channel) => {
+  return formatSupportMessage(channel);
+}, 'Shows optional ways to support the channel');
 
 registerBuiltin('!uptime', async (user, channel, client) => {
   const uptime = process.uptime();
