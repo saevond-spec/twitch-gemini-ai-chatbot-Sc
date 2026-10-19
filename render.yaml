@@ -135,7 +135,7 @@ services:
       - key: WELCOME_ON_JOIN
         value: "true"
       - key: JOIN_WELCOME_BATCH_MS
-        value: "2500"
+        value: "100"
       - key: JOIN_WELCOME_DEDUPE_MINUTES
         value: "360"
 
