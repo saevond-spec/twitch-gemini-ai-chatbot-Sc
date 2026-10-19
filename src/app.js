@@ -40,6 +40,7 @@ import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quie
 import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
 import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
+import { buildFollowThankYou } from './chat/followThankYou.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
 import { CommerceEngine } from './commerce/engine.js';
 import { ConversationRetentionEngine } from './chat/conversationRetention.js';
@@ -1097,14 +1098,37 @@ async function initializeBot() {
   });
   bus.on('eventsub.channel.follow', async (event) => {
     try {
-      const channel = `#${String(event?.broadcaster_user_login || '').toLowerCase()}`;
-      const viewer = String(event?.user_login || '').toLowerCase();
-      if (channel !== '#' && viewer) {
-        promMetrics.followEvents.inc();
-        await ProfileStore.update(channel, viewer, { followed: true, followedAt: Date.now() });
+      const follow = buildFollowThankYou(event);
+      if (!follow) {
+        log.warn('Ignoring Twitch follow event without valid channel or viewer login');
+        return;
       }
+
+      const { channel, viewer, message } = follow;
+      promMetrics.followEvents.inc();
+
+      void ProfileStore.update(channel, viewer, { followed: true, followedAt: Date.now() })
+        .catch(err => log.warn('Failed to record follower state', err.message));
+
+      if (!messageQueue && global.twitchClient) {
+        messageQueue = new MessageQueue(global.twitchClient);
+        log.info('Message queue initialized while handling follow');
+      }
+      if (!messageQueue) {
+        log.warn(`Unable to queue follow thank-you for ${channel}: Twitch client is unavailable`);
+        return;
+      }
+
+      messageQueue.enqueue(channel, message, {
+        priority: 'high',
+        onDelivered: () => {
+          promMetrics.messagesSent.inc();
+          log.info(`Follow thank-you delivered in ${channel} for @${viewer}`);
+        },
+      });
+      log.info(`Follow thank-you queued in ${channel} for @${viewer}`);
     } catch (err) {
-      log.warn('Failed to record follower state', err.message);
+      log.warn('Failed to process Twitch follow event', err.message);
     }
   });
   bus.on('twitch.connected', () => {
