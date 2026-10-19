@@ -4,10 +4,12 @@ import { brains, defaultBrain } from '../brains/index.js';
 import { getRedis } from '../storage/redis.js';
 import { formatSupportMessage } from '../chat/supportMessage.js';
 import { suggestGameModes } from '../chat/gameModeSuggestions.js';
+import { config } from '../config/index.js';
+import { handleMusicCommand, handleSkipCommand, handleSongCommand } from '../music/player.js';
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, and custom commands.';
+  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, !music [club|dubstep|play|pause], !skip, ' + config.media.musicCommand + ', and custom commands.';
 }, 'Shows this help');
 
 registerBuiltin('!support', async (user, channel) => {
@@ -67,3 +69,17 @@ registerBuiltin('!mode', async (user, channel, client, message, context = {}) =>
   const streamContext = context.highlightDetector?.getLiveContext(channel) || {};
   return suggestGameModes(streamContext);
 }, 'Suggest verified current modes for the live game');
+
+registerBuiltin('!music', (user, channel, client, message, context = {}) => {
+  return handleMusicCommand(user, message, context.musicPlayerUrl);
+}, 'Show status and control NCS stream music');
+
+registerBuiltin('!skip', (user) => {
+  return handleSkipCommand(user);
+}, 'Skip to the next stream music track (moderators)');
+
+const songCommand = String(config.media.musicCommand || '!song').trim().toLowerCase();
+if (songCommand.startsWith('!') && !['!music', '!skip'].includes(songCommand)) {
+  registerBuiltin(songCommand, () => handleSongCommand(), 'Show the current stream music track');
+}
+
