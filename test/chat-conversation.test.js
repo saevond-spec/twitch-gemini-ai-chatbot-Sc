@@ -88,6 +88,44 @@ test('outgoing queue preserves order and never sends two messages inside one-sec
   }
 });
 
+test('outgoing queue retries messages refused during a temporary disconnect', async () => {
+  const realNow = Date.now;
+  let now = 200000;
+  Date.now = () => now;
+  let attempts = 0;
+  const sent = [];
+  const client = {
+    say: async (channel, message) => {
+      attempts++;
+      if (attempts === 1) return false;
+      sent.push({ channel, message });
+      return true;
+    },
+  };
+
+  const queue = new MessageQueue(client);
+  queue.stop();
+
+  try {
+    const startingTokens = queue.globalBucket.tokens;
+    queue.enqueue('#saevond', 'welcome @alice');
+    await queue.process();
+
+    assert.deepEqual(queue.queue.get('#saevond'), ['welcome @alice']);
+    assert.equal(queue.globalBucket.tokens, startingTokens);
+    assert.equal(queue.lastSentAt.has('#saevond'), false);
+
+    now += 500;
+    await queue.process();
+    assert.deepEqual(sent, [{ channel: '#saevond', message: 'welcome @alice' }]);
+    assert.equal(queue.queue.has('#saevond'), false);
+    assert.equal(queue.globalBucket.tokens, startingTokens - 1);
+  } finally {
+    queue.stop();
+    Date.now = realNow;
+  }
+});
+
 test('DeepSeek user prompt does not duplicate channel history', () => {
   const prompt = buildUserPrompt('what did alice mean?', 'bob', [
     { role: 'user', username: 'alice', content: 'that clutch was crazy' },

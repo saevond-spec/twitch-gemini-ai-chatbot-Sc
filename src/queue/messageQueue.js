@@ -63,7 +63,12 @@ export class MessageQueue {
       const msg = messages.shift();
       this.processing.add(channel);
       try {
-        await this.client.say(channel, msg);
+        const delivered = await this.client.say(channel, msg);
+        if (delivered === false) {
+          messages.unshift(msg);
+          log.debug(`Delivery refused for ${channel}; message requeued`);
+          continue;
+        }
         this.globalBucket.tokens -= 1;
         this.lastSentAt.set(channel, Date.now());
         log.debug(`Sent queued message to ${channel}; global tokens remaining: ${this.globalBucket.tokens}`);
