@@ -228,6 +228,43 @@ app.get('/api/auth/status', requireAdmin, (req, res) => {
   });
 });
 
+app.post(
+  '/api/ai/verify-credentials',
+  requireAdmin,
+  rateLimit({ windowMs: 60_000, max: 2, validate: false, standardHeaders: true, legacyHeaders: false }),
+  async (req, res) => {
+    if (!ai || typeof ai.verifyCredentials !== 'function') {
+      return res.status(503).json({ error: 'AI provider router is not ready' });
+    }
+
+    try {
+      const reports = await ai.verifyCredentials();
+      const configured = new Set(reports.filter(report => report.configured).map(report => report.provider));
+      const expected = ['deepseek', 'openai'];
+      const providers = [
+        ...reports,
+        ...expected
+          .filter(provider => !configured.has(provider))
+          .map(provider => ({
+            provider,
+            configured: false,
+            authentication: 'missing',
+            httpStatus: null,
+          })),
+      ];
+
+      res.set('Cache-Control', 'no-store');
+      return res.json({
+        checkedAt: new Date().toISOString(),
+        providers,
+        note: 'Checks provider API authentication only; it does not identify the human account owner.',
+      });
+    } catch {
+      return res.status(502).json({ error: 'AI provider verification could not complete' });
+    }
+  },
+);
+
 app.get('/auth/login', async (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
   const state = await createOAuthState();

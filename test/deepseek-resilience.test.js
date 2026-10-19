@@ -84,6 +84,25 @@ test('DeepSeek balance recovery resumes normal API calls automatically', async (
   }
 });
 
+test('DeepSeek balance recovery uses the documented API-root endpoint', async () => {
+  const originalGet = axios.get;
+  let requestedUrl = null;
+  axios.get = async url => {
+    requestedUrl = String(url);
+    return { status: 200, data: { is_available: true } };
+  };
+
+  try {
+    const client = new DeepSeekClient();
+    client.billingBlocked = true;
+    client.nextBalanceCheckAt = 0;
+    assert.equal(await client._checkBalanceIfBlocked(), true);
+    assert.equal(requestedUrl, 'https://api.deepseek.com/user/balance');
+  } finally {
+    axios.get = originalGet;
+  }
+});
+
 test('local fallback answers common Twitch chat naturally during provider outage', () => {
   assert.match(getContextualFallbackResponse('How are you?', 'saevond'), /@saevond/);
   assert.match(getContextualFallbackResponse('How are you?', 'saevond'), /Operational/i);
