@@ -274,8 +274,8 @@ test('low-pressure lurker activation is wired into production', () => {
   assert.match(math, /sampleBeta/);
   assert.match(math, /activationOpportunity/);
   assert.match(store, /successCredited/);
-  assert.match(welcome, /Never expose silent usernames/);
-  assert.doesNotMatch(welcome, /Welcome in @\$\{/);
+  assert.match(welcome, /Welcome in @\$\{/);
+  assert.match(welcome, /chat whenever you feel like it/);
   assert.match(render, /LURKER_ACTIVATION_ENABLED\n\s+value: "true"/);
   assert.match(render, /LURKER_PROMPT_GAP_SECONDS\n\s+value: "240"/);
 });
@@ -302,4 +302,14 @@ test('Redis quota failure keeps core chat alive and workers demand-driven', () =
   assert.match(render, /BULLMQ_DRAIN_DELAY_SECONDS\n\s+value: "120"/);
   assert.match(render, /BULLMQ_STALLED_INTERVAL_SECONDS\n\s+value: "300"/);
   assert.match(render, /REDIS_REQUIRED\n\s+value: "false"/);
+});
+
+
+test('auto-chat ready listener is registered before plugin load', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const listener = app.indexOf("bus.on('twitch.ready'");
+  const plugins = app.indexOf("await loadPlugins(bus, config)");
+  assert.ok(listener >= 0);
+  assert.ok(plugins >= 0);
+  assert.ok(listener < plugins, 'twitch.ready listener must exist before plugin emits the event');
 });
