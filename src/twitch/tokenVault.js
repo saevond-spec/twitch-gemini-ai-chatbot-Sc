@@ -273,6 +273,24 @@ export async function persistToken(tokenData, { previousGeneration = 0 } = {}) {
   };
 }
 
+export async function repairTokenCopies(tokenData) {
+  const token = normalizeRecord(tokenData, tokenData?.vault_source || 'memory');
+  if (!token) return { durable: false, postgres: { attempted: false, saved: false }, redis: false, file: false };
+
+  const [postgres, redis, file] = await Promise.all([
+    saveToPostgres(token),
+    saveToRedis(token),
+    saveToFile(token),
+  ]);
+  return {
+    token,
+    durable: durableTokenVaultConfigured() ? Boolean(postgres.saved) : false,
+    postgres,
+    redis,
+    file,
+  };
+}
+
 export async function clearTokenVault() {
   const redis = getRedis();
   await Promise.allSettled([
