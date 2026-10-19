@@ -46,6 +46,7 @@ import { CommerceEngine } from './commerce/engine.js';
 import { ConversationRetentionEngine } from './chat/conversationRetention.js';
 import { LurkerActivationEngine } from './chat/lurkerActivation.js';
 import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
+import { gameLanguageInstruction } from './chat/gameLanguage.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -417,7 +418,8 @@ async function generateSpontaneousMessage(channel, mode, streamContext, history,
     'Do not claim you saw gameplay unless the supplied context explicitly proves it.',
     'Prefer one useful observation, prediction, or easy question over generic hype.',
     quietPrompt(mode, streamContext),
-  ].join(' ');
+    gameLanguageInstruction(streamContext),
+  ].filter(Boolean).join(' ');
 
   const recentChat = history
     .filter(entry => entry.role === 'user')
@@ -770,6 +772,10 @@ async function handleMessage({ channel, user, message, self }) {
   const history = priorHistory;
   let systemPrompt = brainConfig.systemPrompt;
   systemPrompt += `\n\n${languageInstruction(responseLanguage)}`;
+  const gameStyleInstruction = gameLanguageInstruction(streamContext);
+  if (gameStyleInstruction && brainName !== 'moderation') {
+    systemPrompt += `\n\n${gameStyleInstruction}`;
+  }
   if (proactiveWelcome) {
     systemPrompt += `\n\nNEW VIEWER GUIDANCE: ${firstChatInstruction(username, message)}`;
   }
