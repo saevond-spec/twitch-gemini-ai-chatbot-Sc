@@ -9,7 +9,7 @@ import { handleMusicCommand, handleSkipCommand, handleSongCommand } from '../mus
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, !music [club|dubstep|play|pause], !skip, ' + config.media.musicCommand + ', and custom commands.';
+  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, !play, !music [club|dubstep|play|pause], !skip, ' + config.media.musicCommand + ', and custom commands.';
 }, 'Shows this help');
 
 registerBuiltin('!support', async (user, channel) => {
@@ -73,6 +73,10 @@ registerBuiltin('!mode', async (user, channel, client, message, context = {}) =>
 registerBuiltin('!music', (user, channel, client, message, context = {}) => {
   return handleMusicCommand(user, message, context.musicPlayerUrl);
 }, 'Show status and control NCS stream music');
+
+registerBuiltin('!play', (user, channel, client, message, context = {}) => {
+  return handleMusicCommand(user, '!music play', context.musicPlayerUrl);
+}, 'Start NCS stream music (moderators)');
 
 registerBuiltin('!skip', (user) => {
   return handleSkipCommand(user);
