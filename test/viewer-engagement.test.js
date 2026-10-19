@@ -248,13 +248,13 @@ test('follow events queue a named thank-you and record follow state', () => {
   const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   const eventsub = fs.readFileSync(new URL('../src/twitch/eventsub.js', import.meta.url), 'utf8');
 
-  assert.match(eventsub, /bus\\.emit\\(`eventsub\\.\\$\\{type\\}`, event\\)/);
-  assert.match(app, /bus\\.on\\('eventsub\\.channel\\.follow'/);
-  assert.match(app, /buildFollowThankYou\\(event\\)/);
-  assert.match(app, /followed:\\s*true/);
-  assert.match(app, /messageQueue\\.enqueue\\(channel, message/);
-  assert.match(app, /priority:\\s*'high'/);
-  assert.match(app, /Follow thank-you delivered/);
+  assert.ok(eventsub.includes("bus.emit(`eventsub.${type}`, event)"));
+  assert.ok(app.includes("bus.on('eventsub.channel.follow'"));
+  assert.ok(app.includes('buildFollowThankYou(event)'));
+  assert.ok(app.includes('followed: true'));
+  assert.ok(app.includes('messageQueue.enqueue(channel, message, {'));
+  assert.ok(app.includes("priority: 'high'"));
+  assert.ok(app.includes('Follow thank-you delivered'));
 });
 
 test('Redis outage fallback can retain viewer engagement in memory', async () => {
