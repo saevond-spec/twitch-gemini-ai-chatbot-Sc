@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConversationStore } from '../src/memory/conversationStore.js';
-import { quietSpeakProbability } from '../src/chat/quietChatterModel.js';
+
+process.env.TWITCH_USERNAME ||= 'testbot';
+process.env.TWITCH_CLIENT_ID ||= 'test-client';
+process.env.TWITCH_CLIENT_SECRET ||= 'test-secret';
+process.env.JOIN_CHANNELS ||= 'saevond';
+process.env.DEEPSEEK_API_KEY ||= 'test-key';
+process.env.REDIS_URL = '';
+
+const { createConversationStore } = await import('../src/memory/conversationStore.js');
+const { quietSpeakProbability } = await import('../src/chat/quietChatterModel.js');
 
 test('Redis absence keeps bounded conversation history and human activity in process memory', async () => {
   let now = 1_000_000;
