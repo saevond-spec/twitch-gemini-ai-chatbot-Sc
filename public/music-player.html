@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SweatyClanker Stream Music</title>
+  <link rel="stylesheet" href="/public/music-player.css">
+  <script src="/public/music-player.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">SWEATYCLANKER · STREAM AUDIO</p>
+      <h1>NCS music player</h1>
+      <p class="intro">Twitch chat can control this NCS player. Viewers hear it only when its audio is mixed into your broadcast.</p>
+    </header>
+
+    <section class="now-playing" aria-live="polite">
+      <div>
+        <p class="label">NOW PLAYING</p>
+        <h2 id="track-title">Waiting for the player…</h2>
+        <p id="station-name">Connecting to SweatyClanker</p>
+      </div>
+      <a id="playlist-link" href="https://www.youtube.com/playlist?list=PLRBp0Fe2Gpglq-J-Hv0p-y0wk3lQk570u" target="_blank" rel="noopener noreferrer">Open official NCS playlist</a>
+    </section>
+
+    <div class="player-frame">
+      <div id="youtube-player" title="NCS YouTube player"></div>
+    </div>
+
+    <section class="setup">
+      <button id="enable-audio" type="button" disabled>Loading YouTube player…</button>
+      <p id="connection-status" role="status">Connecting to chat controls…</p>
+      <h2>Audio routing</h2>
+      <p class="route-note"><strong>Android + PS5 direct broadcast:</strong> this page plays music on the phone, but PS5 does not mix phone or IRC audio into its broadcast. Viewers will not hear the tracks with that setup.</p>
+      <p>To put music in the broadcast, the player audio must be mixed into the stream by a computer running a stream mixer or by audio-routing hardware. If you have computer access, open this page there and mix its tab audio with the gameplay. Twitch chat can still control the player from Android.</p>
+      <p>Click “Enable audio” once on the device that runs the player. That browser permission only starts playback there; it does not route the sound to Twitch by itself.</p>
+    </section>
+
+    <section class="commands">
+      <h2>Chat controls</h2>
+      <p><code>!music dubstep</code> · <code>!music club</code> · <code>!music play</code> · <code>!music pause</code> · <code>!skip</code> · <code>!song</code></p>
+      <p>Station changes, play/pause, and skip are broadcaster/mod-only. Tracks advance automatically and the playlist loops.</p>
+    </section>
+
+    <footer>
+      <p>NCS licenses eligible independent creators to use its music on Twitch when they follow its usage policy; it is not public-domain music. Add <code>Music provided by http://spoti.fi/NCS</code> to the stream description. <a href="https://ncs.io/usage-policy" target="_blank" rel="noopener noreferrer">Read NCS usage policy</a>.</p>
+    </footer>
+  </main>
+</body>
+</html>

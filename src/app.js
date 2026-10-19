@@ -47,6 +47,7 @@ import { ConversationRetentionEngine } from './chat/conversationRetention.js';
 import { LurkerActivationEngine } from './chat/lurkerActivation.js';
 import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
 import { gameLanguageInstruction } from './chat/gameLanguage.js';
+import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './music/player.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -193,6 +194,13 @@ app.ws('/ws', (ws) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('close', () => wsClients.delete(ws));
+  ws.on('message', (raw) => {
+    let message;
+    try { message = JSON.parse(raw.toString()); } catch { return; }
+    if (message?.type !== 'music.player.status') return;
+    broadcast({ type: 'music.state', state: updateMusicPlayerStatus(message) });
+  });
+  ws.send(JSON.stringify({ type: 'music.init', state: getMusicState() }));
 });
 heartbeatInterval = setInterval(() => {
   for (const ws of wsClients) {
@@ -207,6 +215,7 @@ function broadcast(data) {
     if (client.readyState === 1) client.send(JSON.stringify(data));
   }
 }
+setMusicPublisher(broadcast);
 
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
@@ -696,7 +705,9 @@ async function handleMessage({ channel, user, message, self }) {
     const cmd = builtins.get(builtinKey);
     const cooldownKey = `${channel}:${login}`;
     if (!cooldown.check(cooldownKey)) return;
-    const response = await cmd.handler(user, channel, global.twitchClient, message, { highlightDetector });
+    const commandContext = { highlightDetector };
+    commandContext.musicPlayerUrl = `${String(publicUrl).replace(/\/$/, '')}/music-player`;
+    const response = await cmd.handler(user, channel, global.twitchClient, message, commandContext);
     if (response) {
       if (messageQueue) messageQueue.enqueue(channel, response);
       else await global.twitchClient.say(channel, response);
@@ -709,7 +720,6 @@ async function handleMessage({ channel, user, message, self }) {
     [config.media.imageCommand]: { type: 'image', handler: pollinations.generateImage.bind(pollinations) },
     [config.media.videoCommand]: { type: 'video', handler: pollinations.generateVideo.bind(pollinations) },
     [config.media.ttsCommand]: { type: 'tts', handler: pollinations.generateAudio.bind(pollinations) },
-    [config.media.musicCommand]: { type: 'music', handler: pollinations.generateMusic.bind(pollinations) },
   };
   for (const [cmd, { type, handler }] of Object.entries(mediaCommands)) {
     if (lowerMsg.startsWith(cmd)) {
@@ -1023,8 +1033,23 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
+app.get('/music-player', (req, res) => {
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' https://www.youtube.com https://s.ytimg.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https://i.ytimg.com https://yt3.ggpht.com https://www.google.com",
+    "connect-src 'self' ws: wss: https://www.youtube.com https://youtubei.googleapis.com https://www.google.com",
+    "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+    "frame-ancestors 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; '));
+  res.sendFile('music-player.html', { root: 'public' });
+});
+
 app.get('/', (req, res) => {
-  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Chat identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize SweatyClanker bot account</a></p>`);
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Chat identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize SweatyClanker bot account</a></p><p><a href="/music-player">Open the NCS music player</a></p>`);
 });
 
 // ========== INITIALIZATION ==========
