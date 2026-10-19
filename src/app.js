@@ -705,10 +705,9 @@ async function handleMessage({ channel, user, message, self }) {
     const cmd = builtins.get(builtinKey);
     const cooldownKey = `${channel}:${login}`;
     if (!cooldown.check(cooldownKey)) return;
-    const response = await cmd.handler(user, channel, global.twitchClient, message, {
-      highlightDetector,
-      musicPlayerUrl: `${String(publicUrl).replace(/\/$/, '')}/music-player`,
-    });
+    const commandContext = { highlightDetector };
+    commandContext.musicPlayerUrl = `${String(publicUrl).replace(/\/$/, '')}/music-player`;
+    const response = await cmd.handler(user, channel, global.twitchClient, message, commandContext);
     if (response) {
       if (messageQueue) messageQueue.enqueue(channel, response);
       else await global.twitchClient.say(channel, response);
