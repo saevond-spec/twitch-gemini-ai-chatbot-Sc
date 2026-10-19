@@ -10,6 +10,8 @@ const log = createLogger('AI-PROVIDERS');
 const promptCache = new Map();
 const CACHE_MAX = 100;
 const BALANCE_RECHECK_MS = 5 * 60 * 1000;
+const CREDENTIAL_CHECK_TIMEOUT_MS = 5_000;
+const DEEPSEEK_API_ROOT = 'https://api.deepseek.com';
 
 export class DeepSeekUnavailableError extends Error {
   constructor(message, { status = null, code = 'deepseek_unavailable', retryable = false, canFailover = true } = {}) {
@@ -45,9 +47,13 @@ export class DeepSeekClient {
     this.timeout = config.deepseek.timeoutMs || 10000;
     this.retries = config.deepseek.maxRetries || 3;
     this.baseURL = 'https://api.deepseek.com/v1';
+    this.balanceEndpoint = DEEPSEEK_API_ROOT + '/user/balance';
     this.billingBlocked = false;
     this.nextBalanceCheckAt = 0;
     this.lastProviderStatus = null;
+    this.credentialStatus = 'not_checked';
+    this.credentialCheckedAt = null;
+    this.lastBalanceCheckStatus = null;
   }
 
   estimateTokens(text) { return Math.ceil(text.length / 4); }
@@ -65,11 +71,76 @@ export class DeepSeekClient {
 
   getHealth() {
     return {
-      available: !this.billingBlocked,
+      available: Boolean(this.apiKey)
+        && !this.billingBlocked
+        && this.credentialStatus !== 'rejected',
+      configured: Boolean(this.apiKey),
+      credentialStatus: this.credentialStatus,
+      credentialCheckedAt: this.credentialCheckedAt,
       billingBlocked: this.billingBlocked,
       lastProviderStatus: this.lastProviderStatus,
       nextBalanceCheckAt: this.nextBalanceCheckAt || null,
     };
+  }
+
+  async verifyCredentials() {
+    if (!String(this.apiKey || '').trim()) {
+      this.credentialStatus = 'missing';
+      this.credentialCheckedAt = new Date().toISOString();
+      return {
+        provider: 'deepseek',
+        configured: false,
+        authentication: 'missing',
+        httpStatus: null,
+        model: this.model,
+      };
+    }
+
+    try {
+      const response = await axios.get(this.balanceEndpoint, {
+        headers: { Authorization: 'Bearer ' + this.apiKey },
+        timeout: Math.min(this.timeout, CREDENTIAL_CHECK_TIMEOUT_MS),
+      });
+      const accountAvailable = Boolean(response.data?.is_available);
+      this.lastProviderStatus = response.status;
+      this.credentialStatus = response.status === 200 ? 'verified' : 'unknown';
+      this.credentialCheckedAt = new Date().toISOString();
+      this.billingBlocked = response.status === 200 && !accountAvailable;
+      this.nextBalanceCheckAt = this.billingBlocked
+        ? Date.now() + BALANCE_RECHECK_MS
+        : 0;
+      return {
+        provider: 'deepseek',
+        configured: true,
+        authentication: this.credentialStatus,
+        httpStatus: response.status,
+        accountAvailable,
+        model: this.model,
+      };
+    } catch (error) {
+      const status = statusOf(error);
+      this.lastProviderStatus = status;
+      this.credentialStatus = status === 401
+        ? 'rejected'
+        : status === 403
+          ? 'permission_limited'
+          : status === 402
+            ? 'verified'
+            : 'unknown';
+      this.credentialCheckedAt = new Date().toISOString();
+      if (status === 402) {
+        this.billingBlocked = true;
+        this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
+      }
+      return {
+        provider: 'deepseek',
+        configured: true,
+        authentication: this.credentialStatus,
+        httpStatus: status,
+        accountAvailable: status === 402 ? false : null,
+        model: this.model,
+      };
+    }
   }
 
   async _checkBalanceIfBlocked() {
@@ -78,21 +149,30 @@ export class DeepSeekClient {
 
     this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
     try {
-      const response = await axios.get(this.baseURL + '/user/balance', {
+      const response = await axios.get(this.balanceEndpoint, {
         headers: { Authorization: 'Bearer ' + this.apiKey },
         timeout: Math.min(this.timeout, 8000),
       });
       const available = Boolean(response.data?.is_available);
+      this.lastBalanceCheckStatus = available ? response.status : 402;
       if (available) {
         this.billingBlocked = false;
         this.lastProviderStatus = 200;
+        this.credentialStatus = 'verified';
+        this.credentialCheckedAt = new Date().toISOString();
         log.info('DeepSeek balance is available again; AI calls resumed');
         return true;
       }
       this.lastProviderStatus = 402;
+      this.credentialStatus = 'verified';
+      this.credentialCheckedAt = new Date().toISOString();
       return false;
     } catch (err) {
-      this.lastProviderStatus = statusOf(err);
+      this.lastBalanceCheckStatus = statusOf(err);
+      this.lastProviderStatus = this.lastBalanceCheckStatus;
+      if (this.lastBalanceCheckStatus === 401) this.credentialStatus = 'rejected';
+      if (this.lastBalanceCheckStatus === 403) this.credentialStatus = 'permission_limited';
+      this.credentialCheckedAt = new Date().toISOString();
       log.warn('DeepSeek balance recheck failed: ' + (this.lastProviderStatus || err.message));
       return false;
     }
@@ -100,11 +180,27 @@ export class DeepSeekClient {
 
   async chat(messages, options = {}) {
     if (!(await this._checkBalanceIfBlocked())) {
-      throw new DeepSeekUnavailableError('DeepSeek account balance unavailable', {
-        status: 402,
-        code: 'insufficient_balance',
-        retryable: false,
-      });
+      const status = this.lastBalanceCheckStatus;
+      const authRejected = status === 401 || status === 403;
+      const noBalance = status === 402;
+      throw new DeepSeekUnavailableError(
+        authRejected
+          ? 'DeepSeek credential verification failed'
+          : noBalance
+            ? 'DeepSeek account balance unavailable'
+            : 'DeepSeek balance check temporarily unavailable',
+        {
+          status,
+          code: status === 401
+            ? 'authentication_failed'
+            : status === 403
+              ? 'permission_limited'
+              : noBalance
+                ? 'insufficient_balance'
+                : 'provider_unavailable',
+          retryable: !authRejected && !noBalance,
+        },
+      );
     }
 
     if (circuitBreaker.isOpen()) {
@@ -162,6 +258,8 @@ export class DeepSeekClient {
         clearTimeout(timeoutId);
 
         this.lastProviderStatus = response.status;
+        this.credentialStatus = 'verified';
+        this.credentialCheckedAt = new Date().toISOString();
         circuitBreaker.recordSuccess();
 
         if (stream) return this._handleStream(response);
@@ -178,6 +276,9 @@ export class DeepSeekClient {
 
         if (status === 402) {
           this.billingBlocked = true;
+          this.lastBalanceCheckStatus = 402;
+          this.credentialStatus = 'verified';
+          this.credentialCheckedAt = new Date().toISOString();
           this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
           log.warn('DeepSeek reported insufficient balance (402); pausing retries so the router can fail over');
           throw new DeepSeekUnavailableError('DeepSeek insufficient balance', {
@@ -185,6 +286,14 @@ export class DeepSeekClient {
             code: 'insufficient_balance',
             retryable: false,
           });
+        }
+
+        if (status === 401) {
+          this.credentialStatus = 'rejected';
+          this.credentialCheckedAt = new Date().toISOString();
+        } else if (status === 403) {
+          this.credentialStatus = 'permission_limited';
+          this.credentialCheckedAt = new Date().toISOString();
         }
 
         if (status && !isRetryableStatus(status)) {
@@ -267,15 +376,70 @@ export class OpenAIClient {
     this.temperature = config.deepseek.temperature;
     this.timeout = config.openai.timeoutMs || 10000;
     this.lastProviderStatus = null;
+    this.credentialStatus = 'not_checked';
+    this.credentialCheckedAt = null;
     this.endpoint = 'https://api.openai.com/v1/chat/completions';
+    this.modelsEndpoint = 'https://api.openai.com/v1/models';
   }
 
   getHealth() {
     return {
-      available: Boolean(this.apiKey),
+      available: Boolean(this.apiKey)
+        && this.credentialStatus !== 'rejected'
+        && this.credentialStatus !== 'permission_limited',
+      configured: Boolean(this.apiKey),
+      credentialStatus: this.credentialStatus,
+      credentialCheckedAt: this.credentialCheckedAt,
       lastProviderStatus: this.lastProviderStatus,
       model: this.model,
     };
+  }
+
+  async verifyCredentials() {
+    if (!String(this.apiKey || '').trim()) {
+      this.credentialStatus = 'missing';
+      this.credentialCheckedAt = new Date().toISOString();
+      return {
+        provider: 'openai',
+        configured: false,
+        authentication: 'missing',
+        httpStatus: null,
+        model: this.model,
+      };
+    }
+
+    try {
+      const response = await axios.get(this.modelsEndpoint, {
+        headers: { Authorization: 'Bearer ' + this.apiKey },
+        timeout: Math.min(this.timeout, CREDENTIAL_CHECK_TIMEOUT_MS),
+      });
+      this.lastProviderStatus = response.status;
+      this.credentialStatus = response.status === 200 ? 'verified' : 'unknown';
+      this.credentialCheckedAt = new Date().toISOString();
+      return {
+        provider: 'openai',
+        configured: true,
+        authentication: this.credentialStatus,
+        httpStatus: response.status,
+        model: this.model,
+      };
+    } catch (error) {
+      const status = statusOf(error);
+      this.lastProviderStatus = status;
+      this.credentialStatus = status === 401
+        ? 'rejected'
+        : status === 403
+          ? 'permission_limited'
+          : 'unknown';
+      this.credentialCheckedAt = new Date().toISOString();
+      return {
+        provider: 'openai',
+        configured: true,
+        authentication: this.credentialStatus,
+        httpStatus: status,
+        model: this.model,
+      };
+    }
   }
 
   async chat(messages, options = {}) {
@@ -322,12 +486,18 @@ export class OpenAIClient {
 
       validateAIResponse(content);
       this.lastProviderStatus = response.status;
+      this.credentialStatus = 'verified';
+      this.credentialCheckedAt = new Date().toISOString();
       openAICircuitBreaker.recordSuccess();
       log.debug('OpenAI response received', { usage: response.data?.usage });
       return content;
     } catch (error) {
       const status = statusOf(error);
       this.lastProviderStatus = status;
+      if (status === 401) this.credentialStatus = 'rejected';
+      else if (status === 403) this.credentialStatus = 'permission_limited';
+      else if (status === 200) this.credentialStatus = 'verified';
+      if (status) this.credentialCheckedAt = new Date().toISOString();
       const retryable = !status || isRetryableStatus(status);
       if (retryable || status === 401 || status === 402 || status === 403) {
         openAICircuitBreaker.recordFailure();
@@ -363,6 +533,7 @@ export function createAIClient() {
     providers,
     providerOrder: config.ai.providerOrder,
     failbackIntervalMs: config.ai.failbackIntervalMs,
+    maxFailbackIntervalMs: config.ai.maxFailbackIntervalMs,
     logger: log,
   });
 }

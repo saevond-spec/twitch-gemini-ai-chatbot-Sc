@@ -72,6 +72,8 @@ test('OAuth state, admin protection, and Twitch clip scope are present', () => {
   assert.match(app, /consumeOAuthState/);
   assert.match(app, /Invalid or expired OAuth state/);
   assert.match(app, /requireAdmin/);
+  assert.match(app, /app\.post\(\s*['"]\/api\/ai\/verify-credentials['"]\s*,\s*requireAdmin/);
+  assert.match(app, /AI provider verification could not complete/);
   assert.match(app, /BOT_SCOPES\.join/);
   assert.match(auth, /channel:manage:clips/);
   assert.match(auth, /missingScopes/);

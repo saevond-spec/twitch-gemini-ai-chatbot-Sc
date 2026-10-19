@@ -99,6 +99,7 @@ test('prompt-injection rejection does not send the message to another provider',
 });
 
 test('a recovered primary provider becomes active again', async () => {
+  let now = 10_000;
   let deepseekCalls = 0;
   let openaiCalls = 0;
   let failPrimary = true;
@@ -127,6 +128,9 @@ test('a recovered primary provider becomes active again', async () => {
     ],
     providerOrder: ['deepseek', 'openai'],
     failbackIntervalMs: 1_000,
+    maxFailbackIntervalMs: 4_000,
+    now: () => now,
+    random: () => 0.5,
     logger: { info() {}, warn() {} },
   });
 
@@ -134,11 +138,64 @@ test('a recovered primary provider becomes active again', async () => {
   assert.equal(await router.chat([]), 'backup response');
   assert.equal(deepseekCalls, 1, 'known-down primary is skipped during failback cooldown');
 
-  await new Promise(resolve => setTimeout(resolve, 1_050));
+  now += 1_000;
   failPrimary = false;
   assert.equal(await router.chat([]), 'primary recovered');
   assert.equal(router.getHealth().activeProvider, 'deepseek');
   assert.equal(deepseekCalls, 2);
   assert.equal(openaiCalls, 2);
+});
+
+test('all-down provider cooldown prevents a retry on every chat message and backs off', async () => {
+  let now = 10_000;
+  const calls = { deepseek: 0, openai: 0 };
+  const makeUnavailable = name => ({
+    async chat() {
+      calls[name] += 1;
+      const error = new Error('upstream unavailable');
+      error.status = 503;
+      error.code = 'provider_unavailable';
+      error.retryable = true;
+      throw error;
+    },
+  });
+
+  const router = new AIProviderRouter({
+    providers: [
+      { name: 'deepseek', client: makeUnavailable('deepseek') },
+      { name: 'openai', client: makeUnavailable('openai') },
+    ],
+    providerOrder: ['deepseek', 'openai'],
+    failbackIntervalMs: 1_000,
+    maxFailbackIntervalMs: 4_000,
+    now: () => now,
+    random: () => 0.5,
+  });
+
+  await assert.rejects(() => router.chat([]), error => error.retryable === true);
+  assert.deepEqual(calls, { deepseek: 1, openai: 1 });
+  assert.equal(router.getHealth().available, false);
+
+  now += 500;
+  await assert.rejects(
+    () => router.chat([]),
+    error => error.code === 'provider_cooldown' && error.retryAfterMs === 500,
+  );
+  assert.deepEqual(calls, { deepseek: 1, openai: 1 }, 'cooldown requests make no provider calls');
+
+  now += 500;
+  await assert.rejects(() => router.chat([]), error => error.retryable === true);
+  assert.deepEqual(calls, { deepseek: 2, openai: 2 });
+
+  now += 1_000;
+  await assert.rejects(
+    () => router.chat([]),
+    error => error.code === 'provider_cooldown' && error.retryAfterMs === 1_000,
+  );
+  assert.deepEqual(calls, { deepseek: 2, openai: 2 });
+
+  now += 1_000;
+  await assert.rejects(() => router.chat([]), error => error.retryable === true);
+  assert.deepEqual(calls, { deepseek: 3, openai: 3 });
 });
 

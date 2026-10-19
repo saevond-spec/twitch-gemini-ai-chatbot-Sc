@@ -29,6 +29,7 @@ const optional = {
   OPENAI_MODEL: 'gpt-4.1-mini',
   AI_PROVIDER_ORDER: 'deepseek,openai',
   AI_FAILBACK_INTERVAL_MS: 60000,
+  AI_MAX_FAILBACK_INTERVAL_MS: 300000,
   DEEPSEEK_MODEL: 'deepseek-chat',
   AI_HISTORY_LENGTH: 5,
   AI_TEMPERATURE: 0.7,
@@ -104,6 +105,7 @@ const convert = {
   AI_MAX_RETRIES: Number,
   AI_CIRCUIT_BREAKER_THRESHOLD: Number,
   AI_FAILBACK_INTERVAL_MS: Number,
+  AI_MAX_FAILBACK_INTERVAL_MS: Number,
   COOLDOWN_DURATION: Number,
   USER_COOLDOWN: Number,
   MAX_REPEAT_MESSAGES: Number,
@@ -184,6 +186,7 @@ export const config = {
       .split(',').map(name => name.trim().toLowerCase())
       .filter((name, index, names) => ['deepseek', 'openai'].includes(name) && names.indexOf(name) === index),
     failbackIntervalMs: env.AI_FAILBACK_INTERVAL_MS,
+    maxFailbackIntervalMs: env.AI_MAX_FAILBACK_INTERVAL_MS,
   },
   redis: { url: env.REDIS_URL || '' },
   cooldown: { global: env.COOLDOWN_DURATION, perUser: env.USER_COOLDOWN },

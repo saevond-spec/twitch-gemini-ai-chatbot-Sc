@@ -161,8 +161,20 @@ Keep the keys private. ChatGPT subscriptions and API usage are managed separatel
 | `OPENAI_MODEL` | Optional; defaults to `gpt-4.1-mini` |
 | `AI_PROVIDER_ORDER` | Optional; defaults to `deepseek,openai` |
 | `AI_FAILBACK_INTERVAL_MS` | Optional; defaults to `60000` |
+| `AI_MAX_FAILBACK_INTERVAL_MS` | Optional; defaults to `300000`; caps repeated-failure backoff |
 
 Set at least one AI key for the bot to start. Set both keys to enable cross-provider failover. If both providers fail, chat uses the local response fallback.
+
+#### Verify provider credentials safely
+
+After deployment, send one admin-authenticated request to `POST /api/ai/verify-credentials` with `Authorization: Bearer $ADMIN_API_KEY`. The route uses read-only provider endpoints, returns authentication status and HTTP codes, and never returns the API keys, OpenAI model list, or DeepSeek balance. `verified` confirms provider API authentication; it does not identify the human account owner. HTTP 401 means the key was rejected; `permission_limited` means the verification endpoint could not be accessed and does not by itself prove chat access is invalid. A DeepSeek result can be authenticated while `accountAvailable` is false.
+
+```sh
+curl -sS -X POST "$SWEATYCLANKER_URL/api/ai/verify-credentials" \
+  -H "Authorization: Bearer $ADMIN_API_KEY"
+```
+
+The diagnostic is limited to two requests per minute. Do not paste either API key into chat or a support ticket.
 
 </details>
 
@@ -244,7 +256,7 @@ Each provider has separate API limits and billing. When the active provider fail
 
 <br>
 
-The bot tries providers in AI_PROVIDER_ORDER, which defaults to DeepSeek followed by OpenAI. After a failure, it switches to the other configured provider and temporarily keeps using the working provider. It probes the preferred provider for recovery after AI_FAILBACK_INTERVAL_MS. If all providers fail, local chat responses remain available.
+The bot tries providers in AI_PROVIDER_ORDER, which defaults to DeepSeek followed by OpenAI. After a failure, it switches to the other configured provider and temporarily keeps using the working provider. Repeated failures use exponential backoff, capped by AI_MAX_FAILBACK_INTERVAL_MS, and messages received while every provider is cooling down do not trigger more API calls. The router probes providers again after cooldown expiry. If all providers fail, local chat responses remain available.
 
 </details>
 
