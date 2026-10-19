@@ -313,3 +313,29 @@ test('auto-chat ready listener is registered before plugin load', () => {
   assert.ok(plugins >= 0);
   assert.ok(listener < plugins, 'twitch.ready listener must exist before plugin emits the event');
 });
+
+
+test('Twitch OAuth uses a durable versioned vault instead of ephemeral file authority', () => {
+  const auth = fs.readFileSync(path.join(root, 'src/twitch/auth.js'), 'utf8');
+  const vault = fs.readFileSync(path.join(root, 'src/twitch/tokenVault.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const env = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+
+  assert.match(auth, /loadBestToken/);
+  assert.match(auth, /persistToken/);
+  assert.match(auth, /recoverNewerVaultToken/);
+  assert.match(auth, /repairTokenCopies/);
+  assert.match(auth, /getAuthPersistenceStatus/);
+  assert.doesNotMatch(auth, /redis\.set\(TOKEN_KEY.*'EX'/s);
+
+  assert.match(vault, /AES-256-GCM|aes-256-gcm/i);
+  assert.match(vault, /TWITCH_TOKEN_DATABASE_URL/);
+  assert.match(vault, /CREATE TABLE IF NOT EXISTS twitch_oauth_vault/);
+  assert.match(vault, /WHERE twitch_oauth_vault\.generation <= EXCLUDED\.generation/);
+  assert.match(vault, /await redis\.set\(TOKEN_KEY, JSON\.stringify\(token\)\)/);
+  assert.match(vault, /chooseFreshestToken/);
+
+  assert.match(app, /oauthPersistence: getAuthPersistenceStatus\(\)/);
+  assert.match(app, /\/api\/auth\/status/);
+  assert.match(env, /TWITCH_TOKEN_DATABASE_URL=/);
+});
