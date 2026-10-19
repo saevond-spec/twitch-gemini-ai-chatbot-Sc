@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   createMusicController,
   MUSIC_STATIONS,
+  setMusicPublisher,
 } from '../src/music/player.js';
+import { builtins } from '../src/commands/index.js';
+import '../src/commands/builtins.js';
 
 function broadcaster() {
   return { badges: { broadcaster: '1' } };
@@ -90,4 +93,30 @@ test('!song reports current track and pause state', () => {
 
   controller.updatePlayerStatus({ playing: false });
   assert.equal(controller.handleSongCommand(), 'Music is paused on Dubstep.');
+});
+
+
+test('!play is a simple moderator-only alias that requests music playback', async () => {
+  const command = builtins.get('!play');
+  assert.ok(command, '!play must be registered as a builtin');
+
+  const events = [];
+  setMusicPublisher(event => events.push(event));
+  try {
+    const denied = await command.handler({ mod: false, badges: {} }, 'saevond', null, '!play', {});
+    assert.match(denied, /Only the broadcaster or a moderator/);
+    assert.equal(events.length, 0);
+
+    const response = await command.handler(broadcaster(), 'saevond', null, '!play', {});
+    assert.match(response, /Playback requested/);
+    assert.equal(events.at(-1).action, 'play');
+    assert.equal(events.at(-1).state.playing, true);
+  } finally {
+    setMusicPublisher(() => {});
+  }
+});
+
+test('help lists the short !play command', async () => {
+  const response = await builtins.get('!help').handler({}, 'saevond', null, '!help', {});
+  assert.match(response, /!play/);
 });
