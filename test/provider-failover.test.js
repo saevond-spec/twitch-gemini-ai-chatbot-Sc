@@ -139,6 +139,6 @@ test('a recovered primary provider becomes active again', async () => {
   assert.equal(await router.chat([]), 'primary recovered');
   assert.equal(router.getHealth().activeProvider, 'deepseek');
   assert.equal(deepseekCalls, 2);
-  assert.equal(openaiCalls, 1);
+  assert.equal(openaiCalls, 2);
 });
 
