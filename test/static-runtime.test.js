@@ -54,9 +54,12 @@ test('production start does not regenerate source', () => {
   assert.equal(pkg.dependencies['ffmpeg-static'], '5.3.0');
 });
 
-test('Render config is DeepSeek-only and runs real workers', () => {
+test('Render config supports DeepSeek/OpenAI failover and runs real workers', () => {
   const render = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
   assert.match(render, /DEEPSEEK_API_KEY/);
+  assert.match(render, /OPENAI_API_KEY\n\s+sync: false/);
+  assert.match(render, /OPENAI_MODEL\n\s+value: "gpt-4\.1-mini"/);
+  assert.match(render, /AI_PROVIDER_ORDER\n\s+value: "deepseek,openai"/);
   assert.doesNotMatch(render, /GEMINI_API_KEY|gemini-2\.5|UPSTASH_REDIS_URL|CLIP_WEBHOOK_URL/);
   assert.match(render, /REDIS_URL/);
   assert.match(render, /WORKERS_ENABLED\n\s+value: "true"/);

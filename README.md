@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="assets/banner.png" alt="Twitch Gemini Chatbot Banner" width="100%">
+<img src="assets/banner.png" alt="SweatyClanker Twitch Chatbot Banner" width="100%">
 
-# Twitch Gemini Chatbot
+# SweatyClanker Twitch Chatbot
 
-**A free, AI-powered Twitch chatbot running on Google Gemini — deployed in minutes, runs 24/7.**
+**An AI-powered Twitch chat companion with DeepSeek and OpenAI provider failover.**
 
 [![Built with Pollinations](https://img.shields.io/badge/Built%20with-Pollinations-8a2be2?style=for-the-badge&logo=data:image/png;base64,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&logoColor=white&labelColor=6a0dad)](https://pollinations.ai)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge)](#license)
@@ -27,7 +27,7 @@ A high-level checklist — the [Tutorial](#tutorial) below covers every step in 
 
 1. **Fork this repository** and customize the bot's personality files
 2. **Create a Twitch application** at [`dev.twitch.tv/console`](https://dev.twitch.tv/console) — note your Client ID & Secret
-3. **Get Gemini API key(s)** from [`console.cloud.google.com`](https://console.cloud.google.com/)
+3. **Create DeepSeek and OpenAI API keys** to enable automatic provider failover
 4. **Get a Pollinations API key** from [`enter.pollinations.ai`](https://enter.pollinations.ai)
 5. **Create a free Upstash Redis database** at [`console.upstash.com`](https://console.upstash.com) — copy the Redis connection string
 6. **Deploy your fork to Render** and fill in your environment variables
@@ -59,7 +59,7 @@ These files shape the bot's personality and behavior — edit them in your fork 
 
 **`system_instructions.txt`** (required)
 
-This is the bot's personality prompt — Gemini follows these instructions for every response. Define tone, character, rules, etc.
+This is the bot's personality prompt — the active AI provider follows these instructions for every response. Define tone, character, rules, etc.
 
 **`custom_commands.txt`** (optional)
 
@@ -99,7 +99,7 @@ You need a **Twitch account for the bot** (can be your own or a separate account
 2. Go to the [Twitch Developer Console](https://dev.twitch.tv/console)
 3. Click the **Applications** tab, then **Register Your Application**
 4. Fill in the form:
-   - **Name:** anything you like (e.g. `My Gemini Bot`)
+   - **Name:** anything you like (e.g. `SweatyClanker Bot`)
    - **OAuth Redirect URL:** `https://YOUR-APP.onrender.com/auth/callback`
      - Replace `YOUR-APP` with your actual Render service name — you can find it in your Render dashboard
    - **Category:** `Chat Bot`
@@ -135,48 +135,34 @@ Make sure you're **logged into the bot's Twitch account** in your browser. The a
 
 </details>
 
-<!-- ─── 3. GEMINI ──────────────────────────────────────── -->
+<!-- ─── 3. AI PROVIDERS ─────────────────────────────────── -->
 
 <details>
-<summary><strong>3 — Gemini API Keys</strong></summary>
+<summary><strong>3 — DeepSeek and OpenAI API Keys</strong></summary>
 
 <br>
 
-> ⚠️ Create your keys through the **Google Cloud Console** — not Google AI Studio. Keys created in the Cloud Console are managed separately and behave differently.
+Configure both providers for automatic failover. DeepSeek is preferred by default; OpenAI takes over when DeepSeek returns an API, billing, rate-limit, or availability error. The bot temporarily stays on the working provider and probes the preferred provider again after the configured failback interval.
 
-#### Create a project
+#### Create provider API keys
 
-1. Go to [`console.cloud.google.com`](https://console.cloud.google.com/) and sign in with your Google account
-2. Click the **project dropdown** at the top of the page, then **New Project**
-3. Name it anything (e.g. `gemini-bot-1`) and click **Create**
+- Create a DeepSeek key at [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys).
+- Create an OpenAI API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
 
-#### Enable the Gemini API
+Keep the keys private. ChatGPT subscriptions and API usage are managed separately; the bot needs an OpenAI API key with API billing enabled.
 
-1. With your new project selected, go to **APIs & Services → Library**
-   - Direct link: [`console.cloud.google.com/apis/library`](https://console.cloud.google.com/apis/library)
-2. Search for **Generative Language API**
-3. Click it, then click **Enable**
-
-#### Create an API key
-
-1. Go to **APIs & Services → Credentials**
-   - Direct link: [`console.cloud.google.com/apis/credentials`](https://console.cloud.google.com/apis/credentials)
-2. Click **Create Credentials → API key**
-3. Copy the generated key — it starts with `AIza`
-
-#### Multiple keys (recommended)
-
-Each key is tied to one project and gets its own daily quota — more keys = more capacity. Repeat all three steps above for as many projects as your account allows. Most accounts can create 5–15 projects.
-
-The `GEMINI_API_KEY` environment variable accepts **multiple comma-separated keys** and rotates through them automatically.
-
-#### Render environment variable
+#### Render environment variables
 
 | Variable | Value |
 |---|---|
-| `GEMINI_API_KEY` | One or more keys, e.g. `Key1,Key2,Key3` |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `DEEPSEEK_MODEL` | Optional; defaults to `deepseek-chat` |
+| `OPENAI_MODEL` | Optional; defaults to `gpt-4.1-mini` |
+| `AI_PROVIDER_ORDER` | Optional; defaults to `deepseek,openai` |
+| `AI_FAILBACK_INTERVAL_MS` | Optional; defaults to `60000` |
 
-> 💡 **Optional:** To give Gemini extra context on YouTube links (video title, description), create a YouTube Data API v3 key from the same [Credentials page](https://console.cloud.google.com/apis/credentials) and add it as `YOUTUBE_API_KEY`.
+Set at least one AI key for the bot to start. Set both keys to enable cross-provider failover. If both providers fail, chat uses the local response fallback.
 
 </details>
 
@@ -249,27 +235,25 @@ Upstash provides a free persistent database that stores chat logs, media history
 
 <br>
 
-On the free tier, each API key under a project at [`console.cloud.google.com`](https://console.cloud.google.com/) gets around 20 calls per day. Your account may have anywhere from 5–15 available projects depending on account age, giving you 100–300 API calls per day. The `GEMINI_API_KEY` env var accepts multiple comma-separated keys and rotates through them automatically.
+Each provider has separate API limits and billing. When the active provider fails, the bot can send the request to the other configured provider, which uses that provider's API quota. Configure both keys for failover and check each provider's dashboard for current usage and limits.
 
 </details>
 
 <details>
-<summary><strong>Why does this use Gemini 2.5 Flash?</strong></summary>
+<summary><strong>How does AI provider failover work?</strong></summary>
 
 <br>
 
-Only Gemini 2.5 and Gemini 3.0 are available on the free tier, both offering ~20 calls per day per key. However, Gemini 2.5 Flash is currently the only model that supports free grounded Google searching.
-
-If you don't need search grounding — or you're using a paid key — you can change `MODEL_NAME` to `gemini-3-flash-preview` and set `ENABLE_SEARCH_GROUNDING` to `false`.
+The bot tries providers in AI_PROVIDER_ORDER, which defaults to DeepSeek followed by OpenAI. After a failure, it switches to the other configured provider and temporarily keeps using the working provider. It probes the preferred provider for recovery after AI_FAILBACK_INTERVAL_MS. If all providers fail, local chat responses remain available.
 
 </details>
 
 <details>
-<summary><strong>How do I get the bot to use Google search more often?</strong></summary>
+<summary><strong>Does the chat AI search the web?</strong></summary>
 
 <br>
 
-Gemini decides when to use its search tool automatically based on the user's prompt and the system instructions. If the bot isn't searching often enough, tell it to do so in your `system_instructions.txt`.
+The current chat provider path sends text chat completions and does not attach a web-search tool. It can use only the context supplied by the bot and the conversation.
 
 </details>
 
@@ -310,22 +294,20 @@ Yes. As long as the Render service is running, the bot stays connected to your T
 </details>
 
 <details>
-<summary><strong>Can Gemini see images or videos?</strong></summary>
+<summary><strong>Can the chat AI analyze images or videos?</strong></summary>
 
 <br>
 
-**Images** — Yes. The bot automatically fetches any image URLs present in a chat message and sends them to Gemini for context. If an image isn't being recognized, try a different image host.
-
-**Videos & Audio** — Only native YouTube URLs are supported. Gemini can process the video content directly.
+The DeepSeek/OpenAI failover path sends text chat messages. It does not pass image or video content to either chat provider. Media generation commands use their separate provider integrations.
 
 </details>
 
 <details>
-<summary><strong>What is the optional YouTube API key for?</strong></summary>
+<summary><strong>Do I need both AI provider keys?</strong></summary>
 
 <br>
 
-Gemini can natively watch YouTube videos. When you supply a `YOUTUBE_API_KEY`, it provides Gemini with extra context such as the video title and description. You can obtain the key from the same [Google Cloud Console](https://console.cloud.google.com/apis/credentials) where you get your Gemini keys.
+One key is enough for AI chat to run. Both DEEPSEEK_API_KEY and OPENAI_API_KEY are needed for automatic cross-provider failover. OpenAI API usage has its own billing and is separate from a ChatGPT subscription.
 
 </details>
 

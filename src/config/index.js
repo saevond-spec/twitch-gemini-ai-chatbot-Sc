@@ -10,7 +10,6 @@ const requiredVars = {
   TWITCH_CLIENT_ID: 'Twitch application Client ID',
   TWITCH_CLIENT_SECRET: 'Twitch application Client Secret',
   JOIN_CHANNELS: 'Comma-separated list of channels to join',
-  DEEPSEEK_API_KEY: 'DeepSeek API key',
 };
 
 const missing = Object.keys(requiredVars).filter(key => !process.env[key]);
@@ -19,8 +18,17 @@ if (missing.length) {
   missing.forEach(key => log.error(`  - ${key}: ${requiredVars[key]}`));
   process.exit(1);
 }
+if (!String(process.env.DEEPSEEK_API_KEY || '').trim() && !String(process.env.OPENAI_API_KEY || '').trim()) {
+  log.error('Set at least one AI provider key: DEEPSEEK_API_KEY or OPENAI_API_KEY');
+  process.exit(1);
+}
 
 const optional = {
+  DEEPSEEK_API_KEY: '',
+  OPENAI_API_KEY: '',
+  OPENAI_MODEL: 'gpt-4.1-mini',
+  AI_PROVIDER_ORDER: 'deepseek,openai',
+  AI_FAILBACK_INTERVAL_MS: 60000,
   DEEPSEEK_MODEL: 'deepseek-chat',
   AI_HISTORY_LENGTH: 5,
   AI_TEMPERATURE: 0.7,
@@ -95,6 +103,7 @@ const convert = {
   AI_TIMEOUT_MS: Number,
   AI_MAX_RETRIES: Number,
   AI_CIRCUIT_BREAKER_THRESHOLD: Number,
+  AI_FAILBACK_INTERVAL_MS: Number,
   COOLDOWN_DURATION: Number,
   USER_COOLDOWN: Number,
   MAX_REPEAT_MESSAGES: Number,
@@ -164,6 +173,17 @@ export const config = {
     timeoutMs: env.AI_TIMEOUT_MS,
     maxRetries: env.AI_MAX_RETRIES,
     circuitBreakerThreshold: env.AI_CIRCUIT_BREAKER_THRESHOLD,
+  },
+  openai: {
+    apiKey: env.OPENAI_API_KEY,
+    model: env.OPENAI_MODEL,
+    timeoutMs: env.AI_TIMEOUT_MS,
+  },
+  ai: {
+    providerOrder: (env.AI_PROVIDER_ORDER || 'deepseek,openai')
+      .split(',').map(name => name.trim().toLowerCase())
+      .filter((name, index, names) => ['deepseek', 'openai'].includes(name) && names.indexOf(name) === index),
+    failbackIntervalMs: env.AI_FAILBACK_INTERVAL_MS,
   },
   redis: { url: env.REDIS_URL || '' },
   cooldown: { global: env.COOLDOWN_DURATION, perUser: env.USER_COOLDOWN },

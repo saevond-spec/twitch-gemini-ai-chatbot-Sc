@@ -4,19 +4,21 @@ import { config } from '../config/index.js';
 import { createLogger } from '../logger/index.js';
 import { CircuitBreaker } from '../circuitBreaker/index.js';
 import { validateAIResponse, detectPromptInjection } from './safeguards.js';
+import { AIProviderRouter } from './providerRouter.js';
 
-const log = createLogger('DEEPSEEK');
+const log = createLogger('AI-PROVIDERS');
 const promptCache = new Map();
 const CACHE_MAX = 100;
 const BALANCE_RECHECK_MS = 5 * 60 * 1000;
 
 export class DeepSeekUnavailableError extends Error {
-  constructor(message, { status = null, code = 'deepseek_unavailable', retryable = false } = {}) {
+  constructor(message, { status = null, code = 'deepseek_unavailable', retryable = false, canFailover = true } = {}) {
     super(message);
     this.name = 'DeepSeekUnavailableError';
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.canFailover = canFailover;
   }
 }
 
@@ -98,7 +100,7 @@ export class DeepSeekClient {
 
   async chat(messages, options = {}) {
     if (!(await this._checkBalanceIfBlocked())) {
-      throw new DeepSeekUnavailableError('DeepSeek account balance unavailable; using local fallback', {
+      throw new DeepSeekUnavailableError('DeepSeek account balance unavailable', {
         status: 402,
         code: 'insufficient_balance',
         retryable: false,
@@ -118,25 +120,27 @@ export class DeepSeekClient {
         throw new DeepSeekUnavailableError('Prompt injection detected', {
           code: 'prompt_injection',
           retryable: false,
+          canFailover: false,
         });
       }
     }
 
     const { temperature = this.temperature, maxTokens = this.maxTokens, stream = false } = options;
-    const totalText = messages.map(m => m.content).join(' ');
+    const requestMessages = messages.map(message => ({ ...message }));
+    const totalText = requestMessages.map(m => m.content).join(' ');
     const estimatedTokens = this.estimateTokens(totalText);
     const budget = maxTokens || this.maxTokens;
 
     if (estimatedTokens > budget * 1.5) {
       log.warn('Estimated tokens exceed budget, truncating history');
-      while (messages.length > 2 && this.estimateTokens(messages.map(m => m.content).join(' ')) > budget) {
-        messages.splice(1, 1);
+      while (requestMessages.length > 2 && this.estimateTokens(requestMessages.map(m => m.content).join(' ')) > budget) {
+        requestMessages.splice(1, 1);
       }
     }
 
     const payload = {
       model: this.model,
-      messages,
+      messages: requestMessages,
       temperature,
       max_tokens: budget,
       stream,
@@ -175,7 +179,7 @@ export class DeepSeekClient {
         if (status === 402) {
           this.billingBlocked = true;
           this.nextBalanceCheckAt = Date.now() + BALANCE_RECHECK_MS;
-          log.warn('DeepSeek reported insufficient balance (402); switching to local fallback and pausing paid API retries');
+          log.warn('DeepSeek reported insufficient balance (402); pausing retries so the router can fail over');
           throw new DeepSeekUnavailableError('DeepSeek insufficient balance', {
             status: 402,
             code: 'insufficient_balance',
@@ -184,7 +188,7 @@ export class DeepSeekClient {
         }
 
         if (status && !isRetryableStatus(status)) {
-          log.warn('DeepSeek returned non-retryable HTTP ' + status + '; using local fallback');
+          log.warn('DeepSeek returned non-retryable HTTP ' + status + '; allowing provider failover');
           throw new DeepSeekUnavailableError('DeepSeek non-retryable HTTP ' + status, {
             status,
             code: status === 401 ? 'authentication_failed' : 'request_rejected',
@@ -230,4 +234,135 @@ export class DeepSeekClient {
   }
 
   _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+}
+
+const openAICircuitBreaker = new CircuitBreaker({
+  name: 'openai',
+  failureThreshold: config.deepseek.circuitBreakerThreshold || 5,
+  timeout: 60000,
+  resetTimeout: 60000,
+});
+
+export class OpenAIUnavailableError extends Error {
+  constructor(message, {
+    status = null,
+    code = 'openai_unavailable',
+    retryable = false,
+    canFailover = true,
+  } = {}) {
+    super(message);
+    this.name = 'OpenAIUnavailableError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+    this.canFailover = canFailover;
+  }
+}
+
+export class OpenAIClient {
+  constructor() {
+    this.apiKey = config.openai.apiKey;
+    this.model = config.openai.model;
+    this.maxTokens = config.deepseek.maxTokens;
+    this.temperature = config.deepseek.temperature;
+    this.timeout = config.openai.timeoutMs || 10000;
+    this.lastProviderStatus = null;
+    this.endpoint = 'https://api.openai.com/v1/chat/completions';
+  }
+
+  getHealth() {
+    return {
+      available: Boolean(this.apiKey),
+      lastProviderStatus: this.lastProviderStatus,
+      model: this.model,
+    };
+  }
+
+  async chat(messages, options = {}) {
+    const userMessages = messages.filter(message => message.role === 'user');
+    for (const message of userMessages) {
+      if (detectPromptInjection(message.content)) {
+        throw new OpenAIUnavailableError('Prompt injection detected', {
+          code: 'prompt_injection',
+          retryable: false,
+          canFailover: false,
+        });
+      }
+    }
+
+    if (openAICircuitBreaker.isOpen()) {
+      throw new OpenAIUnavailableError('OpenAI circuit breaker open', {
+        code: 'circuit_open',
+        retryable: true,
+      });
+    }
+
+    const requestMessages = messages.map(message => ({ ...message }));
+    const budget = Math.max(1, Math.floor(Number(options.maxTokens) || this.maxTokens));
+    const payload = {
+      model: this.model,
+      messages: requestMessages,
+      temperature: options.temperature ?? this.temperature,
+      max_completion_tokens: budget,
+    };
+
+    try {
+      const response = await axios.post(this.endpoint, payload, {
+        headers: {
+          Authorization: 'Bearer ' + this.apiKey,
+          'Content-Type': 'application/json',
+        },
+        timeout: this.timeout,
+      });
+
+      const content = response.data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) {
+        throw new Error('OpenAI returned an empty response');
+      }
+
+      validateAIResponse(content);
+      this.lastProviderStatus = response.status;
+      openAICircuitBreaker.recordSuccess();
+      log.debug('OpenAI response received', { usage: response.data?.usage });
+      return content;
+    } catch (error) {
+      const status = statusOf(error);
+      this.lastProviderStatus = status;
+      const retryable = !status || isRetryableStatus(status);
+      if (retryable || status === 401 || status === 402 || status === 403) {
+        openAICircuitBreaker.recordFailure();
+      }
+
+      const code = status === 401 || status === 403
+        ? 'authentication_failed'
+        : status === 402
+          ? 'insufficient_balance'
+          : status === 429
+            ? 'rate_limited'
+            : status
+              ? 'request_rejected'
+              : 'provider_unavailable';
+      log.warn('OpenAI provider request failed', { status, code });
+      throw new OpenAIUnavailableError(
+        'OpenAI request failed' + (status ? ' with HTTP ' + status : ''),
+        { status, code, retryable },
+      );
+    }
+  }
+}
+
+export function createAIClient() {
+  const providers = [];
+  if (config.deepseek.apiKey?.trim()) {
+    providers.push({ name: 'deepseek', client: new DeepSeekClient() });
+  }
+  if (config.openai.apiKey?.trim()) {
+    providers.push({ name: 'openai', client: new OpenAIClient() });
+  }
+  return new AIProviderRouter({
+    providers,
+    providerOrder: config.ai.providerOrder,
+    failbackIntervalMs: config.ai.failbackIntervalMs,
+    logger: log,
+  });
 }
