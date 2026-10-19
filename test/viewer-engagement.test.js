@@ -244,13 +244,17 @@ test('stress: only qualified engaged viewers get one follow invitation', () => {
   assert.ok(eligible < 50, 'conversion prompt should remain selective rather than target everyone');
 });
 
-test('follow events are tracked without public named follower announcements', () => {
+test('follow events queue a named thank-you and record follow state', () => {
   const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
   const eventsub = fs.readFileSync(new URL('../src/twitch/eventsub.js', import.meta.url), 'utf8');
 
-  assert.match(app, /eventsub\.channel\.follow/);
-  assert.match(app, /followed:\s*true/);
-  assert.doesNotMatch(eventsub, /Thanks for the follow, @/);
+  assert.match(eventsub, /bus\\.emit\\(`eventsub\\.\\$\\{type\\}`, event\\)/);
+  assert.match(app, /bus\\.on\\('eventsub\\.channel\\.follow'/);
+  assert.match(app, /buildFollowThankYou\\(event\\)/);
+  assert.match(app, /followed:\\s*true/);
+  assert.match(app, /messageQueue\\.enqueue\\(channel, message/);
+  assert.match(app, /priority:\\s*'high'/);
+  assert.match(app, /Follow thank-you delivered/);
 });
 
 test('Redis outage fallback can retain viewer engagement in memory', async () => {
