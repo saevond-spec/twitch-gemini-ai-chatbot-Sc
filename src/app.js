@@ -84,11 +84,24 @@ const joinWelcomeBatcher = new JoinWelcomeBatcher({
   dedupeMs: config.auto.joinWelcomeDedupeMinutes * 60_000,
   onFlush: async (channel, message) => {
     if (!config.auto.welcomeOnJoin) return;
-    if (messageQueue) messageQueue.enqueue(channel, message, { priority: 'normal' });
-    else if (global.twitchClient?.connected) await global.twitchClient.say(channel, message);
-    promMetrics.messagesSent.inc();
-    promMetrics.viewerWelcomes.inc();
-    log.info(`Join welcome sent in ${channel}: ${message}`);
+    if (!messageQueue && global.twitchClient) {
+      messageQueue = new MessageQueue(global.twitchClient);
+      log.info('Message queue initialized while flushing join welcome');
+    }
+    if (!messageQueue) {
+      log.warn(`Unable to queue join welcome for ${channel}: Twitch client is unavailable`);
+      return;
+    }
+
+    messageQueue.enqueue(channel, message, {
+      priority: 'high',
+      onDelivered: () => {
+        promMetrics.messagesSent.inc();
+        promMetrics.viewerWelcomes.inc();
+        log.info(`Join welcome delivered in ${channel}: ${message}`);
+      },
+    });
+    log.info(`Join welcome queued in ${channel}: ${message}`);
   },
 });
 const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
@@ -1094,6 +1107,12 @@ async function initializeBot() {
       log.warn('Failed to record follower state', err.message);
     }
   });
+  bus.on('twitch.connected', () => {
+    if (!messageQueue && global.twitchClient) {
+      messageQueue = new MessageQueue(global.twitchClient);
+      log.info('Message queue initialized on Twitch connect');
+    }
+  });
   bus.on('twitch.ready', () => {
     log.info('Twitch client is ready. Starting auto-messages...');
     startAutoMessages();
@@ -1105,7 +1124,7 @@ async function initializeBot() {
   await loadPlugins(bus, config);
 
   const twitchClient = global.twitchClient;
-  if (twitchClient) {
+  if (twitchClient && !messageQueue) {
     log.info('Initializing message queue...');
     messageQueue = new MessageQueue(twitchClient);
     log.info('Message queue initialized');

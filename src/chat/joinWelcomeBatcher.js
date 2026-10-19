@@ -16,12 +16,12 @@ export function formatJoinWelcome(names = []) {
 
 export class JoinWelcomeBatcher {
   constructor({
-    flushMs = 2500,
+    flushMs = 100,
     dedupeMs = 6 * 60 * 60 * 1000,
     onFlush = async () => {},
     now = () => Date.now(),
   } = {}) {
-    this.flushMs = Math.max(250, Number(flushMs) || 2500);
+    this.flushMs = Math.max(100, Number(flushMs) || 100);
     this.dedupeMs = Math.max(60_000, Number(dedupeMs) || 6 * 60 * 60 * 1000);
     this.onFlush = onFlush;
     this.now = now;
