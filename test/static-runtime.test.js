@@ -274,8 +274,8 @@ test('low-pressure lurker activation is wired into production', () => {
   assert.match(math, /sampleBeta/);
   assert.match(math, /activationOpportunity/);
   assert.match(store, /successCredited/);
-  assert.match(welcome, /Never expose silent usernames/);
-  assert.doesNotMatch(welcome, /Welcome in @\$\{/);
+  assert.match(welcome, /Welcome in @\$\{/);
+  assert.match(welcome, /chat whenever you feel like it/);
   assert.match(render, /LURKER_ACTIVATION_ENABLED\n\s+value: "true"/);
   assert.match(render, /LURKER_PROMPT_GAP_SECONDS\n\s+value: "240"/);
 });
