@@ -22,6 +22,7 @@ test('public status gives the player URL and chat controls', () => {
   assert.match(result, /!music dubstep/);
   assert.match(result, /!skip/);
   assert.match(result, /mod-only/);
+  assert.match(result, /routed into the broadcast/);
 });
 
 test('viewers cannot switch stations or skip tracks', () => {
