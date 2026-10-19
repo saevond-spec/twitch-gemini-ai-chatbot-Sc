@@ -88,7 +88,7 @@ export class TwitchClient {
       this.stateMachine.reset();
 
       this.client = new tmi.Client({
-        options: { debug: debugMode },
+        options: { debug: debugMode, skipMembership: false },
         identity: {
           username: config.twitch.username,
           password: `oauth:${token}`,
