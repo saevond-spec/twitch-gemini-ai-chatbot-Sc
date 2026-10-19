@@ -9,10 +9,43 @@ test('join welcomes use a short batching window and one-minute rejoin dedupe', (
   batcher.stop();
 });
 
+test('single-viewer greetings rotate through distinct cuh-flavored lines', () => {
+  const greetings = Array.from({ length: 5 }, (_, index) => formatJoinWelcome(['Alice'], index));
+  assert.equal(new Set(greetings).size, 5);
+  assert.ok(greetings.every(message => message.includes('@alice') && message.includes('cuh')));
+});
+
+test('group greetings also rotate without changing burst acknowledgement', () => {
+  const greetings = Array.from({ length: 4 }, (_, index) => formatJoinWelcome(['Alice', 'Bob'], index));
+  assert.equal(new Set(greetings).size, 4);
+  assert.ok(greetings.every(message => message.includes('@alice') && message.includes('@bob') && message.includes('cuh')));
+});
+
+test('each channel rotates its greeting across consecutive join batches', async () => {
+  const sent = [];
+  const batcher = new JoinWelcomeBatcher({
+    flushMs: 60_000,
+    onFlush: async (_channel, message, _names, delivery) => {
+      sent.push(message);
+      delivery.onDelivered();
+      return true;
+    },
+  });
+
+  assert.equal(batcher.add('#saevond', 'alice'), true);
+  await batcher.flush('#saevond');
+  assert.equal(batcher.add('#saevond', 'bob'), true);
+  await batcher.flush('#saevond');
+
+  assert.notEqual(sent[0], sent[1]);
+  batcher.stop();
+});
+
 test('single incoming viewer gets a named low-pressure welcome', () => {
   const msg = formatJoinWelcome(['Alice']);
-  assert.match(msg, /Welcome in @alice/i);
-  assert.match(msg, /chat whenever/i);
+  assert.match(msg, /@alice/i);
+  assert.match(msg, /welcome/i);
+  assert.match(msg, /cuh/i);
 });
 
 test('multiple incoming viewers are welcomed together by username', () => {
@@ -20,7 +53,8 @@ test('multiple incoming viewers are welcomed together by username', () => {
   assert.match(msg, /@alice/);
   assert.match(msg, /@bob/);
   assert.match(msg, /@charlie/);
-  assert.match(msg, /Glad you're all here/);
+  assert.match(msg, /welcome/i);
+  assert.match(msg, /cuh/i);
 });
 
 test('large arrival bursts batch named welcomes without flooding chat', () => {
