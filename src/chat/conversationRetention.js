@@ -53,6 +53,7 @@ export class ConversationRetentionEngine {
     directInteraction,
     proactiveWelcome = false,
     offerFollow = false,
+    offerSubscription = false,
     salesEligible = false,
     history = [],
     streamContext = {},
@@ -64,7 +65,7 @@ export class ConversationRetentionEngine {
     if (!directInteraction) return { eligible: false, reason: 'not_direct' };
     if (!profile || profile.proactiveOptOut) return { eligible: false, reason: 'opt_out' };
     if (negativeMessage(message)) return { eligible: false, reason: 'negative_context' };
-    if (proactiveWelcome || offerFollow || salesEligible) return { eligible: false, reason: 'trust_priority' };
+    if (proactiveWelcome || offerFollow || offerSubscription || salesEligible) return { eligible: false, reason: 'trust_priority' };
     if (profile.lastRetentionPromptAt && now - Number(profile.lastRetentionPromptAt) < this.minPromptGapMs) {
       return { eligible: false, reason: 'prompt_gap' };
     }
