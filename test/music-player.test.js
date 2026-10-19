@@ -60,7 +60,7 @@ test('moderators can switch, pause, resume, and skip', () => {
   assert.equal(controller.getState().playing, true);
   assert.equal(events.at(-1).action, 'play');
 
-  assert.equal(controller.handleSkipCommand(broadcaster()), 'Skipping to the next track.');
+  assert.equal(controller.handleSkipCommand(broadcaster()), 'Skipping to the next player track.');
   assert.equal(events.at(-1).action, 'skip');
   assert.equal(controller.getState().currentTrack, '');
 });
