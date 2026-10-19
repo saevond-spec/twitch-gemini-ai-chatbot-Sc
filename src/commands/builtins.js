@@ -7,7 +7,7 @@ import { suggestGameModes } from '../chat/gameModeSuggestions.js';
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return \`Commands: !help, !uptime, !bot, !about, !brain <\${brainList}>, !clip [title], !mode, !support, !commands, and custom commands.\`;
+  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, and custom commands.';
 }, 'Shows this help');
 
 registerBuiltin('!support', async (user, channel) => {
@@ -18,7 +18,7 @@ registerBuiltin('!uptime', async (user, channel, client) => {
   const uptime = process.uptime();
   const hours = Math.floor(uptime / 3600);
   const minutes = Math.floor((uptime % 3600) / 60);
-  return \`I've been online for \${hours}h \${minutes}m.\`;
+  return "I've been online for " + hours + 'h ' + minutes + 'm.';
 }, 'Shows bot uptime');
 
 registerBuiltin('!bot', async () => {
@@ -32,15 +32,15 @@ registerBuiltin('!about', async () => {
 registerBuiltin('!brain', async (user, channel, client, message) => {
   const parts = message.split(' ');
   if (parts.length < 2) {
-    return \`Current brain: default. Available: \${Object.keys(brains).join(', ')}\`;
+    return 'Current brain: default. Available: ' + Object.keys(brains).join(', ');
   }
   const requested = parts[1].toLowerCase();
   if (brains[requested]) {
     const redis = getRedis();
-    if (redis) await redis.set(\`brain:\${channel}\`, requested);
-    return \`Switching brain to \${requested} mode.\`;
+    if (redis) await redis.set('brain:' + channel, requested);
+    return 'Switching brain to ' + requested + ' mode.';
   }
-  return \`Brain '\${requested}' not found. Available: \${Object.keys(brains).join(', ')}\`;
+  return "Brain '" + requested + "' not found. Available: " + Object.keys(brains).join(', ');
 }, 'Switch or list brains');
 
 registerBuiltin('!commands', async () => {
@@ -52,7 +52,7 @@ registerBuiltin('!commands', async () => {
     return data ? JSON.parse(data).name : null;
   }));
   const list = cmds.filter(Boolean).join(', ');
-  return list ? \`Custom commands: \${list}\` : 'No custom commands.';
+  return list ? 'Custom commands: ' + list : 'No custom commands.';
 }, 'List custom commands');
 
 
