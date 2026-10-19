@@ -137,7 +137,7 @@ services:
       - key: JOIN_WELCOME_BATCH_MS
         value: "100"
       - key: JOIN_WELCOME_DEDUPE_MINUTES
-        value: "360"
+        value: "1"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
