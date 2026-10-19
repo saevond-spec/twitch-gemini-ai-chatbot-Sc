@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JoinWelcomeBatcher, formatJoinWelcome } from '../src/chat/joinWelcomeBatcher.js';
 
+test('join welcomes use a short default batching window', () => {
+  const batcher = new JoinWelcomeBatcher();
+  assert.equal(batcher.flushMs, 100);
+  batcher.stop();
+});
+
 test('single incoming viewer gets a named low-pressure welcome', () => {
   const msg = formatJoinWelcome(['Alice']);
   assert.match(msg, /Welcome in @alice/i);
