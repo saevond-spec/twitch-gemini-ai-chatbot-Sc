@@ -50,6 +50,7 @@ class StreamService : Service(), ConnectChecker {
       require(data != null && target.startsWith("rtmps://"))
       val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
       val mp = manager.getMediaProjection(intent.getIntExtra("resultCode", 0), data)
+        ?: throw IllegalStateException("Screen capture permission unavailable")
       projection = mp
       mp.registerCallback(object : MediaProjection.Callback() { override fun onStop() { stopSelf() } }, android.os.Handler(mainLooper))
       // Do not activate a microphone without an explicit user choice.
