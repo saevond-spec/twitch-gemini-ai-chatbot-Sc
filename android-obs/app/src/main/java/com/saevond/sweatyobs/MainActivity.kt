@@ -13,6 +13,7 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.NetworkCapabilities
 import java.net.Inet4Address
+import kotlin.concurrent.thread
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -143,6 +144,14 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveBotToken = Button(this).apply { text = "Save private !play bridge token" }
+    val testMusicBridge = Button(this).apply {
+      id = R.id.test_music_bridge
+      text = "Check remote music bridge connection"
+    }
+    val bridgeStatus = TextView(this).apply {
+      id = R.id.music_bridge_status
+      text = "Bridge not checked. Twitch music controls require matching private bot token."
+    }
     val twitchStatus = TextView(this).apply {
       text = if (com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("rtmps")))
         "Twitch key saved securely (not verified by Twitch yet)."
@@ -165,7 +174,7 @@ class MainActivity : Activity() {
       genreStatus, stationPicker, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken,
-      openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
+      testMusicBridge, bridgeStatus, openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
@@ -283,6 +292,26 @@ class MainActivity : Activity() {
         botToken.text.clear()
         status.text = "Bot !play token saved locally. SweatyClanker server must also have the same ENCODER_BRIDGE_TOKEN configured."
       } catch (error: Exception) { status.text = "Music bridge token storage failed (" + error.javaClass.simpleName + ")." }
+    }
+
+    testMusicBridge.setOnClickListener {
+      val token = SecretStore(this).get("bridge_token")
+      if (token.length !in 32..256) {
+        bridgeStatus.text = "Save a private bridge token in this app first."
+        return@setOnClickListener
+      }
+      bridgeStatus.text = "Checking SweatyClanker bot bridge over HTTPS…"
+      testMusicBridge.isEnabled = false
+      thread(name = "SweatyOBS-bridge-check") {
+        val outcome = MusicBridgePoller.verify(
+          "https://twitch-gemini-ai-chatbot-sc-2.onrender.com", token)
+        runOnUiThread {
+          if (!isFinishing && !isDestroyed) {
+            bridgeStatus.text = outcome
+            testMusicBridge.isEnabled = true
+          }
+        }
+      }
     }
 
     saveTwitchKey.setOnClickListener {
