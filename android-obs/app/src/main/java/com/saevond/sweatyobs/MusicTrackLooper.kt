@@ -8,6 +8,8 @@ class MusicTrackLooper {
   private var pcm = ByteArray(0)
   private var offset = 0
   private var autoStartArmed = false
+  /** Called after a local track wraps. Only schedule asynchronous decoding here. */
+  @Volatile var onTrackEnd: (() -> Unit)? = null
   @Volatile var playing: Boolean = false
     private set
   val ready: Boolean get() = synchronized(this) { pcm.isNotEmpty() }
@@ -33,6 +35,13 @@ class MusicTrackLooper {
     return playing
   }
 
+  /** Seamless in-memory replacement; leaves user Play/Pause choice unchanged. */
+  @Synchronized fun replace(track: ByteArray) {
+    require(track.size in 4..(60 * 1024 * 1024) && track.size % 4 == 0)
+    pcm = track
+    offset = 0
+  }
+
   @Synchronized fun command(action: String) {
     when (action) {
       "play" -> { autoStartArmed = false; playing = pcm.isNotEmpty() }
@@ -51,6 +60,7 @@ class MusicTrackLooper {
       System.arraycopy(pcm, offset, out, written, n)
       written += n
       offset = (offset + n) % pcm.size
+      if (offset == 0) onTrackEnd?.invoke()
     }
     return out
   }
