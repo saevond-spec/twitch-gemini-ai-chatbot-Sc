@@ -1,6 +1,7 @@
 package com.saevond.sweatyobs
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
@@ -94,10 +95,33 @@ class MainActivity : Activity() {
     }
     val genreStatus = TextView(this).apply {
       id = R.id.genre_library_status
-      text = "Local library: Club ${genreSettings.tracks("club").size} · Dubstep ${genreSettings.tracks("dubstep").size}"
+      text = "Music library: Club ${genreSettings.tracks("club").size} · Dubstep ${genreSettings.tracks("dubstep").size}"
     }
-    val addClub = Button(this).apply { text = "Add licensed Club / House songs" }
-    val addDubstep = Button(this).apply { text = "Add licensed Dubstep songs" }
+    val remoteCatalogStatus = TextView(this).apply {
+      id = R.id.remote_catalog_status
+      val savedRemote = (genreSettings.tracks("club") + genreSettings.tracks("dubstep"))
+        .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
+      text = "Remote NCS catalog: ${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
+        "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep. ${savedRemote} saved for online playback."
+    }
+    val browseRemoteClub = Button(this).apply {
+      id = R.id.remote_club_catalog
+      text = "Browse remote NCS Club / House catalog"
+    }
+    val browseRemoteDubstep = Button(this).apply {
+      id = R.id.remote_dubstep_catalog
+      text = "Browse remote NCS Dubstep catalog"
+    }
+    val copyStreamCredit = Button(this).apply {
+      id = R.id.copy_ncs_stream_credit
+      text = "Copy NCS Twitch stream credit"
+    }
+    val copyTrackCredits = Button(this).apply {
+      id = R.id.copy_ncs_track_credits
+      text = "Copy selected NCS track credits for VODs"
+    }
+    val addClub = Button(this).apply { text = "Add local licensed Club / House songs" }
+    val addDubstep = Button(this).apply { text = "Add local licensed Dubstep songs" }
     val shuffleSongs = CheckBox(this).apply {
       id = R.id.music_shuffle
       text = "Shuffle songs"
@@ -131,14 +155,18 @@ class MainActivity : Activity() {
     val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 22%" }
     val musicNote = TextView(this).apply {
       val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
-      text = if (ready) "Local licensed music selected. Autoplay begins after Twitch publishes."
-
-        else "No music selected. Choose your own rights-cleared audio file to make music audible on Twitch."
+      val remoteCount = (genreSettings.tracks("club") + genreSettings.tracks("dubstep"))
+        .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
+      text = when {
+        remoteCount > 0 -> "$remoteCount remote NCS songs saved. They load over the internet when selected; audio is not saved as a music file."
+        ready -> "Local licensed music selected. Autoplay begins after Twitch publishes."
+        else -> "No music selected. Add tracks from the remote NCS catalog or choose a local rights-cleared audio file."
+      }
     }
-    val chooseMusic = Button(this).apply { text = "Choose licensed music file (MP3 / AAC / WAV)" }
+    val chooseMusic = Button(this).apply { text = "Choose local licensed music file (MP3 / AAC / WAV)" }
     val autoplayMusic = CheckBox(this).apply {
       id = R.id.music_autoplay
-      text = "Automatically play selected music when Twitch broadcast starts"
+      text = "Automatically play selected local or remote music when Twitch broadcast starts"
       isChecked = getSharedPreferences("ps5_music", MODE_PRIVATE)
         .getBoolean("autoplay", true)
     }
@@ -180,7 +208,8 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
     listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
-      genreStatus, stationPicker, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
+      genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
+      copyStreamCredit, copyTrackCredits, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
@@ -204,6 +233,27 @@ class MainActivity : Activity() {
     }
     addClub.setOnClickListener { pickGenreTracks(PICK_CLUB) }
     addDubstep.setOnClickListener { pickGenreTracks(PICK_DUBSTEP) }
+    browseRemoteClub.setOnClickListener { browseRemoteCatalog(GenrePlaylist.CLUB) }
+    browseRemoteDubstep.setOnClickListener { browseRemoteCatalog(GenrePlaylist.DUBSTEP) }
+    copyStreamCredit.setOnClickListener {
+      (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
+        ClipData.newPlainText("NCS Twitch stream credit", RemoteMusicCatalog.LIVE_STREAM_CREDIT)
+      )
+      status.text = "Copied the NCS live-stream credit. Paste it into your Twitch stream description."
+    }
+    copyTrackCredits.setOnClickListener {
+      val savedTracks = MusicGenreSettings(this).tracks(GenrePlaylist.CLUB) +
+        MusicGenreSettings(this).tracks(GenrePlaylist.DUBSTEP)
+      val credits = RemoteMusicCatalog.creditsForAudioUrls(savedTracks)
+      if (credits.isBlank()) {
+        status.text = "Add remote NCS tracks first. Their artist and song credits will be copied here for VOD descriptions."
+      } else {
+        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
+          ClipData.newPlainText("NCS track credits", credits)
+        )
+        status.text = "Copied selected NCS song credits. Paste them into the matching VOD description."
+      }
+    }
     shuffleSongs.setOnCheckedChangeListener { _, on ->
       genreSettings.setShuffle(on)
       if (Ps5LanService.receiverRunning) refreshGenreService()
@@ -215,7 +265,7 @@ class MainActivity : Activity() {
     skipSong.setOnClickListener {
       if (Ps5LanService.receiverRunning) {
         startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_SKIP })
-        status.text = "Requested next local song. Game audio continues."
+        status.text = "Requested the next selected song. Game audio continues."
       } else status.text = "Start a public Twitch test before skipping music."
     }
 
@@ -265,7 +315,7 @@ class MainActivity : Activity() {
     autoplayMusic.setOnCheckedChangeListener { _, checked ->
       getSharedPreferences("ps5_music", MODE_PRIVATE).edit()
         .putBoolean("autoplay", checked).apply()
-      status.text = if (checked) "Music will start when Twitch publishing begins, if a licensed file is selected."
+      status.text = if (checked) "Music will start when Twitch publishing begins, if a licensed local or remote track is selected."
         else "Music autoplay disabled; use Play when your Twitch stream is active."
     }
 
@@ -283,7 +333,7 @@ class MainActivity : Activity() {
         return@setOnClickListener
       }
       startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PLAY })
-      status.text = "Music play requested for active stream; local file required."
+      status.text = "Music play requested for active stream; select a local file or remote NCS song first."
     }
     pauseMusic.setOnClickListener {
       if (!Ps5LanService.receiverRunning) {
@@ -404,6 +454,47 @@ class MainActivity : Activity() {
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 network diagnostic stopped. No broadcasting was started."
     }
+  }
+
+  private fun browseRemoteCatalog(genre: String) {
+    val tracks = RemoteMusicCatalog.forGenre(genre)
+    if (tracks.isEmpty()) {
+      status.text = "No remote NCS songs are listed for this genre."
+      return
+    }
+    val label = if (genre == GenrePlaylist.CLUB) "Club / House" else "Dubstep"
+    val selected = linkedSetOf<Int>()
+    val options = tracks.map { it.title + " — " + it.artist }.toTypedArray()
+    AlertDialog.Builder(this)
+      .setTitle("Remote NCS $label catalog")
+      .setMultiChoiceItems(options, BooleanArray(options.size)) { _, which, checked ->
+        if (checked) selected.add(which) else selected.remove(which)
+      }
+      .setNegativeButton("Cancel", null)
+      .setPositiveButton("Add selected") { _, _ ->
+        if (selected.isEmpty()) {
+          status.text = "No remote songs selected."
+          return@setPositiveButton
+        }
+        val settings = MusicGenreSettings(this)
+        val before = settings.tracks(genre).size
+        settings.add(genre, selected.map { tracks[it].audioUrl })
+        val after = settings.tracks(genre).size
+        val added = after - before
+        findViewById<TextView>(R.id.genre_library_status)?.text =
+          "Music library: Club ${settings.tracks("club").size} · Dubstep ${settings.tracks("dubstep").size}"
+        val savedRemote = (settings.tracks("club") + settings.tracks("dubstep"))
+          .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
+        findViewById<TextView>(R.id.remote_catalog_status)?.text =
+          "Remote NCS catalog: ${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
+            "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep. ${savedRemote} saved for online playback."
+        status.text = if (added > 0)
+          "Added $added remote NCS songs to $label. Use Copy NCS Twitch stream credit before going live."
+        else
+          "No new songs added. The selected tracks may already be saved or this genre has reached its 20-song limit."
+        if (added > 0 && Ps5LanService.receiverRunning) refreshGenreService()
+      }
+      .show()
   }
 
   private fun pickGenreTracks(requestCode: Int) {
