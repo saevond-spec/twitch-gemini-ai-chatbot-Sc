@@ -16,6 +16,7 @@ class GenreUiSmokeTest {
   @Test fun changingGenreAndAutoNextPersistsSelection() {
     scenario.scenario.onActivity { activity ->
       val genre = activity.findViewById<Spinner>(R.id.music_genre)
+      assertEquals(4, genre.adapter.count)
       genre.setSelection(2) // Dubstep
       activity.findViewById<CheckBox>(R.id.music_auto_next).isChecked = false
       activity.findViewById<CheckBox>(R.id.music_shuffle).isChecked = true
@@ -28,5 +29,15 @@ class GenreUiSmokeTest {
     assertFalse(settings.autoNext())
     assertTrue(settings.shuffle())
     // A genre preference change is not permission to go live.
+  }
+
+  @Test fun popAndTrapStationCanBeSelectedWithoutStartingTheStream() {
+    scenario.scenario.onActivity { activity ->
+      activity.findViewById<Spinner>(R.id.music_genre).setSelection(3)
+    }
+    androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+    val target = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+    assertEquals(GenrePlaylist.POP_TRAP, MusicGenreSettings(target).selected())
+    assertFalse(Ps5LanService.receiverRunning)
   }
 }

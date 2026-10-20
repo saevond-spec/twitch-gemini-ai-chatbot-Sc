@@ -26,5 +26,7 @@ For the 1080p profile, plan for **over 16.3 Mbps of sustained phone upload per s
 ## Audio
 
 - Game and music gain sliders operate in the in-memory AAC mixer; music must be licensed for live broadcasts and VODs.
-- Remote NCS tracks include copyable stream and track credits. Add the required credit to each applicable stream description.
+- The curated NCS catalog contains 100 tracks across Club / House, Dubstep / Bass, and Pop / Trap. Select tracks in the app, then use Shuffle and Automatically play next song for a no-repeat pass through the chosen tracks. The playlist duration depends on actual song lengths; use a larger local licensed library if you need six full hours without a repeat.
+- NCS tracks include copyable stream and per-track credits. Add the required credit to each applicable stream description and check current platform-specific terms before multistreaming.
+- Drake and Taylor Swift master recordings are not free-use catalog tracks. Add local audio only when you have the rights for live streams and VODs on each destination.
 - The music mixer accepts AAC-LC 48 kHz stereo from the source. Other game audio formats are rejected rather than silently treated as compatible.

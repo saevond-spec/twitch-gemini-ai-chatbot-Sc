@@ -7,10 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RemoteMusicCatalogTest {
-  @Test fun catalogHasClubAndDubstepSongsFromNcs() {
-    assertEquals(6, RemoteMusicCatalog.forGenre(GenrePlaylist.CLUB).size)
-    assertEquals(8, RemoteMusicCatalog.forGenre(GenrePlaylist.DUBSTEP).size)
-    assertEquals(14, RemoteMusicCatalog.tracks.size)
+  @Test fun catalogHasOneHundredCreatorTracksAcrossThreePlaylists() {
+    assertEquals(60, RemoteMusicCatalog.forGenre(GenrePlaylist.CLUB).size)
+    assertEquals(15, RemoteMusicCatalog.forGenre(GenrePlaylist.DUBSTEP).size)
+    assertEquals(25, RemoteMusicCatalog.forGenre(GenrePlaylist.POP_TRAP).size)
+    assertEquals(100, RemoteMusicCatalog.tracks.size)
+    assertEquals(100, RemoteMusicCatalog.tracks.map { it.audioUrl }.toSet().size)
+    assertTrue(RemoteMusicCatalog.tracks.all {
+      RemoteMusicCatalog.isSupportedAudioUrl(it.audioUrl) && it.pageUrl.startsWith("https://ncs.io/")
+    })
+    val credits = RemoteMusicCatalog.creditsForAudioUrls(RemoteMusicCatalog.tracks.map { it.audioUrl })
+    assertEquals(100, Regex("(?m)^Song:").findAll(credits).count())
   }
 
   @Test fun onlyKnownHttpsNcsDownloadRoutesAreAccepted() {
