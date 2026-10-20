@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
  * The bridge is dormant until a real PS5 audio mixer and RTMPS transport exist.
  */
 fun interface MusicControlSink {
-  fun command(action: String)
+  fun command(action: String, volumePercent: Int?)
 }
 
 class MusicBridgePoller(
@@ -55,14 +55,20 @@ class MusicBridgePoller(
             require(nextCursor.length in 3..120)
             if (reset) {
               val state = packet.getJSONObject("state")
-              mixer.command(if (state.optBoolean("playing")) "play" else "pause")
+              val volume = state.optInt("volumePercent", -1)
+              if (volume in 0..100) mixer.command("volume", volume)
+              mixer.command(if (state.optBoolean("playing")) "play" else "pause", null)
             } else {
               val events = packet.getJSONArray("events")
               require(events.length() <= 256)
               for (index in 0 until events.length()) {
-                val action = events.getJSONObject(index).optString("action")
-                if (action in listOf("play", "pause", "skip")) mixer.command(action)
-                else if (action == "station") mixer.command("skip")
+                val event = events.getJSONObject(index)
+                val action = event.optString("action")
+                if (action == "volume") {
+                  val amount = event.optInt("volumePercent", -1)
+                  if (amount in 0..100) mixer.command("volume", amount)
+                } else if (action in listOf("play", "pause", "skip")) mixer.command(action, null)
+                else if (action == "station") mixer.command("skip", null)
               }
             }
             cursor = nextCursor
@@ -70,7 +76,7 @@ class MusicBridgePoller(
           } finally { connection.disconnect() }
         } catch (_: Exception) {
           failures++
-          if (failures >= 3) mixer.command("pause")
+          if (failures >= 3) mixer.command("pause", null)
           Log.w("SweatyClankerOBS", "Chat controls unavailable; retrying")
         }
         if (active) try { Thread.sleep(1500) } catch (_: InterruptedException) { break }

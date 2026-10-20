@@ -40,7 +40,7 @@ class Ps5LanService : Service() {
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
-    val liveLevels = MixLevels(85, 20)
+    val liveLevels = MixLevels(85, 22)
     @Volatile var receiverRunning: Boolean = false
       private set
 
@@ -110,7 +110,7 @@ class Ps5LanService : Service() {
   override fun onCreate() {
     super.onCreate()
     val saved = getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
-    liveLevels.update(saved.getInt("game",85).coerceIn(0,100), saved.getInt("music",20).coerceIn(0,100))
+    liveLevels.update(saved.getInt("game",85).coerceIn(0,100), saved.getInt("music",22).coerceIn(0,100))
     phoneSafety = PhoneSafetyMonitor(this)
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .createNotificationChannel(NotificationChannel(
@@ -271,10 +271,20 @@ class Ps5LanService : Service() {
       if (publicTest && trackReady) {
         val bridgeToken = SecretStore(this).get("bridge_token")
         if (bridgeToken.length >= 32) {
-          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action ->
-            // The bot controls the audio mixer, not a separate web page.
-            val selected = if (action == "station") "skip" else action
-            if (selected in setOf("play", "pause", "skip")) musicTrack?.command(selected)
+          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action, level ->
+            // Bot sends authenticated controls only; volume affects music gain,
+            // never the game gain and never the Android system speaker volume.
+            if (action == "volume" && level != null && level in 0..100) {
+              liveLevels.update(liveLevels.gamePercent, level)
+              getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
+                .edit().putInt("music", level).apply()
+              handler.post {
+                if (!stopping) setNotification("Bot !volume applied: music $level% · game ${liveLevels.gamePercent}%.")
+              }
+            } else {
+              val selected = if (action == "station") "skip" else action
+              if (selected in setOf("play", "pause", "skip")) musicTrack?.command(selected)
+            }
           }.also { it.start() }
         }
       }

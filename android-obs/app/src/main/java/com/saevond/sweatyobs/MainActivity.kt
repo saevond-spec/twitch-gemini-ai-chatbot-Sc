@@ -78,7 +78,7 @@ class MainActivity : Activity() {
     val musicVolume = SeekBar(this).apply {
       id = R.id.music_volume
       max = 100
-      progress = savedLevels.getInt("music", 20).coerceIn(0,100)
+      progress = savedLevels.getInt("music", 22).coerceIn(0,100)
       contentDescription = "Music volume"
     }
     val gameLabel = TextView(this).apply { text = "Game volume: ${gameVolume.progress}%" }
@@ -87,7 +87,7 @@ class MainActivity : Activity() {
       text = "Live audio mix is peak-safe. Lower music to hear more game audio."
     }
     val muteMusic = Button(this).apply { id = R.id.music_mute; text = "Mute music" }
-    val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 20%" }
+    val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 22%" }
     val musicNote = TextView(this).apply {
       val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
       text = if (ready) "Local licensed music selected for next public stream."
@@ -128,7 +128,7 @@ class MainActivity : Activity() {
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
-    var previousMusic = musicVolume.progress.coerceAtLeast(20)
+    var previousMusic = musicVolume.progress.coerceAtLeast(22)
     val volumeChange = object : SeekBar.OnSeekBarChangeListener {
       override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
         gameLabel.text = "Game volume: ${gameVolume.progress}%"
@@ -153,8 +153,8 @@ class MainActivity : Activity() {
     }
     resetMix.setOnClickListener {
       gameVolume.progress = 85
-      musicVolume.progress = 20
-      savedLevels.edit().putInt("game",85).putInt("music",20).apply()
+      musicVolume.progress = 22
+      savedLevels.edit().putInt("game",85).putInt("music",22).apply()
     }
     openTwitchDashboard.setOnClickListener {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
@@ -297,6 +297,13 @@ class MainActivity : Activity() {
     val filter = IntentFilter(Ps5LanService.ACTION_STATUS)
     if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     else { @Suppress("DEPRECATION") registerReceiver(statusReceiver, filter) }
+    // IRC !volume commands may have changed the persisted slider while this
+    // screen was backgrounded in Twitch. Refresh when returning to OBS Lite.
+    val remoteMusic = getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
+      .getInt("music", 22).coerceIn(0,100)
+    findViewById<SeekBar>(R.id.music_volume)?.let {
+      if (it.progress != remoteMusic) it.progress = remoteMusic
+    }
     val saved = getSharedPreferences(Ps5LanService.STATUS_PREFS, MODE_PRIVATE)
       .getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
     if (!saved.isNullOrBlank()) status.text = saved

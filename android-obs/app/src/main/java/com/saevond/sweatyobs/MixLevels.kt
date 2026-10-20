@@ -7,7 +7,7 @@ import kotlin.math.min
  * Bound worst-case fully correlated waveforms by g_game + g_music <= 0.98.
  * The bound works regardless of the content's peaks and needs no dynamic clipping.
  */
-class MixLevels(game: Int = 85, music: Int = 20) {
+class MixLevels(game: Int = 85, music: Int = 22) {
   @Volatile var gamePercent: Int = game.coerceIn(0, 100)
     private set
   @Volatile var musicPercent: Int = music.coerceIn(0, 100)
