@@ -11,16 +11,25 @@ import kotlin.math.floor
 import kotlin.math.min
 
 /**
- * Decodes a user-selected, rights-cleared audio track. PCM is capped at 5 minutes
- * and ~60 MB before resampling, to prevent arbitrary remote files exhausting memory.
- * No network downloads, no DRM bypass, no YouTube extraction.
+ * Decodes a user-selected local track or an allowlisted official NCS track.
+ * PCM is capped at 5 minutes and ~60 MB; network audio is decoded in memory only.
+ * No arbitrary URLs, DRM bypass, or YouTube extraction.
  */
 class MusicDecoder(private val context: Context) {
   fun decode(uri: Uri): ByteArray {
     val extractor = MediaExtractor()
     var codec: MediaCodec? = null
     try {
-      extractor.setDataSource(context, uri, null)
+      when (uri.scheme) {
+        "content" -> extractor.setDataSource(context, uri, null)
+        "https" -> {
+          require(RemoteMusicCatalog.isSupportedAudioUrl(uri.toString())) {
+            "Only official tracks in the built-in NCS catalog can stream remotely"
+          }
+          extractor.setDataSource(uri.toString(), mapOf("User-Agent" to "SweatyClanker-Android"))
+        }
+        else -> throw IllegalArgumentException("Select a local audio file or an NCS catalog track")
+      }
       var track = -1
       var mime = ""
       for (index in 0 until extractor.trackCount) {
