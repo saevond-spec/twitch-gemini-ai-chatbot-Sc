@@ -1134,7 +1134,7 @@ async function initializeBot() {
       })) return;
 
       const login = String(username).toLowerCase();
-      chatterWatcher?.observeIrcJoin(channel, login);
+      if (chatterWatcher) chatterWatcher.observeIrcJoin(channel, login);
       lurkerActivationEngine.onJoin({ channel, username: login });
 
       if (config.auto.welcomeOnJoin) {
@@ -1147,7 +1147,7 @@ async function initializeBot() {
   });
   bus.on('twitch.part', ({ channel, username, self }) => {
     if (self) return;
-    chatterWatcher?.observeIrcPart(channel, username);
+    if (chatterWatcher) chatterWatcher.observeIrcPart(channel, username);
     lurkerActivationEngine.onPart({ channel, username });
   });
   bus.on('twitch.usernotice', async (...args) => {
