@@ -19,11 +19,14 @@ class GenreUiSmokeTest {
       genre.setSelection(2) // Dubstep
       activity.findViewById<CheckBox>(R.id.music_auto_next).isChecked = false
       activity.findViewById<CheckBox>(R.id.music_shuffle).isChecked = true
-      val settings = MusicGenreSettings(activity)
-      assertEquals("dubstep", settings.selected())
-      assertFalse(settings.autoNext())
-      assertTrue(settings.shuffle())
-      // A genre selection is only a music-control action; no broadcast may start.
     }
+    // Spinner OnItemSelected notifications are dispatched on a later main-loop pass.
+    androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+    val target = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+    val settings = MusicGenreSettings(target)
+    assertEquals("dubstep", settings.selected())
+    assertFalse(settings.autoNext())
+    assertTrue(settings.shuffle())
+    // A genre preference change is not permission to go live.
   }
 }
