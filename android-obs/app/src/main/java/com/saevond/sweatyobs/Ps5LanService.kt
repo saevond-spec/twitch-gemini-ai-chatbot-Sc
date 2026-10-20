@@ -373,7 +373,9 @@ class Ps5LanService : Service() {
                   loop.load(pcm, autoStart = autoplay)
                 }
                 if (outputConnected) loop.onBroadcastStarted()
-                setNotification("Loaded " + program.station + " song. " + program.summary() +
+                val remoteTrack = RemoteMusicCatalog.trackForAudioUrl(uriText)
+                val trackName = remoteTrack?.let { it.title + " — " + it.artist } ?: "licensed track"
+                setNotification("Loaded " + trackName + ". " + program.summary() +
                   ". Viewer playback is not yet verified.")
               }
             }
