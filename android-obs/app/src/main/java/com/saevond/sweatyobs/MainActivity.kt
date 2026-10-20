@@ -27,9 +27,13 @@ class MainActivity : Activity() {
     val chooseMusic = Button(this).apply { text = "Select licensed track" }
     val start = Button(this).apply { text = "Request screen capture and start" }
     val chatSafe = Button(this).apply { text = "Chat Safe Mode (hide screen)" }
+    val ps5Ip = EditText(this).apply { hint = "PS5 local IPv4 (e.g. 192.168.1.50)"; inputType = 3 }
+    val startLan = Button(this).apply { text = "Test PS5 LAN receiver (no broadcast)" }
+    val stopLan = Button(this).apply { text = "Stop PS5 LAN receiver" }
     val stop = Button(this).apply { text = "Stop stream" }
     layout.addView(status); layout.addView(endpoint); layout.addView(botOrigin)
     layout.addView(bridgeToken); layout.addView(chooseMusic); layout.addView(start); layout.addView(chatSafe); layout.addView(stop)
+    layout.addView(ps5Ip); layout.addView(startLan); layout.addView(stopLan)
     chooseMusic.setOnClickListener {
       startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"
@@ -48,6 +52,19 @@ class MainActivity : Activity() {
     chatSafe.setOnClickListener {
       startService(Intent(this, StreamService::class.java).setAction("CHAT_SAFE"))
       status.text = "Chat Safe Mode requested: screen hidden; music remains available."
+    }
+    startLan.setOnClickListener {
+      val address = ps5Ip.text.toString().trim()
+      if (!Ps5LanService.privateIpv4(address)) { status.text = "Enter a private PS5 IPv4 address."; return@setOnClickListener }
+      startForegroundService(Intent(this, Ps5LanService::class.java).apply {
+        action = Ps5LanService.ACTION_START
+        putExtra(Ps5LanService.EXTRA_PS5_IPV4, address)
+      })
+      status.text = "PS5 receiver test requested; check the foreground notification. No stream sent."
+    }
+    stopLan.setOnClickListener {
+      startService(Intent(this, Ps5LanService::class.java).setAction(Ps5LanService.ACTION_STOP))
+      status.text = "PS5 LAN test stop requested"
     }
     stop.setOnClickListener { startService(Intent(this, StreamService::class.java).setAction("STOP")); status.text = "Stop requested" }
   }
