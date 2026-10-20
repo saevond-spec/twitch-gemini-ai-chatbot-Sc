@@ -41,6 +41,20 @@ class NetworkStartSmokeTest {
     assertEquals(35, Ps5LanService.liveLevels.musicPercent)
   }
 
+  @Test fun musicAutoplayDefaultsOnAndTogglePersists() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val pref = context.getSharedPreferences("ps5_music", 0)
+    activityRule.scenario.onActivity { activity ->
+      val check = activity.findViewById<android.widget.CheckBox>(R.id.music_autoplay)
+      assertEquals(pref.getBoolean("autoplay", true), check.isChecked)
+    }
+    onView(withId(R.id.music_autoplay)).perform(scrollTo(), click())
+    activityRule.scenario.onActivity { activity ->
+      val check = activity.findViewById<android.widget.CheckBox>(R.id.music_autoplay)
+      assertEquals(check.isChecked, pref.getBoolean("autoplay", true))
+    }
+  }
+
   @Test fun validAddressTapReportsRealServiceOutcome() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences(Ps5LanService.STATUS_PREFS, 0)
