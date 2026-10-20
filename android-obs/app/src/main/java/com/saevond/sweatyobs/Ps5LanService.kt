@@ -198,8 +198,11 @@ class Ps5LanService : Service() {
               if (!stopping) {
                 try {
                   val loop = musicTrack ?: error("Music control unavailable")
-                  loop.load(decoded)
-                  loop.command("play")
+                  // Loading only arms autoplay. No music plays during DNS/receiver
+                  // diagnostics or while waiting for a PS5 broadcast.
+                  val autoStart = getSharedPreferences("ps5_music", MODE_PRIVATE)
+                    .getBoolean("autoplay", true)
+                  loop.load(decoded, autoStart = autoStart)
                   audioMixer = LiveAacMusicMixer(loop, liveLevels)
                   beginReceiver(local, ps5Address)
                 } catch (error: Exception) { startFailed(error) }
@@ -243,7 +246,12 @@ class Ps5LanService : Service() {
                 if (!outputConnected) {
                   output.connect()
                   outputConnected = true
-                  handler.post { setNotification("Twitch server acknowledged publish; verify actual viewer playback.") }
+                  val musicStarted = musicTrack?.onBroadcastStarted() == true
+                  handler.post {
+                    setNotification(if (musicStarted)
+                      "Twitch publish acknowledged; music auto-started. Verify actual viewer playback."
+                    else "Twitch publish acknowledged; music paused or no track. Verify viewer playback.")
+                  }
                 }
                 frames.forEach { output.publish(it) }
               }
@@ -266,7 +274,7 @@ class Ps5LanService : Service() {
       receiverRunning = true
       val trackReady = musicTrack?.ready == true
       setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
-        (if (trackReady) "loaded and set to play" else "not loaded")
+        (if (trackReady) "ready to auto-start on Twitch publish" else "not loaded")
         else "Waiting for PS5 at $local:1935 — diagnostic only")
       if (publicTest && trackReady) {
         val bridgeToken = SecretStore(this).get("bridge_token")
