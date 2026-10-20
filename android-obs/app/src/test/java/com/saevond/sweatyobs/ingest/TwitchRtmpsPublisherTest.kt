@@ -21,6 +21,14 @@ class TwitchRtmpsPublisherTest {
      assertArrayEquals(bytes,parsed.data)
    }
  }
+ @Test fun blocksPrivateDnsDestinations() {
+   val host = java.net.InetAddress.getByName("192.168.1.105")
+   val loop = java.net.InetAddress.getByName("127.0.0.1")
+   val publicDns = java.net.InetAddress.getByName("1.1.1.1")
+   assertFalse(TwitchRtmpsPublisher.isPublicDestination(host))
+   assertFalse(TwitchRtmpsPublisher.isPublicDestination(loop))
+   assertTrue(TwitchRtmpsPublisher.isPublicDestination(publicDns))
+ }
  @Test fun extendedTimestampRoundTrip() {
    val msg=RtmpMessage(9,0x1000000L,1,ByteArray(270){7})
    val out=ByteArrayOutputStream();sendRtmpMedia(out,msg)
