@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?><resources><item name="connection_status" type="id"/><item name="ps5_ip_address" type="id"/><item name="start_network_test" type="id"/><item name="stop_network_test" type="id"/>  <item name="game_volume" type="id"/>
+  <item name="music_volume" type="id"/>
+  <item name="music_mute" type="id"/>
+  <item name="music_autoplay" type="id"/>
+  <item name="music_genre" type="id"/>
+  <item name="music_shuffle" type="id"/>
+  <item name="music_auto_next" type="id"/>
+  <item name="music_skip" type="id"/>
+  <item name="genre_library_status" type="id"/>
+  <item name="test_music_bridge" type="id"/>
+  <item name="music_bridge_status" type="id"/>
+</resources>

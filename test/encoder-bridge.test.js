@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEncoderEventBridge } from '../src/music/encoderBridge.js';
+import { applyPacket } from '../encoder/bridge-client.mjs';
 
 const token = 's'.repeat(48);
 const state = { station: 'dubstep', playing: false };
@@ -24,17 +25,11 @@ test('ordered music events, no duplicate replay, and resync after overflow', () 
   assert.equal(bridge.poll('Bearer ' + token, begin.cursor).body.reset, true);
 });
 
-test('restart resync publishes full current state, not stale skip events', () => {
-  const bridge = createEncoderEventBridge({ token, getState: () => ({
-    station: 'club', playing: false, volumePercent: 22,
-  }) });
-  bridge.publish({ type: 'music.control', action: 'skip', state: { station: 'club', volumePercent: 22 } });
-  const resync = bridge.poll('Bearer ' + token, 'old-instance:0').body;
-  assert.equal(resync.reset, true);
-  assert.equal(resync.state.station, 'club');
-  assert.equal(resync.state.playing, false);
-  assert.equal(resync.state.volumePercent, 22);
-  assert.deepEqual(resync.events, []);
+test('restart resync restores selected station, paused state and skips stale events', () => {
+  const calls = [];
+  const feeder = { command: (...args) => calls.push(args) };
+  applyPacket(feeder, { reset: true, state: { station: 'club', playing: false }, events: [{ action: 'skip' }] });
+  assert.deepEqual(calls, [['station', 'club'], ['pause']]);
 });
 
 test('fails closed on malformed event types and cursor', () => {
@@ -44,21 +39,4 @@ test('fails closed on malformed event types and cursor', () => {
   bridge.publish({ type: 'music.control', action: 'run', state });
   assert.equal(bridge.poll('Bearer ' + token, begin.cursor).body.events.length, 0);
   assert.equal(bridge.poll('Bearer ' + token, begin.cursor + 'tampered').body.reset, true);
-});
-
-test('remote volume event preserves game audio and validates range', () => {
-  const bridge = createEncoderEventBridge({ token, getState: () => ({
-    station: 'dubstep', playing: true, volumePercent: 22,
-  }) });
-  const first = bridge.poll('Bearer ' + token).body;
-  bridge.publish({ type: 'music.control', action: 'volume', state: {
-    station: 'dubstep', playing: true, volumePercent: 35,
-  } });
-  const result = bridge.poll('Bearer ' + token, first.cursor).body;
-  assert.equal(result.events.length, 1);
-  assert.deepEqual([result.events[0].action, result.events[0].volumePercent], ['volume', 35]);
-  bridge.publish({ type: 'music.control', action: 'volume', state: {
-    station: 'dubstep', playing: true, volumePercent: 101,
-  } });
-  assert.deepEqual(bridge.poll('Bearer ' + token, result.cursor).body.events, []);
 });

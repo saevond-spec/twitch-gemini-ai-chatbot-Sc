@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#11121b">
+<meta name="description" content="SweatyClanker OBS web control and audio status.">
+<title>SweatyClanker OBS · Web</title>
+<link rel="stylesheet" href="/public/obs-web.css">
+<script defer src="/public/obs-web.js"></script>
+</head>
+<body>
+<main class="page">
+  <header class="header">
+    <div><p class="eyebrow">SWEATYCLANKER / OBS WEB</p><h1>Stream control</h1>
+    <p class="sub">Browser dashboard · no APK · no extra hosting bill</p></div>
+    <p id="connection" class="pill" role="status" aria-live="polite">Connecting to bot…</p>
+  </header>
+  <section class="notice" aria-label="Important limitation">
+    <strong>Browser controller, not an RTMP receiver</strong>
+    <p>The browser can monitor the bot and open controls. It cannot accept native PS5 RTMP or keep encoding when backgrounded. We are building an independent DNS and RTMP receiver. Do not change PS5 DNS until it is tested.</p>
+  </section>
+  <section class="panel" aria-labelledby="audio-head">
+    <div class="panel-head"><h2 id="audio-head">Music commands</h2><span class="tag">Twitch chat</span></div>
+    <div class="grid">
+      <div class="metric"><span>Requested state</span><strong id="requested-state">Unknown</strong></div>
+      <div class="metric"><span>Station</span><strong id="station">Unknown</strong></div>
+      <div class="metric wide"><span>Track reported by player</span><strong id="track">Not reported</strong></div>
+    </div>
+    <p class="hint">This reports the music player's control state, <strong>not</strong> whether viewers can hear audio.</p>
+    <p class="command-label">Send in Twitch chat:</p>
+    <div class="commands">
+      <code>!play</code><code>!music pause</code><code>!skip</code><code>!music dubstep</code><code>!music club</code>
+    </div>
+  </section>
+  <section class="panel" aria-labelledby="route-head">
+    <h2 id="route-head">Broadcast path</h2>
+    <ul class="steps">
+      <li><span class="circle">1</span><span><strong>PS5 gameplay</strong><small>Use the existing console broadcast until a replacement receiver is tested</small></span></li>
+      <li><span class="circle">2</span><span><strong>Music output</strong><small>Viewer-audible mixing is NOT verified with the free browser-only configuration</small></span></li>
+      <li><span class="circle">3</span><span><strong>Destinations</strong><small>Our independent server is being built; no live receiver deployed</small></span></li>
+    </ul>
+  </section>
+  <section class="panel" aria-labelledby="link-head">
+    <h2 id="link-head">Open your tools</h2>
+    <div class="actions">
+      <a href="https://www.twitch.tv/popout/saevond/chat" target="_blank" rel="noopener noreferrer">Open Twitch chat ↗</a>
+      <a href="https://studio.golightstream.com/" target="_blank" rel="noopener noreferrer">Open Lightstream ↗</a>
+      <a href="/music-player" target="_blank" rel="noopener noreferrer">Open browser music player ↗</a>
+    </div>
+    <p class="hint">Playing music on this website does not add it to the Twitch broadcast.</p>
+  </section>
+  <footer>No PSN credentials, Twitch stream keys, or payments are collected on this dashboard. Experimental control panel; not a verified streaming backend.</footer>
+</main>
+</body>
+</html>

@@ -190,14 +190,8 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
-// Optional read-only remote music control bridge. Disabled (404) unless a strong
-// ENCODER_BRIDGE_TOKEN is explicitly configured on the Render server.
-const encoderBridge = createEncoderEventBridge({
-  token: process.env.ENCODER_BRIDGE_TOKEN || '',
-  getState: getMusicState,
-});
+const encoderBridge = createEncoderEventBridge({ token: process.env.ENCODER_BRIDGE_TOKEN || '', getState: getMusicState });
 app.get('/api/encoder/commands', (req, res) => {
-  res.set('Cache-Control', 'no-store');
   const result = encoderBridge.poll(req.get('authorization'), req.query.cursor);
   res.status(result.status).json(result.body);
 });
@@ -1045,6 +1039,21 @@ async function recordNativeCommerceConversion(event, expectedOfferId, source) {
 async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
+
+app.get('/obs-web', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "connect-src 'self' wss: ws:",
+    "img-src 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'self'"
+  ].join('; '));
+  res.sendFile('obs-web.html', { root: 'public' });
+});
 
 app.get('/music-player', (req, res) => {
   res.setHeader('Content-Security-Policy', [
