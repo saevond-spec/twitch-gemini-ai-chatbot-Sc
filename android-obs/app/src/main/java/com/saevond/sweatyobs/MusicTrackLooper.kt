@@ -8,7 +8,7 @@ class MusicTrackLooper {
   private var pcm = ByteArray(0)
   private var offset = 0
   private var autoStartArmed = false
-  /** Called after a local track wraps. Only schedule asynchronous decoding here. */
+  /** Called after a selected track wraps. Only schedule asynchronous decoding here. */
   @Volatile var onTrackEnd: (() -> Unit)? = null
   @Volatile var playing: Boolean = false
     private set
