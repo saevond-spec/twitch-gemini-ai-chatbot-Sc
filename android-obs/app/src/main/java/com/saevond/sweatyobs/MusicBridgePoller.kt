@@ -7,8 +7,8 @@ import java.net.URL
 import kotlin.concurrent.thread
 
 /**
- * Future network-mixer command bridge. No MediaProjection/AudioRecord dependencies.
- * The bridge is dormant until a real PS5 audio mixer and RTMPS transport exist.
+ * Authenticated control-only bridge for user-started Android streaming service.
+ * This never downloads music and never starts a broadcast on its own.
  */
 fun interface MusicControlSink {
   fun command(action: String, volumePercent: Int?, station: String?)
@@ -17,16 +17,55 @@ fun interface MusicControlSink {
 class MusicBridgePoller(
   private val origin: String,
   private val token: String,
-  private val mixer: MusicControlSink
+  private val mixer: MusicControlSink,
+  private val statusSink: (String) -> Unit = {}
 ) {
   @Volatile private var active = false
   private var worker: Thread? = null
   private var cursor = ""
   private var failures = 0
+  private var lastStatus = ""
+  private fun status(message: String) {
+    if (message != lastStatus) {
+      lastStatus = message
+      statusSink(message)
+    }
+  }
 
   companion object {
     @Volatile private var current: MusicBridgePoller? = null
     fun stopActive() { current?.stop(); current = null }
+
+    /** One-shot bridge check. 200 is proof of authentication, not of Twitch audio. */
+    fun verify(origin: String, token: String): String {
+      if (origin != "https://twitch-gemini-ai-chatbot-sc-2.onrender.com")
+        return "Bridge check blocked: unrecognized server."
+      if (token.length !in 32..256) return "Bridge token not saved or invalid (32-256 characters)."
+      var connection: HttpURLConnection? = null
+      return try {
+        connection = (URL(origin + "/api/encoder/commands").openConnection() as HttpURLConnection).apply {
+          requestMethod = "GET"
+          connectTimeout = 5000
+          readTimeout = 5000
+          instanceFollowRedirects = false
+          setRequestProperty("Authorization", "Bearer " + token)
+        }
+        when (connection.responseCode) {
+          200 -> {
+            val obj = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            if (obj.optString("cursor").length in 3..120 && obj.has("state"))
+              "Remote music bridge authenticated. Controls available when a public stream is running."
+            else "Bridge returned invalid response; not connected."
+          }
+          401 -> "Bridge rejected token. Check that the bot server and Android use the same secret."
+          404 -> "Bridge not enabled on the bot server. Configure ENCODER_BRIDGE_TOKEN on Render."
+          429 -> "Bridge is rate-limited. Try again later."
+          else -> "Bridge returned HTTP " + connection.responseCode + "; not connected."
+        }
+      } catch (e: Exception) {
+        "Bridge unavailable (" + e.javaClass.simpleName + "). Check internet and bot service."
+      } finally { connection?.disconnect() }
+    }
   }
 
   fun start() {
@@ -55,6 +94,8 @@ class MusicBridgePoller(
             require(nextCursor.length in 3..120)
             if (reset) {
               val state = packet.getJSONObject("state")
+              val station = state.optString("station")
+              if (station in GenrePlaylist.STATIONS) mixer.command("station", null, station)
               val volume = state.optInt("volumePercent", -1)
               if (volume in 0..100) mixer.command("volume", volume, null)
               mixer.command(if (state.optBoolean("playing")) "play" else "pause", null, null)
@@ -76,13 +117,18 @@ class MusicBridgePoller(
             }
             cursor = nextCursor
             failures = 0
+            status("Remote music bridge connected; bot commands synced.")
           } finally { connection.disconnect() }
         } catch (_: Exception) {
           failures++
-          if (failures >= 3) mixer.command("pause", null, null)
+          if (failures == 3) {
+            mixer.command("pause", null, null)
+            status("Remote music bridge disconnected; licensed music paused until reconnection.")
+          }
           Log.w("SweatyClankerOBS", "Chat controls unavailable; retrying")
         }
-        if (active) try { Thread.sleep(1500) } catch (_: InterruptedException) { break }
+        val delay = if (failures >= 3) (1500L * (1L shl (failures - 3).coerceIn(0, 5))).coerceAtMost(60_000L) else 1500L
+        if (active) try { Thread.sleep(delay) } catch (_: InterruptedException) { break }
       }
     }
   }
