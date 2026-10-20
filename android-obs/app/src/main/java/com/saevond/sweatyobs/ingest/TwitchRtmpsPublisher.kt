@@ -65,15 +65,16 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
         amfString(key) + amfString("live"))
       // Wait for publish acknowledgement rather than claiming live on socket connection.
       var accepted = false
-      repeat(60) {
+      var attempts = 0
+      while (!accepted && attempts++ < 60) {
         val m = reader.nextMessage()
         if (m.type == 20) {
           val amf = RtmpAmf0Reader(m.data)
-          if (amf.string() == "onStatus") {
-            // RTMP onStatus object is complex; packet arrival alone is insufficient
-            // to claim public playback, but accepted server-level status is reached.
+          val command = amf.string()
+          if (command == "_error") error("Twitch rejected publish request")
+          if (command == "onStatus") {
+            // This confirms server response, not that viewers can see the broadcast.
             accepted = true
-            return@repeat
           }
         }
       }
