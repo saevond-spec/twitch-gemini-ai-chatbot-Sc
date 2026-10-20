@@ -101,6 +101,11 @@ class Ps5LanService : Service() {
         stopSelf()
         return
       }
+      if (publicTest) {
+        val snapshots = outputPublishers.map { it.snapshot() }
+        outputConnected = snapshots.any { it.state == "LIVE" }
+        outputStatus = snapshots.joinToString(" | ") { it.summary() }
+      }
       val summary = if (publicTest && !ingest.connected && ingest.tcpConnections > 0)
         "Waiting for PS5 source reconnect · ${ingest.videoPackets} video / ${ingest.audioPackets} audio · $outputStatus"
       else if (publicTest && outputConnected)
