@@ -9,6 +9,8 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.pedro.common.ConnectChecker
 import android.net.Uri
@@ -30,6 +32,21 @@ class StreamService : Service(), ConnectChecker {
   private var projection: MediaProjection? = null
   private var audioMixer: StreamAudioMixer? = null
   private var started = false
+  private val safetyHandler = Handler(Looper.getMainLooper())
+  private lateinit var phoneSafety: PhoneSafetyMonitor
+  private val safetyCheck = object : Runnable {
+    override fun run() {
+      if (!started) return
+      val decision = phoneSafety.assess()
+      if (decision.level == SafetyLevel.STOP) {
+        Log.w("SweatyClankerOBS", "Streaming stopped: " + decision.message)
+        stopSelf()
+        return
+      }
+      if (decision.level == SafetyLevel.WARN) Log.w("SweatyClankerOBS", decision.message)
+      safetyHandler.postDelayed(this, 3000)
+    }
+  }
   private val channel = "stream_capture"
   private var manualChatSafe = false
   private var selectedAppHidden = false
@@ -50,6 +67,7 @@ class StreamService : Service(), ConnectChecker {
   override fun onBind(intent: Intent?): IBinder? = null
   override fun onCreate() {
     super.onCreate()
+    phoneSafety = PhoneSafetyMonitor(this)
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .createNotificationChannel(NotificationChannel(channel, "SweatyClanker capture", NotificationManager.IMPORTANCE_LOW))
   }
@@ -66,6 +84,12 @@ class StreamService : Service(), ConnectChecker {
     // Foreground notification must be active before MediaProjection acquisition.
     startForeground(733, notification)
     try {
+      val initialSafety = phoneSafety.assess()
+      if (initialSafety.level == SafetyLevel.STOP) {
+        Log.w("SweatyClankerOBS", "Stream declined for device safety: " + initialSafety.message)
+        stopSelf()
+        return START_NOT_STICKY
+      }
       val data = if (Build.VERSION.SDK_INT >= 33)
         intent.getParcelableExtra("projectionData", Intent::class.java)
       else @Suppress("DEPRECATION") intent.getParcelableExtra("projectionData")
@@ -93,6 +117,7 @@ class StreamService : Service(), ConnectChecker {
         stream.prepareAudio(48000, true, 160000)) { "Codec initialization failed" }
       stream.changeVideoSource(ScreenSource(this, mp))
       started = true
+      safetyHandler.postDelayed(safetyCheck, 3000)
       stream.startStream(target)
       mixer.start()
       applyPrivacyMode()
@@ -114,6 +139,7 @@ class StreamService : Service(), ConnectChecker {
     return START_NOT_STICKY
   }
   override fun onDestroy() {
+    safetyHandler.removeCallbacks(safetyCheck)
     MusicBridgePoller.stopActive()
     runCatching { audioMixer?.stop() }
     runCatching { stream?.release() }
