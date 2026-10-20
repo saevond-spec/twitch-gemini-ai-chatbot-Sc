@@ -25,6 +25,7 @@ export function createMusicController(options = {}) {
     currentTrack: '',
     videoId: '',
     playing: true,
+    volumePercent: 22,
     updatedAt: now(),
   };
 
@@ -54,7 +55,7 @@ export function createMusicController(options = {}) {
       const current = state.currentTrack ? ' Now playing: ' + state.currentTrack + '.' : '';
       const player = musicPlayerUrl ? ' Player page: ' + musicPlayerUrl + '.' : ' Open the /music-player page.';
       return 'Music player is ' + (state.playing ? 'set to play' : 'paused') + ' — ' + getState().stationLabel + '.' + current
-        + ' Viewers hear it only when player audio is routed into the broadcast.' + player + ' Chat: !play, !music dubstep, !music club, !music play, !music pause, !skip, !song. Station changes and skip are mod-only.';
+        + ' Music volume: ' + state.volumePercent + '%. Viewers hear it only when player audio is routed into the broadcast.' + player + ' Chat: !play, !music dubstep, !music club, !music play, !music pause, !skip, !song, !volume <0-100>. Station changes, skip and volume are mod-only.';
     }
 
     if (action === 'club' || action === 'dubstep') {
@@ -83,6 +84,19 @@ export function createMusicController(options = {}) {
     return 'Skipping to the next player track.';
   }
 
+  function handleVolumeCommand(user, message = '!volume') {
+    const parts = String(message).trim().split(/\s+/);
+    if (parts.length === 1) return 'Stream music volume is ' + state.volumePercent + '%. Moderators: !volume <0-100>.';
+    if (!isModerator(user)) return 'Only the broadcaster or a moderator can change the music volume.';
+    if (parts.length !== 2 || !/^(?:100|[1-9]?\d)$/.test(parts[1])) {
+      return 'Usage: !volume <0-100> (music only; does not change game audio).';
+    }
+    const percent = Number(parts[1]);
+    state = { ...state, volumePercent: percent, updatedAt: now() };
+    publishControl('volume');
+    return 'Stream music volume set to ' + percent + '%. Game audio is unchanged.';
+  }
+
   function handleSongCommand() {
     const current = state.currentTrack
       ? 'Now playing on ' + getState().stationLabel + ': ' + state.currentTrack + '.'
@@ -109,6 +123,7 @@ export function createMusicController(options = {}) {
     handleMusicCommand,
     handleSkipCommand,
     handleSongCommand,
+    handleVolumeCommand,
     updatePlayerStatus,
   };
 }
@@ -120,4 +135,5 @@ export const setMusicPublisher = publisher => controller.setPublisher(publisher)
 export const handleMusicCommand = (user, message, playerUrl) => controller.handleMusicCommand(user, message, playerUrl);
 export const handleSkipCommand = user => controller.handleSkipCommand(user);
 export const handleSongCommand = () => controller.handleSongCommand();
+export const handleVolumeCommand = (user, message) => controller.handleVolumeCommand(user, message);
 export const updateMusicPlayerStatus = payload => controller.updatePlayerStatus(payload);

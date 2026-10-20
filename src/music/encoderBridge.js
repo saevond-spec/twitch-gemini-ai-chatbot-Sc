@@ -19,10 +19,15 @@ export function createEncoderEventBridge({ token = '', getState, now = () => Dat
   function publish(message) {
     if (!enabled || message?.type !== 'music.control') return;
     const action = message.action;
-    if (!['play', 'pause', 'skip', 'station'].includes(action)) return;
+    if (!['play', 'pause', 'skip', 'station', 'volume'].includes(action)) return;
     const station = message.state?.station;
     if (!['club', 'dubstep'].includes(station)) return;
-    const command = { sequence: ++sequence, action, station, playing: Boolean(message.state?.playing), timestamp: now() };
+    const rawVolume = message.state?.volumePercent;
+    if (!Number.isInteger(rawVolume) || rawVolume < 0 || rawVolume > 100) return;
+    const command = {
+      sequence: ++sequence, action, station, playing: Boolean(message.state?.playing),
+      volumePercent: rawVolume, timestamp: now(),
+    };
     events.push(command);
     if (events.length > limit) events = events.slice(-limit);
   }

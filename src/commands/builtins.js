@@ -5,11 +5,11 @@ import { getRedis } from '../storage/redis.js';
 import { formatSupportMessage } from '../chat/supportMessage.js';
 import { suggestGameModes } from '../chat/gameModeSuggestions.js';
 import { config } from '../config/index.js';
-import { handleMusicCommand, handleSkipCommand, handleSongCommand } from '../music/player.js';
+import { handleMusicCommand, handleSkipCommand, handleSongCommand, handleVolumeCommand } from '../music/player.js';
 
 registerBuiltin('!help', async (user, channel, client) => {
   const brainList = Object.keys(brains).join(', ');
-  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, !play, !music [club|dubstep|play|pause], !skip, ' + config.media.musicCommand + ', and custom commands.';
+  return 'Commands: !help, !uptime, !bot, !about, !brain <' + brainList + '>, !clip [title], !mode, !support, !commands, !play, !music [club|dubstep|play|pause], !skip, ' + config.media.musicCommand + ', !volume <0-100>, and custom commands.';
 }, 'Shows this help');
 
 registerBuiltin('!support', async (user, channel) => {
@@ -77,6 +77,10 @@ registerBuiltin('!music', (user, channel, client, message, context = {}) => {
 registerBuiltin('!play', (user, channel, client, message, context = {}) => {
   return handleMusicCommand(user, message, context.musicPlayerUrl);
 }, 'Start NCS stream music (moderators)');
+
+registerBuiltin('!volume', (user, channel, client, message) => {
+  return handleVolumeCommand(user, message);
+}, 'Set stream music volume 0–100% (moderators; public status)');
 
 registerBuiltin('!skip', (user) => {
   return handleSkipCommand(user);

@@ -12,10 +12,12 @@ export function applyPacket(feeder, packet) {
     const state = packet.state;
     if (state?.station === 'club' || state?.station === 'dubstep') {
       feeder.command('station', state.station);
+      if (typeof state.volumePercent === 'number' && Number.isInteger(state.volumePercent) && state.volumePercent >= 0 && state.volumePercent <= 100 && typeof feeder.setVolume === 'function') feeder.setVolume(state.volumePercent);
       if (!state.playing) feeder.command('pause');
     } else feeder.command('pause');
   } else for (const event of packet.events) {
     if (event.action === 'station') feeder.command('station', event.station);
+    else if (event.action === 'volume' && Number.isInteger(event.volumePercent) && event.volumePercent >= 0 && event.volumePercent <= 100 && typeof feeder.setVolume === 'function') feeder.setVolume(event.volumePercent);
     else if (['play', 'pause', 'skip'].includes(event.action)) feeder.command(event.action);
   }
   return packet.cursor;
