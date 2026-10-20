@@ -26,6 +26,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14'
+      - name: Bind isolated synthetic PS5 and Android IPv4 addresses on CI loopback
+        run: |
+          sudo ip address add 10.233.31.1/32 dev lo
+          sudo ip address add 10.233.31.2/32 dev lo
       - run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Enable KVM
         run: |
