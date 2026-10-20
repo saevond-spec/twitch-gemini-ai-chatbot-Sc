@@ -27,6 +27,8 @@ import { ConversationStore } from './memory/conversationStore.js';
 import { ProfileStore } from './memory/profileStore.js';
 import { MessageQueue } from './queue/messageQueue.js';
 import { EventSubClient } from './twitch/eventsub.js';
+import { HelixClient } from './twitch/helix.js';
+import { ChatterWatcher } from './twitch/chatterWatcher.js';
 import { PollinationsClient } from './media/providers.js';
 import { writeFile } from 'fs/promises';
 import { randomBytes } from 'crypto';
@@ -66,6 +68,7 @@ let workers = [];
 let heartbeatInterval = null;
 let messageQueue = null;
 let eventSubClient = null;
+let chatterWatcher = null;
 let pollinations = new PollinationsClient();
 let highlightDetector = null;
 const incomingDeduper = new IncomingMessageDeduper();
@@ -1131,10 +1134,12 @@ async function initializeBot() {
       })) return;
 
       const login = String(username).toLowerCase();
+      chatterWatcher?.observeIrcJoin(channel, login);
       lurkerActivationEngine.onJoin({ channel, username: login });
 
       if (config.auto.welcomeOnJoin) {
-        joinWelcomeBatcher.add(channel, login);
+        const queued = joinWelcomeBatcher.add(channel, login);
+        log.info(`Join observed via IRC for @${login} in ${channel}; welcomeQueued=${queued}`);
       }
     } catch (err) {
       log.warn('Failed to process Twitch join', err.message);
@@ -1142,6 +1147,7 @@ async function initializeBot() {
   });
   bus.on('twitch.part', ({ channel, username, self }) => {
     if (self) return;
+    chatterWatcher?.observeIrcPart(channel, username);
     lurkerActivationEngine.onPart({ channel, username });
   });
   bus.on('twitch.usernotice', async (...args) => {
@@ -1214,6 +1220,22 @@ async function initializeBot() {
     log.info('Message queue initialized');
   }
 
+  chatterWatcher = new ChatterWatcher({
+    helix: new HelixClient(),
+    channels: config.twitch.channels,
+    botLogin: configuredBotLogin(),
+    ignoredUsers: config.twitch.ignoredUsers,
+    onArrival: async ({ channel, username, source }) => {
+      const login = String(username || '').toLowerCase();
+      lurkerActivationEngine.onJoin({ channel, username: login });
+      if (!config.auto.welcomeOnJoin) return;
+
+      const queued = joinWelcomeBatcher.add(channel, login);
+      log.info(`Join observed via ${source} for @${login} in ${channel}; welcomeQueued=${queued}`);
+    },
+  });
+  chatterWatcher.start();
+
   try {
     log.info('Connecting to EventSub...');
     eventSubClient = new EventSubClient();
@@ -1265,6 +1287,7 @@ async function shutdown() {
   lurkerActivationEngine.stop();
   if (highlightDetector) highlightDetector.stop();
   if (eventSubClient) eventSubClient.disconnect();
+  if (chatterWatcher) chatterWatcher.stop();
   await drainQueues();
   if (global.twitchClient) global.twitchClient.disconnect();
   const redis = getRedis();
