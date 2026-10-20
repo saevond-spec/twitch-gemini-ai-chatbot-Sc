@@ -18,6 +18,7 @@ import android.util.Log
 import com.saevond.sweatyobs.ingest.LanRtmpIngest
 import com.saevond.sweatyobs.ingest.MediaRelayGate
 import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
+import com.saevond.sweatyobs.ingest.RtmpMessage
 import com.saevond.sweatyobs.ingest.RtmpDestination
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
 import java.net.Inet4Address
@@ -77,6 +78,9 @@ class Ps5LanService : Service() {
   @Volatile private var reportedOutputStatus = ""
   private val musicStartedOnOutput = AtomicBoolean(false)
   private var liveGate: MediaRelayGate? = null
+  @Volatile private var brandOverlay: BrandVideoOverlay? = null
+  @Volatile private var brandOverlayRequested = false
+  @Volatile private var sourceVideoConfig: RtmpMessage? = null
   @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
   private var musicBridge: MusicBridgePoller? = null
@@ -204,6 +208,21 @@ class Ps5LanService : Service() {
       musicStartedOnOutput.set(false)
       outputStatus = outputPublishers.joinToString(" | ") { it.snapshot().summary() }
       liveGate = MediaRelayGate()
+      sourceVideoConfig = null
+      brandOverlayRequested = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+        .getBoolean("brand_overlay", true)
+      brandOverlay?.close()
+      brandOverlay = if (brandOverlayRequested) {
+        runCatching {
+          BrandVideoOverlay(
+            onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
+            onStatus = { message -> handler.post { if (!stopping) setNotification(message) } },
+            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } })
+        }.onFailure { error ->
+          brandOverlayRequested = false
+          handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
+        }.getOrNull()
+      } else null
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
     }
@@ -301,7 +320,17 @@ class Ps5LanService : Service() {
             input.forEach { item ->
               val frames = liveGate?.process(item).orEmpty()
               if (frames.isNotEmpty()) {
-                frames.forEach { media -> outputPublishers.forEach { it.offer(media) } }
+                frames.forEach { media ->
+                  when {
+                    ReliableRtmpOutput.isAvcConfig(media) -> {
+                      sourceVideoConfig = media.copy(data = media.data.copyOf())
+                      brandOverlay?.setConfiguration(media)
+                      outputPublishers.forEach { it.offer(media) }
+                    }
+                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> brandOverlay?.offer(media)
+                    else -> outputPublishers.forEach { it.offer(media) }
+                  }
+                }
               }
             }
           } catch (error: Exception) {
@@ -471,6 +500,8 @@ class Ps5LanService : Service() {
     audioMixer = null
     musicTrack?.clear()
     musicTrack = null
+    brandOverlay?.close()
+    brandOverlay = null
     outputPublishers.toList().forEach { it.close() }
     outputPublishers.clear()
     liveGate = null
@@ -513,5 +544,14 @@ class Ps5LanService : Service() {
         handler.post { if (!stopping) setNotification(outputStatus) }
       }
     }
+  }
+
+  private fun disableBrandOverlay(reason: String) {
+    brandOverlayRequested = false
+    brandOverlay?.close()
+    brandOverlay = null
+    outputPublishers.forEach { it.reconnectNow() }
+    sourceVideoConfig?.let { config -> outputPublishers.forEach { it.offer(config) } }
+    setNotification("$reason · reconnecting with original PS5 video")
   }
 }

@@ -70,7 +70,7 @@ class MainActivity : Activity() {
       text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
     }
     val destinations = TextView(this).apply {
-      text = "Each selected RTMPS output has an independent retry loop and health status. Every extra platform uses more upload bandwidth. Video is passed through unchanged; this build cannot convert resolution or draw a video overlay."
+      text = "Each selected RTMPS output has an independent retry loop. With the 1080p overlay, budget about 12 Mbps of sustained phone upload per selected platform; every platform receives a separate copy."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
     val enableTwitch = CheckBox(this).apply {
@@ -109,9 +109,13 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveKick = Button(this).apply { text = "Save Kick RTMPS server and key" }
+    val enableBrandOverlay = CheckBox(this).apply {
+      text = "Add the @saevond live overlay to the stream"
+      isChecked = outputPrefs.getBoolean("brand_overlay", true)
+    }
     val reconnectOutputs = Button(this).apply { text = "Reconnect stream outputs" }
     val videoModeNote = TextView(this).apply {
-      text = "Video quality follows the incoming PS5 feed and cannot be changed here. Kick currently accepts up to 1080p; 4K plus overlays requires a separate video decoder, compositor, and hardware encoder."
+      text = "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
     }
     val metadataTitle = EditText(this).apply {
       hint = "Stream title (example: PS5 live gameplay and ranked matches)"
@@ -267,7 +271,7 @@ class MainActivity : Activity() {
 
     listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, youtubeKey, saveYouTube,
-      enableKick, kickServer, kickKey, saveKick, reconnectOutputs, videoModeNote,
+      enableKick, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
       privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
@@ -370,6 +374,9 @@ class MainActivity : Activity() {
     }
     enableKick.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
+    }
+    enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
     }
     saveYouTube.setOnClickListener {
       val server = youtubeServer.text.toString().trim()

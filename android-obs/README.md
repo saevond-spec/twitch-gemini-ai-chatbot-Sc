@@ -5,7 +5,9 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 ## What this build adds
 
 - Twitch, YouTube, and Kick can be configured as separate RTMPS outputs. Each selected destination has its own queue, connection state, backoff retry loop, and health summary.
-- Each additional output uses additional upload bandwidth because the app sends the same H.264/AAC feed to every selected platform.
+- The optional @saevond cyber-samurai overlay defaults on. It adds a transparent 1920×1080 HUD with red/cyan scanlines, particles, sword accents, session panels, and social footer, then sends one shared H.264/AAC feed to selected platforms.
+- The overlay's stats, AI lines, chat preview, follower/subscriber names, and donation alerts are simulated demo data. They are marked on-screen and do not come from Twitch, YouTube, Kick, or real viewers.
+- Adding the overlay requires hardware H.264 decode, GLES composition, and H.264 re-encoding up to 1080p. If codec setup or composition fails, the app reconnects outputs and falls back to the original PS5 video. Each extra platform still uses additional upload bandwidth.
 - When a publisher falls behind, the app discards stale queued packets and waits for the next clean AVC keyframe before resuming. A **Reconnect stream outputs** button starts a manual reconnect; automatic reconnect remains enabled.
 - The notification refreshes queue health every three seconds. It reports this app's sender backlog, not platform uptime or internet latency.
 - Platform stream keys are stored using Android Keystore encryption. YouTube and Kick server URLs are taken from the creator's dashboard and stored as ordinary app settings.
@@ -23,7 +25,19 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 
 ## Video limits
 
-The current implementation passes incoming H.264 video through unchanged. It has no Android video decoder, compositor, resolution converter, or video encoder, so it cannot apply an on-stream overlay, make a 4K stream, or choose output bitrate. All platforms receive the same input resolution. Kick's published maximum is 1920×1080, so a 4K-to-Kick output would require downscaling and transcoding. Do not assume this phone can encode 4K; Android codec support and sustained performance vary by device.
+With the overlay enabled, the app decodes the PS5 H.264 feed, composites the full @saevond HUD, and hardware-encodes a shared output at up to 1080p. This is not a 4K output. Source and encoder support varies by phone, and sustained frame rate, heat, and viewer playback still need testing on the target device. Turn off **Add the @saevond live overlay to the stream** to use H.264 pass-through. Browser-only hover effects and keyboard shortcuts are not part of the video burn-in.
+
+## Upload and latency budget
+
+At the 1080p overlay profile, the video encoder targets 8 Mbps and the AAC mixer targets 128 kbps. Every selected platform receives its own copy, so the ideal payload rate is `destinations × (8.000 + 0.128) Mbps`. Keeping payload below 70% of a measured, sustained phone upload rate leaves about 30% for Wi-Fi variation and protocol overhead:
+
+| Destinations | Ideal media upload | Sustained upload target with 30% headroom |
+| --- | ---: | ---: |
+| 1 | 8.13 Mbps | at least 12 Mbps |
+| 2 | 16.26 Mbps | at least 24 Mbps |
+| 3 | 24.38 Mbps | at least 35 Mbps |
+
+These are planning thresholds, not a speed guarantee. The sender keeps at most 2.5 MB, 1.5 seconds of media, or 2 seconds of queued age per destination, whichever limit is reached first; it discards stale media and waits for a keyframe rather than letting delay grow indefinitely. The overlay input queue is capped at 12 frames (about 200 ms at 60 fps or 400 ms at 30 fps). Encoding, internet routing, ingest servers, and viewer players add delay outside those queue bounds. **Good** output health means under 300 ms queued, **Fair** is 300–899 ms, and **Poor** starts at 900 ms. For a stable three-platform 1080p stream, verify at least 35 Mbps sustained upload and keep every destination at Good health with no skipped packets during a real test.
 
 The health label describes this app's output queue only. It is not a platform health check or an internet speed test. A successful RTMPS publish acknowledgement does not prove that viewers see or hear the stream.
 

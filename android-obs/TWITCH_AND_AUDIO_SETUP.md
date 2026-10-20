@@ -19,7 +19,9 @@ The encoder is experimental. A stream key being saved does not prove that a plat
 
 ## Video compatibility
 
-The app sends H.264 video through unchanged. It cannot select a resolution or bitrate, render a live overlay, or transcode. YouTube currently recommends 42 Mbps for H.264 4K at 30 fps and 50 Mbps at 60 fps. Kick's published limit is 1920×1080 and 8 Mbps. A single 4K feed therefore cannot be sent unchanged to both services. The 4K and overlay features need a later hardware-decoder/compositor/encoder implementation. See [YouTube's encoder settings](https://support.google.com/youtube/answer/2853702) and [Kick's streaming guide](https://help.kick.com/en/articles/7066931-how-to-stream-on-kick-com).
+With **Add the @saevond live overlay to the stream** enabled, the app hardware-decodes and re-encodes the shared feed at up to 1080p while burning in the transparent cyber-samurai HUD. It is not a 4K output. Phone codec support and sustained frame rate vary; if processing fails, the app reconnects using the original video. Uncheck the option to pass H.264 through unchanged. Stats, chat, names, and alerts on the HUD are simulated demo data, not live platform activity. See the [Android encoder README](README.md) and [production release gate](PRODUCTION_RELEASE_GATE.md).
+
+For the 1080p profile, allow about **12 Mbps of sustained phone upload per selected platform**. The app sends an 8 Mbps H.264 video stream plus 128 kbps AAC to each destination; three destinations therefore need at least 35 Mbps sustained upload for roughly 30% headroom. Use the output health and skipped-packet counters during a real test. No code can guarantee zero end-to-end delay because Wi-Fi, internet routing, platform ingest, and viewer buffering are outside the app's control.
 
 ## Audio
 
