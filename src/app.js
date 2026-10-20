@@ -48,6 +48,7 @@ import { LurkerActivationEngine } from './chat/lurkerActivation.js';
 import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
 import { gameLanguageInstruction } from './chat/gameLanguage.js';
 import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './music/player.js';
+import { createEncoderEventBridge } from './music/encoderBridge.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -189,6 +190,12 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
+const encoderBridge = createEncoderEventBridge({ token: process.env.ENCODER_BRIDGE_TOKEN || '', getState: getMusicState });
+app.get('/api/encoder/commands', (req, res) => {
+  const result = encoderBridge.poll(req.get('authorization'), req.query.cursor);
+  res.status(result.status).json(result.body);
+});
+
 app.ws('/ws', (ws) => {
   wsClients.add(ws);
   ws.isAlive = true;
@@ -215,7 +222,7 @@ function broadcast(data) {
     if (client.readyState === 1) client.send(JSON.stringify(data));
   }
 }
-setMusicPublisher(broadcast);
+setMusicPublisher(event => { broadcast(event); encoderBridge.publish(event); });
 
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 app.get('/livez', (req, res) => res.status(200).send('OK'));
