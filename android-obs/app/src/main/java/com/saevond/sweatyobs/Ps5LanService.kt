@@ -31,6 +31,10 @@ class Ps5LanService : Service() {
     const val ACTION_START_TWITCH = "com.saevond.sweatyobs.START_PUBLIC_TWITCH"
     const val ACTION_MUSIC_PLAY = "com.saevond.sweatyobs.MUSIC_PLAY"
     const val ACTION_MUSIC_PAUSE = "com.saevond.sweatyobs.MUSIC_PAUSE"
+    const val ACTION_MUSIC_STATION = "com.saevond.sweatyobs.MUSIC_STATION"
+    const val ACTION_MUSIC_CONFIG = "com.saevond.sweatyobs.MUSIC_CONFIG"
+    const val ACTION_MUSIC_SKIP = "com.saevond.sweatyobs.MUSIC_SKIP"
+    const val EXTRA_GENRE = "genre"
     const val ACTION_STOP = "com.saevond.sweatyobs.STOP_PS5_INGEST"
     const val EXTRA_PS5_IPV4 = "ps5_ipv4"
     const val ACTION_STATUS = "com.saevond.sweatyobs.DIAGNOSTIC_STATUS"
@@ -68,6 +72,9 @@ class Ps5LanService : Service() {
   private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
   private var musicBridge: MusicBridgePoller? = null
+  private var genrePlaylist: GenrePlaylist? = null
+  private var musicDecodeGeneration = 0
+  private var decodingTrack = false
   private lateinit var phoneSafety: PhoneSafetyMonitor
   private val updateTask = object : Runnable {
     override fun run() {
@@ -120,6 +127,19 @@ class Ps5LanService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action in setOf(ACTION_MUSIC_STATION, ACTION_MUSIC_CONFIG, ACTION_MUSIC_SKIP)) {
+      val store = MusicGenreSettings(this)
+      if (intent?.action == ACTION_MUSIC_STATION) {
+        val genre = intent.getStringExtra(EXTRA_GENRE).orEmpty()
+        if (genre !in GenrePlaylist.STATIONS) return START_NOT_STICKY
+        store.select(genre)
+      }
+      if (receiverRunning && publicTest) {
+        if (intent?.action != ACTION_MUSIC_SKIP) genrePlaylist = store.playlist()
+        playNextLicensedTrack(manual = true)
+      }
+      return START_NOT_STICKY
+    }
     if (intent?.action == ACTION_MUSIC_PLAY || intent?.action == ACTION_MUSIC_PAUSE) {
       if (!receiverRunning) {
         // A music control must never start an unpromoted background service.
@@ -152,6 +172,7 @@ class Ps5LanService : Service() {
       twitchOutput = TwitchRtmpsPublisher(saved)
       liveGate = MediaRelayGate()
       musicTrack = MusicTrackLooper()
+      genrePlaylist = MusicGenreSettings(this).playlist()
     }
 
     // Promote promptly after a user explicitly starts this diagnostic service.
@@ -186,7 +207,8 @@ class Ps5LanService : Service() {
         return START_NOT_STICKY
       }
       wifiAddress = local
-      val uriText = if (publicTest) getSharedPreferences("ps5_music", MODE_PRIVATE).getString("track_uri", null) else null
+      val uriText = if (publicTest && genrePlaylist?.hasTracks() != true)
+        getSharedPreferences("ps5_music", MODE_PRIVATE).getString("track_uri", null) else null
       if (uriText.isNullOrBlank()) {
         beginReceiver(local, ps5Address)
       } else {
