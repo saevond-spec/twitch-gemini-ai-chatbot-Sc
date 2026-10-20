@@ -13,7 +13,9 @@ class MusicTrackLooper {
 
   @Synchronized fun load(track: ByteArray) {
     require(track.size in 4..(60 * 1024 * 1024) && track.size % 4 == 0)
-    pcm = track.copyOf()
+    // Ownership of the decoded PCM transfers to this single-stream looper.
+    // Avoid doubling up to 60 MB on a 4 GB Android phone.
+    pcm = track
     offset = 0
     playing = false
   }
