@@ -255,6 +255,11 @@ class Ps5LanService : Service() {
         audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
       }
       // Diagnostic mode discards packets; only explicit Twitch test sends media.
+      musicTrack?.onTrackEnd = {
+        handler.post {
+          if (!stopping && genrePlaylist?.autoNext == true) playNextLicensedTrack(manual = false)
+        }
+      }
       val ingest = LanRtmpIngest(local, ps5Address) { packet ->
         if (publicTest) {
           try {
@@ -294,6 +299,7 @@ class Ps5LanService : Service() {
       receiver = ingest
       ingest.start()
       receiverRunning = true
+      if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
       setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "ready to auto-start on Twitch publish" else "not loaded")
@@ -301,7 +307,7 @@ class Ps5LanService : Service() {
       if (publicTest && trackReady) {
         val bridgeToken = SecretStore(this).get("bridge_token")
         if (bridgeToken.length >= 32) {
-          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action, level ->
+          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action, level, station ->
             // Bot sends authenticated controls only; volume affects music gain,
             // never the game gain and never the Android system speaker volume.
             if (action == "volume" && level != null && level in 0..100) {
@@ -311,10 +317,18 @@ class Ps5LanService : Service() {
               handler.post {
                 if (!stopping) setNotification("Bot !volume applied: music $level% · game ${liveLevels.gamePercent}%.")
               }
-            } else {
-              val selected = if (action == "station") "skip" else action
-              if (selected in setOf("play", "pause", "skip")) musicTrack?.command(selected)
-            }
+            } else if (action == "station" && station in GenrePlaylist.STATIONS) {
+              handler.post {
+                if (!stopping) {
+                  val genre = station!!
+                  MusicGenreSettings(this).select(genre)
+                  genrePlaylist = MusicGenreSettings(this).playlist()
+                  playNextLicensedTrack(manual = true)
+                }
+              }
+            } else if (action == "skip") {
+              handler.post { if (!stopping) playNextLicensedTrack(manual = true) }
+            } else if (action == "play" || action == "pause") musicTrack?.command(action)
           }.also { it.start() }
         }
       }
@@ -357,6 +371,9 @@ class Ps5LanService : Service() {
   override fun onDestroy() {
     receiverRunning = false
     stopping = true
+    musicDecodeGeneration++
+    decodingTrack = false
+    genrePlaylist = null
     handler.removeCallbacks(updateTask)
     receiver?.stop()
     musicBridge?.stop()
