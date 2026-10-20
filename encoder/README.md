@@ -34,3 +34,11 @@ Actions: play, pause, skip, station (with station "dubstep" or "club"). The musi
 - Free-to-listen YouTube playlists are **not** downloadable/redistributable tracks for this mixer. Obtain explicit appropriate rights and actual music files.
 - \`!play\` bot bridge is a later, separately secured integration. Never expose the control token to Twitch users.
 - Control/status endpoint alone does not prove Twitch ingest is playing.
+
+## Optional Twitch chat !play bridge (prototype)
+
+Set `ENCODER_BRIDGE_TOKEN` to the **same independently generated 32+ character value** in the SweatyClanker bot environment and on the encoder host. Set `SWEATYCLANKER_URL` on the encoder host to the **HTTPS** bot origin (e.g. `https://example.onrender.com`).
+
+The encoder polls `/api/encoder/commands` every 1.5 seconds, with bearer-token authentication and bounded sequence-numbered history. After a restart or stale cursor it synchronizes the current station/play state rather than replaying old skip commands. If three successive polls fail, audio pauses. **Never publish this token or expose the localhost encoder control port to the internet.** This integration does not remove the need for an external gameplay capture/ingest source or a live encoder host.
+
+Current stage: prototype; no end-to-end Twitch viewer audio confirmation, no verified free host, and no hardware capture route.
