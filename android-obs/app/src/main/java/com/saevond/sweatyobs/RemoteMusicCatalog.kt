@@ -19,6 +19,9 @@ data class RemoteMusicTrack(
 object RemoteMusicCatalog {
   const val CATALOG_PAGE_URL = "https://ncs.io/music-search"
   const val LIVE_STREAM_CREDIT = "Music provided by http://spoti.fi/NCS"
+  private val ncsDownloadPath = Regex(
+    """/track/download/[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"""
+  )
 
   val tracks: List<RemoteMusicTrack> = listOf(
     RemoteMusicTrack("ncs-house-desire", "Desire", "gabriawll & Ada Petcu", "club",
