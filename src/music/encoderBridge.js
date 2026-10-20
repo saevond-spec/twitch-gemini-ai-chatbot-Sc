@@ -22,7 +22,7 @@ export function createEncoderEventBridge({ token = '', getState, now = () => Dat
     if (!['play', 'pause', 'skip', 'station', 'volume'].includes(action)) return;
     const station = message.state?.station;
     if (!['club', 'dubstep'].includes(station)) return;
-    const rawVolume = message.state?.volumePercent;
+    const rawVolume = message.state?.volumePercent ?? 22; // legacy music controls default to approved mix level
     if (!Number.isInteger(rawVolume) || rawVolume < 0 || rawVolume > 100) return;
     const command = {
       sequence: ++sequence, action, station, playing: Boolean(message.state?.playing),
