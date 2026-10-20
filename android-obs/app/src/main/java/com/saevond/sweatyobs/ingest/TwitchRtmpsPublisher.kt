@@ -2,9 +2,10 @@ package com.saevond.sweatyobs.ingest
 
 import java.io.OutputStream
 import java.net.InetSocketAddress
-import javax.net.ssl.SSLSocket
+import java.net.InetAddress
+import java.net.Socket
 import javax.net.ssl.SSLSocketFactory
-
+import javax.net.ssl.SSLSocket
 /**
  * Twitch-only RTMPS media publisher. No HTTP cleartext, retry loop or disk output.
  * A caller must explicitly provide a private stream key and stop this publisher.
@@ -13,6 +14,10 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
   companion object {
     private const val HOST = "live.twitch.tv"
     private const val PORT = 443
+    fun isPublicDestination(address: InetAddress): Boolean =
+      !address.isSiteLocalAddress && !address.isLoopbackAddress &&
+        !address.isLinkLocalAddress && !address.isAnyLocalAddress && !address.isMulticastAddress
+
     fun keyValid(value: String): Boolean =
       value.length in 15..160 && value.all { it.isLetterOrDigit() || it == '_' || it == '-' }
   }
@@ -25,11 +30,20 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
   fun connect() {
     require(keyValid(key)) { "Invalid Twitch stream key format" }
     check(!stopped && !initialized) { "Publisher already used" }
-    val tls = SSLSocketFactory.getDefault().createSocket() as SSLSocket
-    socket = tls
+    // NextDNS redirects inbound PS5 RTMP hostnames. Outbound Twitch MUST use
+    // a public IP and a validated TLS hostname, never a DNS-rewritten local IP.
+    val destinations = InetAddress.getAllByName(HOST)
+    check(destinations.isNotEmpty() && destinations.all(::isPublicDestination)) {
+      "Twitch output DNS points to a private address. Keep NextDNS rewrites on PS5 only."
+    }
+    val plain = Socket()
     try {
+      plain.connect(InetSocketAddress(destinations.first(), PORT), 10000)
+      // Wrapping with HOST gives TLS the real hostname even though DNS was prechecked.
+      val tls = SSLSocketFactory.getDefault().createSocket(plain, HOST, PORT, true) as SSLSocket
+      socket = tls
       tls.soTimeout = 12000
-      tls.connect(InetSocketAddress(HOST, PORT), 10000)
+      tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
       tls.startHandshake()
       val input = tls.inputStream
       val out = tls.outputStream
@@ -73,7 +87,13 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
           val command = amf.string()
           if (command == "_error") error("Twitch rejected publish request")
           if (command == "onStatus") {
-            // This confirms server response, not that viewers can see the broadcast.
+            amf.number() // transaction ID
+            amf.skip() // null command object
+            val code = amf.objectStringField("code")
+            if (code != "NetStream.Publish.Start") {
+              error("Twitch rejected publish: " + (code ?: "unknown status"))
+            }
+            // This is server acknowledgment, not independent viewer confirmation.
             accepted = true
           }
         }
@@ -82,6 +102,7 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
       output = out
       initialized = true
     } catch (error: Exception) {
+      runCatching { plain.close() }
       close()
       throw error
     }

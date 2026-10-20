@@ -204,6 +204,29 @@ class RtmpAmf0Reader(private val data: ByteArray) {
       else -> throw IllegalArgumentException("Unsupported AMF type " + kind)
     }
   }
+  /** Parse an AMF0 status object and return the selected string field, fail-closed. */
+  fun objectStringField(target: String): String? {
+    requireBytes(1)
+    val marker = data[offset++].toInt() and 255
+    require(marker == 3 || marker == 8) { "Expected AMF status object" }
+    if (marker == 8) { requireBytes(4); offset += 4 }
+    repeat(128) {
+      requireBytes(3)
+      if (data[offset] == 0.toByte() && data[offset + 1] == 0.toByte() &&
+        data[offset + 2] == 9.toByte()) {
+        offset += 3
+        return null
+      }
+      val length = ((data[offset++].toInt() and 255) shl 8) or
+        (data[offset++].toInt() and 255)
+      requireBytes(length)
+      val field = String(data, offset, length, Charsets.UTF_8)
+      offset += length
+      if (field == target) return string()
+      skip()
+    }
+    error("Too many AMF status entries")
+  }
   fun hasNext() = offset < data.size
 }
 

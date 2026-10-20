@@ -21,8 +21,7 @@ import java.net.Inet4Address
 /**
  * Android 14-compatible, user-started network-connected foreground service.
  *
- * Ingest-only diagnostic: counts authorized PS5 RTMP video/audio packets.
- * It does NOT decode/rebroadcast PS5 gameplay, transmit stream keys, or route music.
+ * Authorized LAN diagnostic and opt-in experimental Twitch relay. No media recording or music mixing.
  */
 class Ps5LanService : Service() {
   companion object {
@@ -78,13 +77,19 @@ class Ps5LanService : Service() {
       }
       val summary = if (publicTest && outputConnected)
         "Twitch RTMPS publisher connected; verify viewer playback independently. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
+      else if (publicTest && ingest.rtpmPublished)
+        "PS5 sending RTMP to phone. Waiting for H.264/AAC keyframe or Twitch publish. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
       else if (publicTest && ingest.connected)
-        "PS5 RTMP connected; waiting for supported H.264 + AAC configs and keyframe for Twitch"
+        "PS5 TCP connected; waiting for RTMP handshake/publish acknowledgment"
       else if (publicTest)
         "Public Twitch test armed; waiting for actual PS5 RTMP media on ${wifiAddress}:1935"
+      else if (ingest.rtpmPublished)
+        "PS5 RTMP publishing to phone · video ${ingest.videoPackets} · audio ${ingest.audioPackets}. Diagnostic only."
       else if (ingest.connected)
-        "PS5 linked · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
-      else "Waiting for PS5 · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
+        "PS5 TCP connected · waiting for RTMP publish. Packets: ${ingest.videoPackets} video / ${ingest.audioPackets} audio"
+      else if (ingest.lastFailure != null)
+        "PS5 session ended (${ingest.lastFailure}); video ${ingest.videoPackets}, audio ${ingest.audioPackets}. Check DNS and broadcast."
+      else "Waiting for PS5 on ${wifiAddress}:1935 · connections ${ingest.tcpConnections}, video ${ingest.videoPackets}, audio ${ingest.audioPackets}"
       val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
       if (display != report) setNotification(display)
       handler.postDelayed(this, 3000)
@@ -153,8 +158,7 @@ class Ps5LanService : Service() {
         return START_NOT_STICKY
       }
       wifiAddress = local
-      // Ingest counters come from LanRtmpIngest; media is intentionally discarded
-      // until the separate audio-mix + H264 passthrough chain is verified.
+      // Diagnostic mode discards media; explicit public test uses H264/AAC passthrough.
       val ingest = LanRtmpIngest(local, ps5Address) { packet ->
         if (publicTest) {
           try {

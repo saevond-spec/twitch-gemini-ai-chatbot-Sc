@@ -9,6 +9,9 @@ import android.content.Context
 import android.content.IntentFilter
 import android.view.View
 import android.text.InputType
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import java.net.Inet4Address
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -42,6 +45,10 @@ class MainActivity : Activity() {
       setPadding(12, 16, 12, 24)
       accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
+    val phoneIp = TextView(this).apply {
+      val ip = wifiIpv4()
+      text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
+    }
     val destinations = TextView(this).apply {
       text = "Twitch · YouTube · Kick: planned simultaneous outputs, NOT operational yet."
     }
@@ -55,6 +62,8 @@ class MainActivity : Activity() {
       id = R.id.ps5_ip_address
       hint = "PS5 private LAN IPv4 address"
       inputType = android.text.InputType.TYPE_CLASS_PHONE
+      setSingleLine(true)
+      setText(getSharedPreferences("ps5_setup", MODE_PRIVATE).getString("ps5_ipv4", ""))
     }
     val twitchKey = EditText(this).apply {
       hint = "Twitch stream key (stored securely on this phone)"
@@ -66,7 +75,7 @@ class MainActivity : Activity() {
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
-    listOf(destinations, privacy, checkSafety, safetyReading, ps5Ip, twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
+    listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip, twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
@@ -105,6 +114,7 @@ class MainActivity : Activity() {
         status.text = "Save your Twitch stream key on this phone first."
         return@setOnClickListener
       }
+      getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
       try {
         startForegroundService(Intent(this, Ps5LanService::class.java).apply {
           action = Ps5LanService.ACTION_START_TWITCH
@@ -123,6 +133,7 @@ class MainActivity : Activity() {
         status.text = "Enter the PS5's private IPv4 address."
         return@setOnClickListener
       }
+      getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", address).apply()
       try {
         status.text = "Valid PS5 IP. Asking Android to start receiver…"
         startForegroundService(Intent(this, Ps5LanService::class.java).apply {
@@ -139,6 +150,16 @@ class MainActivity : Activity() {
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 network diagnostic stopped. No broadcasting was started."
     }
+  }
+
+  private fun wifiIpv4(): String? {
+    val manager = getSystemService(ConnectivityManager::class.java)
+    val network = manager.activeNetwork ?: return null
+    val cap = manager.getNetworkCapabilities(network) ?: return null
+    if (!cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+    return manager.getLinkProperties(network)?.linkAddresses
+      ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
+      ?.address?.hostAddress
   }
 
   override fun onStart() {

@@ -18,6 +18,12 @@ class LanRtmpIngest(
     private set
   @Volatile var connected = false
     private set
+  @Volatile var rtpmPublished = false
+    private set
+  @Volatile var tcpConnections = 0L
+    private set
+  @Volatile var rejectedConnections = 0L
+    private set
   @Volatile var audioPackets = 0L
     private set
   @Volatile var videoPackets = 0L
@@ -53,12 +59,16 @@ class LanRtmpIngest(
             while (active) {
               val socket = try { it.accept() } catch (_: SocketTimeoutException) { continue }
               if (!active) { socket.close(); break }
-              if (socket.inetAddress != source) { socket.close(); continue }
+              if (socket.inetAddress != source) { rejectedConnections++; socket.close(); continue }
               connected = true
+              tcpConnections++
+              lastFailure = null
               peer = socket
-              try { socket.use { client -> session(client) } } catch (_: Exception) {
-                // One malformed peer must not crash the phone or restart the stream.
+              try { socket.use { client -> session(client) } } catch (error: Exception) {
+                // Never reveal an incoming stream key or attacker-controlled payload.
+                lastFailure = error.javaClass.simpleName
               } finally {
+                rtpmPublished = false
                 connected = false
                 peer = null
               }
@@ -109,9 +119,12 @@ class LanRtmpIngest(
               require(conn && created && msg.streamId == 1)
               if (amf.hasNext()) amf.skip()
               val name = amf.string()
-              require(name.length in 1..120 && name.matches(Regex("[A-Za-z0-9_./-]+")))
+              // Genuine broadcast names may contain Twitch query parameters.
+              // Do not log, save, or echo the incoming console stream name.
+              require(name.length in 1..256 && name.none { Character.isISOControl(it) })
               published = true
               respondPublish(output)
+              rtpmPublished = true
             }
             "closeStream", "deleteStream", "FCUnpublish" -> return
           }
