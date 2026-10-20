@@ -20,6 +20,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.SeekBar
 import android.widget.CheckBox
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.AdapterView
 import java.util.Locale
 
 /**
@@ -27,7 +30,11 @@ import java.util.Locale
  * Streaming outputs remain disabled until PS5 media ingest/mux/multi-RTMPS are proven.
  */
 class MainActivity : Activity() {
-  companion object { private const val PICK_MUSIC = 31416 }
+  companion object {
+    private const val PICK_MUSIC = 31416
+    private const val PICK_CLUB = 31417
+    private const val PICK_DUBSTEP = 31418
+  }
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -69,6 +76,31 @@ class MainActivity : Activity() {
       setSingleLine(true)
       setText(getSharedPreferences("ps5_setup", MODE_PRIVATE).getString("ps5_ipv4", ""))
     }
+    val genreSettings = MusicGenreSettings(this)
+    val stationNames = listOf("Mixed", "Club", "Dubstep")
+    val stationCodes = listOf("mixed", "club", "dubstep")
+    val stationPicker = Spinner(this).apply {
+      id = R.id.music_genre
+      adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, stationNames)
+      setSelection(stationCodes.indexOf(genreSettings.selected()).coerceAtLeast(0))
+      contentDescription = "Music genre: Mixed, Club or Dubstep"
+    }
+    val genreStatus = TextView(this).apply {
+      text = "Local library: Club ${genreSettings.tracks("club").size} · Dubstep ${genreSettings.tracks("dubstep").size}"
+    }
+    val addClub = Button(this).apply { text = "Add licensed Club / House songs" }
+    val addDubstep = Button(this).apply { text = "Add licensed Dubstep songs" }
+    val shuffleSongs = CheckBox(this).apply {
+      id = R.id.music_shuffle
+      text = "Shuffle songs"
+      isChecked = genreSettings.shuffle()
+    }
+    val autoNextSong = CheckBox(this).apply {
+      id = R.id.music_auto_next
+      text = "Automatically play next song"
+      isChecked = genreSettings.autoNext()
+    }
+    val skipSong = Button(this).apply { id = R.id.music_skip; text = "Skip to next song" }
     val savedLevels = getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
     val gameVolume = SeekBar(this).apply {
       id = R.id.game_volume
@@ -129,12 +161,43 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
     listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
+      genreStatus, stationPicker, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken,
       openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
+
+    stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+      override fun onNothingSelected(parent: AdapterView<*>?) {}
+      override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+        val genre = stationCodes[position.coerceIn(0, stationCodes.lastIndex)]
+        genreSettings.select(genre)
+        if (Ps5LanService.receiverRunning) {
+          startService(Intent(this@MainActivity, Ps5LanService::class.java).apply {
+            action = Ps5LanService.ACTION_MUSIC_STATION
+            putExtra(Ps5LanService.EXTRA_GENRE, genre)
+          })
+        }
+      }
+    }
+    addClub.setOnClickListener { pickGenreTracks(PICK_CLUB) }
+    addDubstep.setOnClickListener { pickGenreTracks(PICK_DUBSTEP) }
+    shuffleSongs.setOnCheckedChangeListener { _, on ->
+      genreSettings.setShuffle(on)
+      if (Ps5LanService.receiverRunning) refreshGenreService()
+    }
+    autoNextSong.setOnCheckedChangeListener { _, on ->
+      genreSettings.setAutoNext(on)
+      if (Ps5LanService.receiverRunning) refreshGenreService()
+    }
+    skipSong.setOnClickListener {
+      if (Ps5LanService.receiverRunning) {
+        startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_SKIP })
+        status.text = "Requested next local song. Game audio continues."
+      } else status.text = "Start a public Twitch test before skipping music."
+    }
 
     var previousMusic = musicVolume.progress.coerceAtLeast(22)
     val volumeChange = object : SeekBar.OnSeekBarChangeListener {
@@ -283,8 +346,47 @@ class MainActivity : Activity() {
     }
   }
 
+  private fun pickGenreTracks(requestCode: Int) {
+    val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "audio/*"
+      putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+    }
+    startActivityForResult(picker, requestCode)
+  }
+
+  private fun refreshGenreService() {
+    startService(Intent(this, Ps5LanService::class.java).apply {
+      action = Ps5LanService.ACTION_MUSIC_CONFIG
+    })
+  }
+
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
+    if ((requestCode == PICK_CLUB || requestCode == PICK_DUBSTEP) && resultCode == RESULT_OK) {
+      val genre = if (requestCode == PICK_CLUB) "club" else "dubstep"
+      val uris = mutableListOf<Uri>()
+      data?.data?.let { uris.add(it) }
+      data?.clipData?.let { clip ->
+        for (i in 0 until minOf(clip.itemCount, GenrePlaylist.MAX_TRACKS_PER_GENRE)) {
+          clip.getItemAt(i).uri?.let { uris.add(it) }
+        }
+      }
+      val granted = uris.distinct().mapNotNull { uri ->
+        try {
+          contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          uri.toString().takeIf { it.startsWith("content://") && it.length <= 2048 }
+        } catch (_: SecurityException) { null }
+      }
+      if (granted.isNotEmpty()) {
+        val store = MusicGenreSettings(this)
+        store.add(genre, granted)
+        status.text = "Saved ${granted.size} locally authorized $genre songs. Club ${store.tracks("club").size}, Dubstep ${store.tracks("dubstep").size}."
+        if (Ps5LanService.receiverRunning) refreshGenreService()
+      } else status.text = "No accessible local songs were selected."
+      return
+    }
     if (requestCode == PICK_MUSIC && resultCode == RESULT_OK) {
       val uri = data?.data ?: return
       try {
