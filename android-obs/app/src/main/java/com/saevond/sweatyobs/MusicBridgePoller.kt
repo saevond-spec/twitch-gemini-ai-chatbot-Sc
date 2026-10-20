@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
  * The bridge is dormant until a real PS5 audio mixer and RTMPS transport exist.
  */
 fun interface MusicControlSink {
-  fun command(action: String, volumePercent: Int?)
+  fun command(action: String, volumePercent: Int?, station: String?)
 }
 
 class MusicBridgePoller(
@@ -56,8 +56,8 @@ class MusicBridgePoller(
             if (reset) {
               val state = packet.getJSONObject("state")
               val volume = state.optInt("volumePercent", -1)
-              if (volume in 0..100) mixer.command("volume", volume)
-              mixer.command(if (state.optBoolean("playing")) "play" else "pause", null)
+              if (volume in 0..100) mixer.command("volume", volume, null)
+              mixer.command(if (state.optBoolean("playing")) "play" else "pause", null, null)
             } else {
               val events = packet.getJSONArray("events")
               require(events.length() <= 256)
@@ -66,9 +66,12 @@ class MusicBridgePoller(
                 val action = event.optString("action")
                 if (action == "volume") {
                   val amount = event.optInt("volumePercent", -1)
-                  if (amount in 0..100) mixer.command("volume", amount)
-                } else if (action in listOf("play", "pause", "skip")) mixer.command(action, null)
-                else if (action == "station") mixer.command("skip", null)
+                  if (amount in 0..100) mixer.command("volume", amount, null)
+                } else if (action in listOf("play", "pause", "skip")) mixer.command(action, null, null)
+                else if (action == "station") {
+                  val genre = event.optString("station")
+                  if (genre in GenrePlaylist.STATIONS) mixer.command("station", null, genre)
+                }
               }
             }
             cursor = nextCursor
@@ -76,7 +79,7 @@ class MusicBridgePoller(
           } finally { connection.disconnect() }
         } catch (_: Exception) {
           failures++
-          if (failures >= 3) mixer.command("pause", null)
+          if (failures >= 3) mixer.command("pause", null, null)
           Log.w("SweatyClankerOBS", "Chat controls unavailable; retrying")
         }
         if (active) try { Thread.sleep(1500) } catch (_: InterruptedException) { break }
