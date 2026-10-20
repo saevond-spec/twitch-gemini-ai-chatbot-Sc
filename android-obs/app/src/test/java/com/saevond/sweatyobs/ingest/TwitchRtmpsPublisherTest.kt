@@ -9,6 +9,14 @@ class TwitchRtmpsPublisherTest {
    assertFalse(TwitchRtmpsPublisher.keyValid("secret\ninjection"))
    assertTrue(TwitchRtmpsPublisher.keyValid("live_abcdefghijklmnop_123456"))
  }
+ @Test fun sharedPublisherRequiresSecurePublicEndpointShape() {
+   assertTrue(RtmpsPublisher.endpointValid("rtmps://ingest.example.com:443/app"))
+   assertFalse(RtmpsPublisher.endpointValid("rtmp://ingest.example.com/app"))
+   assertFalse(RtmpsPublisher.endpointValid("https://ingest.example.com/app"))
+   assertFalse(RtmpsPublisher.endpointValid("rtmps://user:pass@ingest.example.com/app"))
+   assertFalse(RtmpsPublisher.endpointValid("rtmps://ingest.example.com/app?key=secret"))
+   assertFalse(RtmpsPublisher.endpointValid("rtmps://ingest.example.com/../admin"))
+ }
  @Test fun roundTripChunkedAvcAndAac() {
    for(type in listOf(8,9)) {
      val bytes = ByteArray(500){ (it and 255).toByte() }

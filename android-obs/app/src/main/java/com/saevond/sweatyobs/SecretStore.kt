@@ -14,6 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 class SecretStore(context: Context) {
   private val prefs = context.getSharedPreferences("secure_encoder_secrets", Context.MODE_PRIVATE)
   private val alias = "sweatyobs_aes_gcm_v1"
+  private val secretNames = setOf("rtmps", "youtube_key", "kick_key", "bridge_token")
   private val key: SecretKey
     get() {
       val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -29,13 +30,13 @@ class SecretStore(context: Context) {
       return generator.generateKey()
     }
   fun put(name: String, value: String) {
-    require(name in setOf("rtmps", "bridge_token"))
+    require(name in secretNames)
     val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
     val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
     prefs.edit().putString(name, Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)).apply()
   }
   fun get(name: String): String {
-    require(name in setOf("rtmps", "bridge_token"))
+    require(name in secretNames)
     val encoded = prefs.getString(name, null) ?: return ""
     return try {
       val bytes = Base64.decode(encoded, Base64.NO_WRAP)

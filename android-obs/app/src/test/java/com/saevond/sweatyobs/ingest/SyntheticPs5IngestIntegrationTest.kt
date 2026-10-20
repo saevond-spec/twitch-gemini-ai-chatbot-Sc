@@ -5,6 +5,7 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,11 +18,13 @@ class SyntheticPs5IngestIntegrationTest {
   @Test fun receivesRtmpPublishWithAvcAacAndKeyframe() {
     val gate = MediaRelayGate()
     val latch = CountDownLatch(4)
+    val sourceStarted = AtomicInteger(0)
+    val sourceEnded = CountDownLatch(1)
     val forwarded = mutableListOf<RtmpMessage>()
-    val receiver = LanRtmpIngest("10.233.31.1", "10.233.31.2") { packet ->
+    val receiver = LanRtmpIngest("10.233.31.1", "10.233.31.2", onMedia = { packet ->
       synchronized(forwarded) { forwarded.addAll(gate.process(packet)) }
       latch.countDown()
-    }
+    }, onSourceSessionStart = { sourceStarted.incrementAndGet() }, onSourceSessionEnd = { sourceEnded.countDown() })
     receiver.start()
     try {
       val sock = Socket()
@@ -57,6 +60,8 @@ class SyntheticPs5IngestIntegrationTest {
         output.flush()
         assertTrue("Synthetic PS5 RTMP media never reached onMedia", latch.await(7, TimeUnit.SECONDS))
       }
+      assertTrue("source-session end should be reported after the peer disconnects", sourceEnded.await(2, TimeUnit.SECONDS))
+      assertEquals(1, sourceStarted.get())
       assertEquals(2L, receiver.videoPackets)
       assertEquals(2L, receiver.audioPackets)
       synchronized(forwarded) {

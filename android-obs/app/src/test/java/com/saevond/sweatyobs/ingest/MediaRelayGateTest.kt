@@ -31,4 +31,16 @@ class MediaRelayGateTest {
     g.process(v);g.process(a);g.process(key)
     try { g.process(a); fail("codec change should stop relay") } catch (_: IllegalStateException) {}
   }
+  @Test fun sourceReconnectResetsCodecHeadersButKeepsOutputTimestampsMonotonic() {
+    val g = MediaRelayGate()
+    g.process(v); g.process(a); g.process(key)
+    assertEquals(100L, g.process(RtmpMessage(9,300,1,byteArrayOf(0x27,1,0))).single().timestamp)
+    g.resetForSourceReconnect()
+    g.process(v.copy(timestamp = 0))
+    g.process(a.copy(timestamp = 0))
+    val restarted = g.process(key.copy(timestamp = 10))
+    assertEquals(listOf(9,8,9), restarted.map { it.type })
+    assertEquals(listOf(101L,101L,101L), restarted.map { it.timestamp })
+    assertEquals(111L, g.process(RtmpMessage(9,20,1,byteArrayOf(0x27,1,0))).single().timestamp)
+  }
 }

@@ -1,24 +1,32 @@
-# Twitch setup and adjustable game/music volume (v0.1.6-dev)
+# Platform setup, reconnect, and audio
 
-Status: experimental, not PS5 production verified. Main SweatyClanker bot must remain unaffected until live ingest and viewer audio/video are confirmed.
+The encoder is experimental. A stream key being saved does not prove that a platform accepts the feed, and a publish acknowledgement does not prove viewers can watch it. Test each destination with an independent viewer.
 
-## Twitch connection
-1. From Android, open Twitch Creator Dashboard > Settings > Stream (https://dashboard.twitch.tv/settings/stream), sign in to the intended broadcaster account.
-2. Copy the broadcaster's primary stream key on device. Paste into SweatyClanker's password-style Twitch field and press Save Twitch key securely. A key format check and local Keystore encryption do NOT verify Twitch authorization; publish can only be tested when compatible PS5 media actually arrives.
-3. Phone's Wi-Fi IPv4 must equal the NextDNS **rewrite destination**, and PS5 IPv4 must match the app's allowed source. Keep PS5 and Android on same home LAN without AP isolation. Avoid rewriting ingest.twitch.tv HTTPS discovery or using the phone as the DNS resolver itself.
-4. Press Start PS5 network connection test, then start a throwaway PS5 Twitch broadcast. Verify actual increasing H264 and AAC packet counts. No real PS5 packets => do not proceed to public RTMPS test.
-5. Stop diagnostic. Only then press Public Twitch Test and start a new PS5 broadcast. Check Twitch playback from an independent viewer, with both gameplay and music clearly audible.
-6. To roll back, stop public test, restore PS5 DNS to Automatic (or its prior addresses), and remove temporary NextDNS rewrites.
+## Configure outputs
 
-## Independent audio volume controls
-- Two Android SeekBars apply to **game** and **music** at runtime; changes are saved for future app launches. Buttons provide music mute/unmute and reset to Game 85%, Music 20%. Both can be set to 0 independently.
-- Volume is implemented *in the actual on-phone AAC mixing pipeline*, not via Android's speaker-volume button. Playing music requires selecting an authorized local audio file. The game slider requires incoming AAC-LC 48 kHz stereo compatible with MediaCodec. Incompatible incoming codec should produce an error, not a fake success.
-- Mathematical fail-safe: let x = game slider/100 and y = music slider/100 (or zero while muted/paused); k = min(1, 0.98/(x+y)) for x+y>0, else 1; output = round(k x gameSample + k y musicSample). The triangle inequality guarantees |output| <= 0.98 full-scale even if full-volume tracks are perfectly phase-aligned. Mixer also saturates as a redundant last defense.
-- The value 0.98 corresponds to approximately 20 log10(0.98) = -0.1755 dBFS guaranteed peak headroom, rather than a loudness normalization guarantee. This is not a broadcast LUFS measurement or true-peak oversampling limiter.
-- Music !play/pause is only sent from the bot when the same private bridge token exists on phone and bot server. The bridge does not distribute audio; it only sends commands. Bot controls must not expose tokens or stream keys.
+1. In the app, check the platforms you want to use. Twitch uses the fixed secure ingest URL and your Twitch Creator Dashboard key.
+2. For YouTube, paste the RTMPS ingest URL and stream key from YouTube Live Control Room. For Kick, paste the RTMPS server URL and key from the Kick Creator Dashboard.
+3. Press each **Save ... server and key** button. The key is encrypted on-device with Android Keystore. Never put stream keys in a description, bot chat, or issue report.
+4. Enter the stream title, game, and a few relevant search phrases, then copy the generated description. Paste it into each platform dashboard; this app does not modify channel metadata through platform APIs.
+5. Enter the PS5's private IPv4 address, connect the phone and PS5 to the same Wi-Fi, and choose **START MULTISTREAM** only when you intend to publish.
 
-## Merge gate
-- PR #48 remains draft and independent of the live Render service, pending real PS5/Android/Twitch verification. CI, unit and emulator tests exercise synthetic media, but cannot substitute for gameplay appearing on Twitch.
-- Do not merge unfinished stream relay into main simply because the volume sliders compile; first verify end-to-end PS5 RTMP ingest, the output handshake, audio in Twitch playback, independent mute, 5-10 minute phone stability, and clean rollback.
+## Connection recovery and quality
 
-Source: Twitch Stream Key FAQ https://help.twitch.tv/s/article/twitch-stream-key-faq
+- Every enabled output connects and retries independently. Retry delay grows from one second to a maximum of 30 seconds while the foreground service is running.
+- Each output has a small bounded queue. If it falls behind, the app drops stale packets and waits for a clean AVC keyframe before resuming. Tap **Reconnect stream outputs** to force a new platform connection.
+- The notification's **health** value is based on this app's queue delay. It is not a speed test, platform health indicator, or guarantee of viewer playback.
+- If the phone stops for a thermal/battery safety condition or the user presses Stop, it does not restart itself.
+
+## Video compatibility
+
+With **Add the @saevond live overlay to the stream** enabled, the app hardware-decodes and re-encodes the shared feed at up to 1080p while burning in the transparent cyber-samurai HUD. It is not a 4K output. Phone codec support and sustained frame rate vary; if processing fails, the app reconnects using the original video. Uncheck the option to pass H.264 through unchanged. Stats, chat, names, and alerts on the HUD are simulated demo data, not live platform activity. See the [Android encoder README](README.md) and [production release gate](PRODUCTION_RELEASE_GATE.md).
+
+For the 1080p profile, plan for **over 16.3 Mbps of sustained phone upload per selected platform** under Kick's current guidance to keep bitrate below half of upload speed. The app sends an 8 Mbps H.264 video stream plus 128 kbps AAC to every destination; three outputs therefore need more than 48.8 Mbps sustained upload under that conservative rule. This is a capacity calculation, not an internet speed measurement. The app uses the same 8 Mbps video encode for all services: YouTube recommends 17 Mbps H.264 at 1080p60, while Kick lists 6–8 Mbps and caps at 8 Mbps. It cannot meet both service-specific targets with one encode, and it does not output 4K. Use output health and skipped-packet counters during a real test. No code can guarantee zero end-to-end delay because Wi-Fi, internet routing, platform ingest, and viewer buffering are outside the app's control.
+
+## Audio
+
+- Game and music gain sliders operate in the in-memory AAC mixer; music must be licensed for live broadcasts and VODs.
+- The curated NCS catalog contains 100 tracks across Club / House, Dubstep / Bass, and Pop / Trap. Select tracks in the app, then use Shuffle and Automatically play next song for a no-repeat pass through the chosen tracks. The playlist duration depends on actual song lengths; use a larger local licensed library if you need six full hours without a repeat.
+- NCS tracks include copyable stream and per-track credits. Add the required credit to each applicable stream description and check current platform-specific terms before multistreaming.
+- Drake and Taylor Swift master recordings are not free-use catalog tracks. Add local audio only when you have the rights for live streams and VODs on each destination.
+- The music mixer accepts AAC-LC 48 kHz stereo from the source. Other game audio formats are rejected rather than silently treated as compatible.

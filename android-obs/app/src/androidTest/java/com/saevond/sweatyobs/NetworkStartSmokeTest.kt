@@ -18,6 +18,14 @@ import org.junit.runner.RunWith
 class NetworkStartSmokeTest {
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
+  @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
+    onView(withId(R.id.output_upload_budget)).perform(scrollTo())
+      .check(matches(allOf(
+        withText(containsString("16.3 Mbps")),
+        withText(containsString("48.8 Mbps"))
+      )))
+  }
+
   @Test fun invalidAddressTapReportsVisibleFailure() {
     onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())

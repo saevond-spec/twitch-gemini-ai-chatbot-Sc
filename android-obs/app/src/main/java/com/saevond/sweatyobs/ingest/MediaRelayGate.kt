@@ -5,7 +5,8 @@ class MediaRelayGate {
   private var videoConfig: RtmpMessage? = null
   private var audioConfig: RtmpMessage? = null
   private var live = false
-  private var baseTime = 0L
+  private var baseTime: Long? = null
+  private var timelineOffset = 0L
   private var videoTime = 0L
   private var audioTime = 0L
   var frames = 0L
@@ -44,16 +45,28 @@ class MediaRelayGate {
       baseTime = message.timestamp
       live = true
       frames++
+      videoTime = maxOf(videoTime, timelineOffset)
+      audioTime = maxOf(audioTime, timelineOffset)
       return listOf(
-        videoConfig!!.copy(timestamp = 0L, streamId = 1),
-        audioConfig!!.copy(timestamp = 0L, streamId = 1),
-        message.copy(timestamp = 0L, streamId = 1)
+        videoConfig!!.copy(timestamp = timelineOffset, streamId = 1),
+        audioConfig!!.copy(timestamp = timelineOffset, streamId = 1),
+        message.copy(timestamp = timelineOffset, streamId = 1)
       )
     }
-    val delta = (message.timestamp - baseTime).coerceAtLeast(0L)
-    val timestamp = if (video) delta.coerceAtLeast(videoTime) else delta.coerceAtLeast(audioTime)
-    if (video) videoTime = timestamp else audioTime = timestamp
+    val delta = (message.timestamp - (baseTime ?: message.timestamp)).coerceAtLeast(0L)
+    val timestamp = timelineOffset + delta
+    val monotonic = if (video) timestamp.coerceAtLeast(videoTime) else timestamp.coerceAtLeast(audioTime)
+    if (video) videoTime = monotonic else audioTime = monotonic
     frames++
-    return listOf(message.copy(timestamp = timestamp, streamId = 1))
+    return listOf(message.copy(timestamp = monotonic, streamId = 1))
+  }
+
+  /** Reset codec headers for a reconnected PS5 session while preserving output timestamps. */
+  fun resetForSourceReconnect() {
+    timelineOffset = maxOf(videoTime, audioTime, timelineOffset) + 1L
+    videoConfig = null
+    audioConfig = null
+    live = false
+    baseTime = null
   }
 }

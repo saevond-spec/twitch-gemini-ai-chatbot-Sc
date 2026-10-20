@@ -12,7 +12,9 @@ import kotlin.concurrent.thread
 class LanRtmpIngest(
   private val listenAddress: String,
   private val permittedPs5Address: String,
-  private val onMedia: (RtmpMessage) -> Unit
+  private val onMedia: (RtmpMessage) -> Unit,
+  private val onSourceSessionStart: () -> Unit = {},
+  private val onSourceSessionEnd: () -> Unit = {}
 ) {
   @Volatile var active = false
     private set
@@ -100,9 +102,10 @@ class LanRtmpIngest(
     var conn = false
     var created = false
     var published = false
-    while (active) {
-      val msg = reader.nextMessage()
-      when (msg.type) {
+    try {
+      while (active) {
+        val msg = reader.nextMessage()
+        when (msg.type) {
         20, 17 -> {
           val data = if (msg.type == 17) {
             require(msg.data.isNotEmpty() && msg.data[0] == 0.toByte())
@@ -122,6 +125,7 @@ class LanRtmpIngest(
               // Genuine broadcast names may contain Twitch query parameters.
               // Do not log, save, or echo the incoming console stream name.
               require(name.length in 1..256 && name.none { Character.isISOControl(it) })
+              onSourceSessionStart()
               published = true
               respondPublish(output)
               rtpmPublished = true
@@ -137,7 +141,10 @@ class LanRtmpIngest(
           videoPackets++
           onMedia(msg)
         }
+        }
       }
+    } finally {
+      if (published) onSourceSessionEnd()
     }
   }
 

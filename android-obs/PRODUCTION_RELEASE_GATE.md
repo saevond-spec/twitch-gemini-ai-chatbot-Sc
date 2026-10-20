@@ -1,26 +1,26 @@
 # SweatyClanker OBS Lite — production release gate
 
-**Status: NOT PRODUCTION READY.** PR #48 stays draft. Owner device: Moto G Stylus XT2317DL, Android 14. Do not distribute the current debug APK as a production streaming solution.
+**Status: experimental; not production ready.** PRs #48 and #49 are merged, but the merged code is not evidence of retail PS5 compatibility or sustained, viewable broadcasts. Do not treat a passing APK build as an on-device acceptance test.
 
-## Hard blockers
-- [ ] **End-to-end PS5 ingress:** prove PS5 emits a compatible unencrypted RTMP feed and connects to our phone without breaking PlayStation account security. DNS redirection must be reversible; custom DNS must be deployed to a real resolver and tested. Cannot redirect encrypted RTMPS with DNS alone.
-- [ ] **Video and audio output:** implement RTMP-to-RTMPS relay on Android using *actual* PS5 H.264 frames/timestamps and AAC game audio, mix game audio with documented broadcast-licensed music, and confirm independent viewer can hear both. Current `Ps5LanService` **discards all RTMP media**.
-- [ ] **Multistream:** implement output to Twitch/YouTube/Kick on Android (not just the separate Linux FFmpeg runner), test destination failures independently, and redact credentials from logs.
-- [ ] **1080p60 proof:** measure real PS5 input and output resolution/FPS; no upscaling or false quality labels; stay within receiving platform limits.
-- [ ] **Safety and sustained streaming:** on XT2317DL verify thermal shutoff, Android 14 service launch/persistence, battery policy, notification behavior, no unwanted automatic restart; run 15 min, 2 h, 8 h, and requested extended soak at real workload without unsafe heat.
-- [ ] **Connectivity:** verify phone IP, PS5 IP, same Wi-Fi without client isolation, DNS hostname mapping, port 1935 and audio/video stream; handle packet corruption/disconnect and Wi-Fi handoff safely.
-- [ ] **Streaming recovery:** bounded buffers, timeout/backoff, no runaway retry loops, video timestamp continuity, graceful user stop and crash recovery without exposing keys.
-- [ ] **Release security:** separately signed release artifact, reproducible/versioned build, dependency review, application backup disabled, non-exported services, credentials held in Android Keystore and verified on-device, no secrets in telemetry.
-- [ ] **On-device acceptance:** independent Twitch viewer test (video, game audio, mixed music), phone usable for Twitch chat throughout, beta owner sign-off.
+## Remaining gates
 
-## Current verified scope
-- GitHub CI and Android debug APK builds worked on previous commits; latest workflow now includes Kotlin/JUnit tests.
-- Proprietary physical phone/PS5 behavior is unknown, even with successful compilation.
-- Experimental network foreground service counts RTMP packets; no end-to-end PS5 streaming path.
-- Debug build is for cautious testing only, not unattended or unlimited live streaming.
+- [ ] **Real PS5 ingest:** verify the console can send a compatible unencrypted RTMP feed to the phone without account or network security changes. Do not change router or PS5 DNS without a safe rollback and a confirmed legitimate input route.
+- [ ] **Each streaming destination:** verify Twitch, YouTube, and Kick separately with platform dashboards and independent viewers. Test that one failed destination does not stall the others and that reconnects recover after Wi-Fi/internet interruption.
+- [ ] **Audio:** verify PS5 game AAC plus selected licensed music on every destination. The music mixer requires AAC-LC 48 kHz stereo input.
+- [ ] **Quality and upload budget:** measure actual resolution, frame rate, bitrate, dropped packets, and audio/video sync with the overlay enabled and with pass-through selected. The overlay path hardware-decodes, composites, and encodes up to 1080p; 4K output is not supported or promised. For three 1080p outputs, verify more than 48.8 Mbps sustained phone upload under the conservative half-upload budget and all output queues remain under 300 ms without skipped packets during a real test. The shared 8 Mbps video profile is below YouTube's current 17 Mbps H.264 recommendation for 1080p60, though within Kick's 8 Mbps cap; separate profiles are needed to meet both targets.
+- [ ] **Phone safety and sustained streaming:** on the target phone, verify thermal stop, Android foreground-service behavior, notification controls, battery policy, and a sustained real workload. Automated emulator tests do not cover multi-hour thermals.
+- [ ] **Recovery:** test source disconnect/reconnect, each output's exponential retry, manual output reconnect, bounded memory use, stale-frame dropping, and clean user stop.
+- [ ] **Release security:** create a separately signed release APK, review dependencies and permissions, confirm stream keys remain in Android Keystore, and verify no credentials appear in logs or app status.
+- [ ] **User acceptance:** an independent viewer confirms playable video, game audio, selected music, metadata, and stability on every platform.
 
-## No-live-change rule
-Do not alter the user's Spectrum router or PS5 DNS until a safe rollback and an actually reachable ingress route are independently confirmed. Do not merge PR #48 or deploy experimental code to the live Twitch bot as proof of production readiness.
+## Current implementation
 
-## Safety rule
-Protect the phone rather than prioritize an uninterrupted broadcast. Android thermal or battery STOP must end the receiver and outputs, require conscious re-start, and be validated on XT2317DL.
+- Each selected RTMPS destination has a separate background publisher worker, a bounded in-memory media queue, an automatic retry loop with a 30-second maximum delay, and a manual reconnect control.
+- A publisher resumes only from cached AVC/AAC headers plus a new video keyframe. Old frames are discarded when the sender falls behind. Status reports queue delay and send rate, not actual internet throughput or platform-side health.
+- The optional @saevond overlay adds a full-screen transparent cyber-samurai HUD with animated panels and clearly labeled simulated stats/chat/alerts, then hardware-encodes the shared video output up to 1080p. Device support and sustained performance remain unverified on the target Moto G Stylus. The pass-through option forwards the original H.264 feed.
+- Platform stream keys are stored in Android Keystore. Stream metadata generation copies text to the clipboard and does not update creator dashboards through platform APIs.
+- Media is not recorded. Phone-safety stops end streaming and require the user to start again.
+
+## Safety and test scope
+
+CI tests use synthetic RTMP and fake output publishers. They validate software paths and cannot prove live platform acceptance or a real PS5 broadcast. Keep the Twitch bot and Render deployment unchanged while validating this Android app. Do not start a public broadcast as part of automated testing.

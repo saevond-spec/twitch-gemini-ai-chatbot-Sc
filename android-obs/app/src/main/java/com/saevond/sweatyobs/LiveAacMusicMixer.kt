@@ -9,7 +9,7 @@ import java.nio.ByteBuffer
 
 /**
  * Decodes actual game AAC audio, mixes a user-provided rights-cleared PCM track,
- * and encodes new AAC frames for the Twitch RTMP feed. No Android system capture.
+ * and encodes new AAC frames for the selected RTMP(S) outputs. No Android system capture.
  *
  * Single-thread ownership: called only on the LAN ingest worker. A new instance
  * must be created per stream. Requires incoming AAC-LC 48kHz stereo; failures

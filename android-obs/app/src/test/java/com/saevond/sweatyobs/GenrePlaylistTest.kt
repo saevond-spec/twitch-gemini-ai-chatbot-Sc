@@ -15,6 +15,15 @@ class GenrePlaylistTest {
     p.configure("dubstep",true,true)
     repeat(15) { assertTrue(p.next()!!.startsWith("content://dub/")) }
   }
+
+  @Test fun popAndTrapStationKeepsItsOwnCreatorClearedTracks() {
+    val p = playlist()
+    val track = RemoteMusicCatalog.forGenre(GenrePlaylist.POP_TRAP).first().audioUrl
+    p.setTracks(GenrePlaylist.POP_TRAP, listOf(track))
+    p.configure(GenrePlaylist.POP_TRAP, false, true)
+    assertEquals(track, p.next())
+    assertEquals(1, p.count(GenrePlaylist.POP_TRAP))
+  }
   @Test fun mixedShuffledDeckVisitsAllTracksBeforeRepeating() {
     val p=playlist()
     p.configure("mixed",true,true)
@@ -54,6 +63,8 @@ class GenrePlaylistTest {
   @Test fun rejectsInvalidStationAndOversizedCatalog() {
     val p = GenrePlaylist()
     try { p.configure("rock",true,true); fail() } catch (_: IllegalArgumentException) {}
-    try { p.setTracks("dubstep",List(21){"content://dub/$it"});fail() } catch (_:IllegalArgumentException) {}
+    p.setTracks("club",List(GenrePlaylist.MAX_TRACKS_PER_GENRE){"content://club/$it"})
+    assertEquals(100,p.count("club"))
+    try { p.setTracks("dubstep",List(101){"content://dub/$it"});fail() } catch (_:IllegalArgumentException) {}
   }
 }

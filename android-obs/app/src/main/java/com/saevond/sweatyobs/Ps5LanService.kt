@@ -17,18 +17,24 @@ import android.os.Looper
 import android.util.Log
 import com.saevond.sweatyobs.ingest.LanRtmpIngest
 import com.saevond.sweatyobs.ingest.MediaRelayGate
-import com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher
+import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
+import com.saevond.sweatyobs.ingest.RtmpMessage
+import com.saevond.sweatyobs.ingest.RtmpDestination
+import com.saevond.sweatyobs.ingest.RtmpsPublisher
 import java.net.Inet4Address
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Android 14-compatible, user-started network-connected foreground service.
  *
- * Authorized LAN diagnostic and opt-in experimental Twitch relay with optional licensed music mixing. No recording.
+ * Authorized LAN diagnostic and opt-in experimental RTMPS multistream with optional licensed music mixing. No recording.
  */
 class Ps5LanService : Service() {
   companion object {
     const val ACTION_START = "com.saevond.sweatyobs.START_PS5_INGEST"
     const val ACTION_START_TWITCH = "com.saevond.sweatyobs.START_PUBLIC_TWITCH"
+    const val ACTION_RECONNECT_OUTPUTS = "com.saevond.sweatyobs.RECONNECT_OUTPUTS"
     const val ACTION_MUSIC_PLAY = "com.saevond.sweatyobs.MUSIC_PLAY"
     const val ACTION_MUSIC_PAUSE = "com.saevond.sweatyobs.MUSIC_PAUSE"
     const val ACTION_MUSIC_STATION = "com.saevond.sweatyobs.MUSIC_STATION"
@@ -67,9 +73,15 @@ class Ps5LanService : Service() {
   private var terminalReason = false
   @Volatile private var publicTest = false
   @Volatile private var outputConnected = false
-  private var twitchOutput: TwitchRtmpsPublisher? = null
+  private val outputPublishers = CopyOnWriteArrayList<ReliableRtmpOutput>()
+  @Volatile private var outputStatus = "No RTMPS outputs configured"
+  @Volatile private var reportedOutputStatus = ""
+  private val musicStartedOnOutput = AtomicBoolean(false)
   private var liveGate: MediaRelayGate? = null
-  private var audioMixer: LiveAacMusicMixer? = null
+  @Volatile private var brandOverlay: BrandVideoOverlay? = null
+  @Volatile private var brandOverlayRequested = false
+  @Volatile private var sourceVideoConfig: RtmpMessage? = null
+  @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
   private var musicBridge: MusicBridgePoller? = null
   private var genrePlaylist: GenrePlaylist? = null
@@ -87,20 +99,27 @@ class Ps5LanService : Service() {
         stopSelf()
         return
       }
-      if (activeWifiIpv4() != wifiAddress || !ingest.active || (outputConnected && !ingest.connected)) {
+      if (activeWifiIpv4() != wifiAddress || !ingest.active) {
         setNotification("Receiver stopped: Wi-Fi changed or port unavailable")
         terminalReason = true
         stopSelf()
         return
       }
-      val summary = if (publicTest && outputConnected)
-        "Twitch publishing. Video ${ingest.videoPackets} / audio ${ingest.audioPackets} · mixed AAC ${audioMixer?.audioOutputPackets ?: 0L} · ${liveLevels.description()}"
+      if (publicTest) {
+        val snapshots = outputPublishers.map { it.snapshot() }
+        outputConnected = snapshots.any { it.state == "LIVE" }
+        outputStatus = snapshots.joinToString(" | ") { it.summary() }
+      }
+      val summary = if (publicTest && !ingest.connected && ingest.tcpConnections > 0)
+        "Waiting for PS5 source reconnect · ${ingest.videoPackets} video / ${ingest.audioPackets} audio · $outputStatus"
+      else if (publicTest && outputConnected)
+        "Outputs live · PS5 video ${ingest.videoPackets} / audio ${ingest.audioPackets} · mixed AAC ${audioMixer?.audioOutputPackets ?: 0L} · ${liveLevels.description()} · $outputStatus"
       else if (publicTest && ingest.rtpmPublished)
-        "PS5 sending RTMP to phone. Waiting for H.264/AAC keyframe or Twitch publish. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
+        "PS5 sending RTMP to phone. Waiting for H.264/AAC keyframe or output reconnect. Video ${ingest.videoPackets} / audio ${ingest.audioPackets} · $outputStatus"
       else if (publicTest && ingest.connected)
         "PS5 TCP connected; waiting for RTMP handshake/publish acknowledgment"
       else if (publicTest)
-        "Public Twitch test armed; waiting for actual PS5 RTMP media on ${wifiAddress}:1935"
+        "Multistream armed; waiting for actual PS5 RTMP media on ${wifiAddress}:1935 · $outputStatus"
       else if (ingest.rtpmPublished)
         "PS5 RTMP publishing to phone · video ${ingest.videoPackets} · audio ${ingest.audioPackets}. Diagnostic only."
       else if (ingest.connected)
@@ -127,6 +146,15 @@ class Ps5LanService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action == ACTION_RECONNECT_OUTPUTS) {
+      if (!receiverRunning || !publicTest || outputPublishers.isEmpty()) {
+        setNotification("Start an enabled stream first; output reconnect is unavailable.")
+      } else {
+        outputPublishers.forEach { it.reconnectNow() }
+        setNotification("Reconnecting selected stream outputs. Automatic retries remain on; waiting for a clean video keyframe.")
+      }
+      return START_NOT_STICKY
+    }
     if (intent?.action in setOf(ACTION_MUSIC_STATION, ACTION_MUSIC_CONFIG, ACTION_MUSIC_SKIP)) {
       val store = MusicGenreSettings(this)
       if (intent?.action == ACTION_MUSIC_STATION) {
@@ -163,14 +191,38 @@ class Ps5LanService : Service() {
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
     publicTest = intent?.action == ACTION_START_TWITCH
     if (publicTest) {
-      val saved = SecretStore(this).get("rtmps")
-      if (!TwitchRtmpsPublisher.keyValid(saved)) {
-        publishUiStatus("No valid Twitch key saved. Open app and save it on your phone.")
+      val destinations = selectedDestinations()
+      val invalid = destinations.firstOrNull { !it.isValid() }
+      if (destinations.isEmpty() || invalid != null) {
+        val message = if (destinations.isEmpty()) "Select at least one output and save its RTMPS server URL and key."
+          else "${invalid!!.label} needs a valid RTMPS server URL and stream key."
+        publishUiStatus(message)
         stopSelf()
         return START_NOT_STICKY
       }
-      twitchOutput = TwitchRtmpsPublisher(saved)
+      outputPublishers.clear()
+      outputPublishers += destinations.map { destination ->
+        ReliableRtmpOutput(destination, onSnapshot = { onOutputSnapshot() }).also { it.start() }
+      }
+      outputConnected = false
+      musicStartedOnOutput.set(false)
+      outputStatus = outputPublishers.joinToString(" | ") { it.snapshot().summary() }
       liveGate = MediaRelayGate()
+      sourceVideoConfig = null
+      brandOverlayRequested = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+        .getBoolean("brand_overlay", true)
+      brandOverlay?.close()
+      brandOverlay = if (brandOverlayRequested) {
+        runCatching {
+          BrandVideoOverlay(
+            onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
+            onStatus = { message -> handler.post { if (!stopping) setNotification(message) } },
+            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } })
+        }.onFailure { error ->
+          brandOverlayRequested = false
+          handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
+        }.getOrNull()
+      } else null
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
     }
@@ -254,13 +306,12 @@ class Ps5LanService : Service() {
         // Game volume is independently controllable even with no music selected.
         audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
       }
-      // Diagnostic mode discards packets; only explicit Twitch test sends media.
       musicTrack?.onTrackEnd = {
         handler.post {
           if (!stopping && genrePlaylist?.autoNext == true) playNextLicensedTrack(manual = false)
         }
       }
-      val ingest = LanRtmpIngest(local, ps5Address) { packet ->
+      val ingest = LanRtmpIngest(local, ps5Address, onMedia = { packet ->
         if (publicTest) {
           try {
             val input = if (packet.type == 8 && audioMixer != null) {
@@ -269,33 +320,43 @@ class Ps5LanService : Service() {
             input.forEach { item ->
               val frames = liveGate?.process(item).orEmpty()
               if (frames.isNotEmpty()) {
-                val output = twitchOutput ?: error("Twitch publisher missing")
-                if (!outputConnected) {
-                  output.connect()
-                  outputConnected = true
-                  val musicStarted = musicTrack?.onBroadcastStarted() == true
-                  handler.post {
-                    setNotification(if (musicStarted)
-                      "Twitch publish acknowledged; music auto-started. Verify actual viewer playback."
-                    else "Twitch publish acknowledged; music paused or no track. Verify viewer playback.")
+                frames.forEach { media ->
+                  when {
+                    ReliableRtmpOutput.isAvcConfig(media) -> {
+                      sourceVideoConfig = media.copy(data = media.data.copyOf())
+                      brandOverlay?.setConfiguration(media)
+                      outputPublishers.forEach { it.offer(media) }
+                    }
+                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> brandOverlay?.offer(media)
+                    else -> outputPublishers.forEach { it.offer(media) }
                   }
                 }
-                frames.forEach { output.publish(it) }
               }
             }
           } catch (error: Exception) {
-            Log.w("SweatyOBS-PS5", "Media relay stopped: " + error.javaClass.simpleName)
+            Log.w("SweatyOBS-PS5", "Media processing stopped: " + error.javaClass.simpleName)
             terminalReason = true
             handler.post {
               if (!stopping) {
-                setNotification("Twitch/music relay failed (" + error.javaClass.simpleName + "). Stopped.")
+                setNotification("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
                 stopSelf()
               }
             }
             throw error
           }
         }
-      }
+      }, onSourceSessionStart = {
+        if (publicTest) {
+          liveGate?.resetForSourceReconnect()
+          audioMixer?.close()
+          audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
+        }
+      }, onSourceSessionEnd = {
+        if (publicTest) {
+          audioMixer?.close()
+          audioMixer = null
+        }
+      })
       receiver = ingest
       ingest.start()
       receiverRunning = true
@@ -439,12 +500,58 @@ class Ps5LanService : Service() {
     audioMixer = null
     musicTrack?.clear()
     musicTrack = null
-    twitchOutput?.close()
-    twitchOutput = null
+    brandOverlay?.close()
+    brandOverlay = null
+    outputPublishers.toList().forEach { it.close() }
+    outputPublishers.clear()
     liveGate = null
     outputConnected = false
     receiver = null
     if (!terminalReason) publishUiStatus("Receiver stopped. No broadcast was sent.")
     super.onDestroy()
+  }
+
+  private fun selectedDestinations(): List<RtmpDestination> {
+    val prefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    val secrets = SecretStore(this)
+    return buildList {
+      if (prefs.getBoolean("twitch_enabled", true)) {
+        add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
+      }
+      if (prefs.getBoolean("youtube_enabled", false)) {
+        add(RtmpDestination("youtube", "YouTube", prefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
+      }
+      if (prefs.getBoolean("kick_enabled", false)) {
+        add(RtmpDestination("kick", "Kick", prefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
+      }
+    }
+  }
+
+  private fun onOutputSnapshot() {
+    val current = outputPublishers.map { it.snapshot() }
+    outputConnected = current.any { it.state == "LIVE" }
+    outputStatus = current.joinToString(" | ") { it.summary() }
+    if (outputConnected && musicStartedOnOutput.compareAndSet(false, true)) {
+      val musicStarted = musicTrack?.onBroadcastStarted() == true
+      handler.post {
+        if (!stopping) setNotification(if (musicStarted)
+          "At least one platform accepted publishing; music started. Viewer playback is unverified. $outputStatus"
+        else "At least one platform accepted publishing; music is paused or unset. Viewer playback is unverified. $outputStatus")
+      }
+    } else {
+      if (reportedOutputStatus != outputStatus) {
+        reportedOutputStatus = outputStatus
+        handler.post { if (!stopping) setNotification(outputStatus) }
+      }
+    }
+  }
+
+  private fun disableBrandOverlay(reason: String) {
+    brandOverlayRequested = false
+    brandOverlay?.close()
+    brandOverlay = null
+    outputPublishers.forEach { it.reconnectNow() }
+    sourceVideoConfig?.let { config -> outputPublishers.forEach { it.offer(config) } }
+    setNotification("$reason · reconnecting with original PS5 video")
   }
 }
