@@ -304,7 +304,7 @@ class Ps5LanService : Service() {
       setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "ready to auto-start on Twitch publish" else "not loaded")
         else "Waiting for PS5 at $local:1935 — diagnostic only")
-      if (publicTest && trackReady) {
+      if (publicTest) {
         val bridgeToken = SecretStore(this).get("bridge_token")
         if (bridgeToken.length >= 32) {
           musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action, level, station ->
