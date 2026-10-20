@@ -6,15 +6,29 @@ import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
 
-class MusicBridgePoller(private val origin: String, private val token: String, private val mixer: StreamAudioMixer) {
+/**
+ * Future network-mixer command bridge. No MediaProjection/AudioRecord dependencies.
+ * The bridge is dormant until a real PS5 audio mixer and RTMPS transport exist.
+ */
+fun interface MusicControlSink {
+  fun command(action: String)
+}
+
+class MusicBridgePoller(
+  private val origin: String,
+  private val token: String,
+  private val mixer: MusicControlSink
+) {
   @Volatile private var active = false
   private var worker: Thread? = null
   private var cursor = ""
   private var failures = 0
+
   companion object {
     @Volatile private var current: MusicBridgePoller? = null
     fun stopActive() { current?.stop(); current = null }
   }
+
   fun start() {
     if (active) return
     require(origin.startsWith("https://") && URL(origin).protocol == "https")
@@ -41,7 +55,7 @@ class MusicBridgePoller(private val origin: String, private val token: String, p
             require(nextCursor.length in 3..120)
             if (reset) {
               val state = packet.getJSONObject("state")
-              if (state.optBoolean("playing")) mixer.command("play") else mixer.command("pause")
+              mixer.command(if (state.optBoolean("playing")) "play" else "pause")
             } else {
               val events = packet.getJSONArray("events")
               require(events.length() <= 256)
@@ -54,7 +68,7 @@ class MusicBridgePoller(private val origin: String, private val token: String, p
             cursor = nextCursor
             failures = 0
           } finally { connection.disconnect() }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
           failures++
           if (failures >= 3) mixer.command("pause")
           Log.w("SweatyClankerOBS", "Chat controls unavailable; retrying")
@@ -63,5 +77,6 @@ class MusicBridgePoller(private val origin: String, private val token: String, p
       }
     }
   }
+
   fun stop() { active = false; worker?.interrupt(); worker = null }
 }

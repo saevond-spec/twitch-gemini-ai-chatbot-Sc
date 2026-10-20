@@ -1,36 +1,42 @@
-# SweatyClanker OBS Android — Development build
+# SweatyClanker OBS Lite — Background Multistream (development)
 
-Goal: PS5 gameplay on Android + free streaming app + local licensed music controlled by SweatyClanker's `!play`, audible inside a Twitch RTMPS stream.
+**Canonical requirements (October 20, 2026):** Android control app that operates as a user-started background **network streaming service**. PS5 game media must enter via a network protocol. The app is intended to mix original game audio with separately licensed music and distribute a live-only feed to **Twitch, YouTube, and Kick simultaneously**.
 
-## Implemented in source
+## Explicitly excluded
+- No screen capture, MediaProjection, mirroring, Android AudioRecord, microphone or camera capture.
+- No gameplay recording, VOD recording, screen recording, clips, or file archival by this app.
+- No need to keep an activity/browser/media-player visible to broadcast.
+- No false claim that PS5 native broadcasting can be redirected to the app by a chat command alone.
 
-- Foreground Android screen capture with user-initiated MediaProjection consent
-- Android AudioPlaybackCapture (respects source-app capture policies) and H.264/AAC RTMPS output using RootEncoder 2.8.1
-- Stereo 48kHz PCM game/music mixing, bounded playback source, game and music RMS measurements in mixer
-- User-selected local audio file (decoded by MediaCodec), up to 5 minutes, loop playback
-- Authenticated HTTPS polling of SweatyClanker command bridge for `!play`, `!music pause`, `!skip`
-- Android Keystore encryption for stream destination and bridge token
-- GitHub Actions APK build workflow at `.github/workflows/android-obs.yml`
+## Current code, as of this branch
+- The app manifest has **no capture or recording permission** and declares just the user-started `connectedDevice` foreground service for the PS5 LAN diagnostic.
+- `MainActivity` now starts/stops only an authorized PS5 IPv4 LAN diagnostic and shows device safety status; it never requests screen-capture permission.
+- `Ps5LanService` accepts one private-LAN source, counts RTMP H.264/AAC *packet types* and discards payloads. It is **not** a working video/audio relay.
+- Music decoding, mixing primitives, and an authenticated bot command poller are development components not yet wired to an end-to-end network streaming pipeline.
+- Twitch, YouTube and Kick output delivery is **not implemented or enabled**. There is no real multistream yet.
 
-## Essential limitations
+## Proposed live-only media path
 
-- **Not yet tested on a physical Android device or PS5.** PS Remote Play may restrict MediaProjection screenshot/video and audio playback capture. Android cannot override those protections. No guaranteed solution exists from Android capture alone if Sony blocks it.
-- **Debug prototype, not production:** only one locally selected music track; station switching currently restarts the same track, not distinct dubstep/club playlists; output audio meters are computed internally but not displayed in UI; no automatic fallback if captured gameplay audio is silent.
-- Build must succeed on GitHub Actions before an APK is considered available. Successful APK compilation alone cannot verify viewer audio.
-- For now, you must supply your RTMPS ingest endpoint/stream key manually. Keep it secret, never post it in chat/screenshots or public code. The bot command bridge needs the same 32+ character `ENCODER_BRIDGE_TOKEN` in its hosting environment and in the app, plus the bot's HTTPS base URL.
-- Licensed local music means you already hold permission for live broadcasts and VODs. Being free to listen is not equivalent to rights for Twitch distribution.
-- Starting music while ScreenService is streaming updates the live AAC audio mix, not just a browser page. This only works if media capture and RTMPS transmission are running and accepted.
+```text
+PS5 broadcast source (authorized network H.264 + AAC, if accessible)
+       ↓ private Wi-Fi RTMP input on Android
+       ↓ verify timestamps, video/audio formats and sustained link
+       ├── H.264 pass-through, if compatible
+       └── AAC decode → licensed music PCM mix → AAC encode
+       ↓ bounded live multiplexing (RAM only, no recording)
+       ├── Twitch RTMPS
+       ├── YouTube RTMPS
+       └── Kick RTMPS
+```
 
-## Device acceptance procedure
+All three outputs need separate connection state and retry limits. Credentials must be encrypted with Android Keystore, never printed or committed. If PS5 emits RTMPS, **DNS redirection alone cannot intercept it**. Do not change DNS/router configuration until an independently verified legitimate input path exists.
 
-1. Obtain the debug APK from the Actions run **after the build passes**, not an unverified external APK.
-2. Test with an ordinary capturable Android game/app first. Confirm the Twitch stream has video and native game audio using a second device.
-3. Select a licensed local music file; configure the bot HTTPS origin and matching bridge token; grant screen capture; use `!play` in Twitch chat. A second viewer device must hear **both game sound and music**.
-4. Repeat using PS Remote Play. If Remote Play video becomes black or internal audio is silence, do not label the product PS5-compatible. Diagnose source-app restrictions without attempting to bypass Android/Sony capture protections.
-5. Check thermal throttling, battery use, reconnection, RTMPS stream ingest, VOD audio, chat latency, and audio clipping before production use.
+## Android background behavior
 
-Project branch: `feat/stream-encoder-mvp`, draft PR #48. Do not merge or deploy to live Twitch until device tests pass.
+User taps Start once while the app is visible. Android runs a **foreground service** with an ongoing notification so the UI can be closed or Twitch chat can be used. It is not an invisible unrestricted daemon; Android battery/thermal rules and OS policies may still stop it. Never restart a stream behind the user's back after a phone-safety STOP.
 
-## Background Twitch chat / privacy mode
+## Release gate
 
-The Android foreground capture/encoder service continues when the app UI is no longer visible. A **Chat Safe Mode** button replaces the encoded phone screen with black video and silences captured-app sound while keeping licensed local music and authenticated `!play` available. On Android 14+ when an individual shared app is hidden, the MediaProjection visibility callback also engages this privacy guard. **This does not keep PS5 gameplay visible or audible** while the user chats: true PS5 gameplay needs a separate capture feed not dependent on the phone's screen, or a second device. There is no PlayStation login bypass. This code is experimental until tested on the phone and Twitch ingest.
+Not production ready, not merged, not live, and not confirmed on the owner's PS5 or Android phone. Before enabling Go Live: build and device tests, actual compatible PS5 ingest, H.264+AAC mux, secure RTMPS output to 3 services, music mix, independent listener verification on each platform, long-run thermal/bandwidth tests, start/stop safety, and stream-key handling.
+
+PR #48 remains a draft. Keep live Twitch service and existing chat bot untouched.

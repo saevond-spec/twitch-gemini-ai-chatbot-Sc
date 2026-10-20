@@ -16,6 +16,5 @@ android {
   kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
-  implementation("com.github.pedroSG94.RootEncoder:library:2.8.1")
   testImplementation("junit:junit:4.13.2")
 }
