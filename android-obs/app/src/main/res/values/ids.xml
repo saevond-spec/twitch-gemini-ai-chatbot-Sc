@@ -9,4 +9,9 @@
   <item name="genre_library_status" type="id"/>
   <item name="test_music_bridge" type="id"/>
   <item name="music_bridge_status" type="id"/>
+  <item name="remote_catalog_status" type="id"/>
+  <item name="remote_club_catalog" type="id"/>
+  <item name="remote_dubstep_catalog" type="id"/>
+  <item name="copy_ncs_stream_credit" type="id"/>
+  <item name="copy_ncs_track_credits" type="id"/>
 </resources>
