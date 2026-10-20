@@ -27,15 +27,20 @@ let persistenceState = {
   lastSource: null,
 };
 
-export const BOT_SCOPES = [
+export const CORE_BOT_SCOPES = [
   'chat:read', 'chat:edit',
   'user:bot', 'user:read:chat', 'user:write:chat',
   'moderation:read', 'channel:manage:moderators',
   'moderator:read:followers',
-  'moderator:read:chatters',
   'moderator:manage:shoutouts',
   'channel:manage:clips',
 ];
+
+export const OPTIONAL_BOT_SCOPES = [
+  'moderator:read:chatters',
+];
+
+export const BOT_SCOPES = [...CORE_BOT_SCOPES, ...OPTIONAL_BOT_SCOPES];
 
 export function configuredBotLogin() {
   return String(config.twitch.username || '').trim().toLowerCase();
@@ -193,7 +198,7 @@ async function migrateOrRejectLegacyToken() {
     }
 
     const granted = new Set(validation.scopes || []);
-    const missing = BOT_SCOPES.filter(scope => !granted.has(scope));
+    const missing = CORE_BOT_SCOPES.filter(scope => !granted.has(scope));
     if (missing.length) {
       log.info('Legacy token belongs to the bot account but needs updated scopes; clearing it for re-authorization.');
       await clearStoredToken({ legacy: true });
@@ -234,7 +239,7 @@ export async function validateToken() {
     }
 
     const granted = new Set(validation.scopes || []);
-    const missingScopes = BOT_SCOPES.filter(scope => !granted.has(scope));
+    const missingScopes = CORE_BOT_SCOPES.filter(scope => !granted.has(scope));
     if (missingScopes.length) {
       log.warn(`Bot Twitch token is missing required scopes: ${missingScopes.join(', ')}. Re-authorization required.`);
       return false;
