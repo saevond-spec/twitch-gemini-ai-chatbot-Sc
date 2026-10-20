@@ -364,7 +364,8 @@ test('reliable join welcomes use IRC plus Get Chatters fallback', () => {
   assert.match(app, /new ChatterWatcher/);
   assert.match(app, /chatterWatcher\.observeIrcJoin/);
   assert.match(app, /chatterWatcher\.observeIrcPart/);
-  assert.match(app, /source.*helix-chatters/s);
+  assert.match(app, /onArrival: async \(\{ channel, username, source \}\)/);
+  assert.match(watcher, /source: 'helix-chatters'/);
   assert.match(watcher, /baselineReady/);
   assert.match(watcher, /missing_moderator_read_chatters/);
   assert.match(watcher, /rejoinSuppressMs/);
