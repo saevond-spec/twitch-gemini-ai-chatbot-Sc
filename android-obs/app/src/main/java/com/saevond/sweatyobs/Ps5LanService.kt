@@ -109,7 +109,7 @@ class Ps5LanService : Service() {
     if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
     if (receiver != null) { setNotification("Receiver already running; waiting for authorized PS5 packets."); return START_NOT_STICKY }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
-    publicTest = intent.action == ACTION_START_TWITCH
+    publicTest = intent?.action == ACTION_START_TWITCH
     if (publicTest) {
       val saved = SecretStore(this).get("rtmps")
       if (!TwitchRtmpsPublisher.keyValid(saved)) {
