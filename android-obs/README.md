@@ -7,6 +7,7 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 - Twitch, YouTube, and Kick can be configured as separate RTMPS outputs. Each selected destination has its own queue, connection state, backoff retry loop, and health summary.
 - Each additional output uses additional upload bandwidth because the app sends the same H.264/AAC feed to every selected platform.
 - When a publisher falls behind, the app discards stale queued packets and waits for the next clean AVC keyframe before resuming. A **Reconnect stream outputs** button starts a manual reconnect; automatic reconnect remains enabled.
+- The notification refreshes queue health every three seconds. It reports this app's sender backlog, not platform uptime or internet latency.
 - Platform stream keys are stored using Android Keystore encryption. YouTube and Kick server URLs are taken from the creator's dashboard and stored as ordinary app settings.
 - A description helper creates a title and searchable live-stream description for the selected platforms, includes up to eight tags, and adds NCS track credits for catalog songs. It copies text to the clipboard; the platform titles/descriptions must still be pasted into each creator dashboard.
 - A network-only diagnostic remains available and does not broadcast.
