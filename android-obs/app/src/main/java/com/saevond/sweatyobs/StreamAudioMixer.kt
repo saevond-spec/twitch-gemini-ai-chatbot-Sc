@@ -22,6 +22,10 @@ class StreamAudioMixer(
 ) {
   @Volatile private var running = false
   @Volatile private var playing = false
+  @Volatile private var captureMuted = false
+
+  /** Privacy mode never forwards other apps' audio to the Twitch mix. */
+  fun setCaptureMuted(value: Boolean) { captureMuted = value }
   @Volatile private var music: ByteArray = byteArrayOf()
   @Volatile var gameRms = 0.0
     private set
@@ -94,6 +98,7 @@ class StreamAudioMixer(
             offset = (offset + take) % track.size
           }
         }
+        if (captureMuted) game.fill(0)
         gameRms = PcmMixer.rms(game)
         musicRms = PcmMixer.rms(musicFrame)
         val mixed = PcmMixer.mix(game, musicFrame)
