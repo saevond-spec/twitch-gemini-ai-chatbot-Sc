@@ -13,6 +13,12 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.NetworkCapabilities
 import java.net.Inet4Address
+import java.security.SecureRandom
+import android.util.Base64
+import android.content.ClipboardManager
+import android.content.ClipData
+import android.content.ClipDescription
+import android.os.PersistableBundle
 import kotlin.concurrent.thread
 import android.widget.Button
 import android.widget.EditText
@@ -144,6 +150,9 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveBotToken = Button(this).apply { text = "Save private !play bridge token" }
+    val generateBotToken = Button(this).apply {
+      text = "Generate and copy secure bridge token for Render"
+    }
     val testMusicBridge = Button(this).apply {
       id = R.id.test_music_bridge
       text = "Check remote music bridge connection"
@@ -173,7 +182,7 @@ class MainActivity : Activity() {
     listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
-      volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken,
+      volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
@@ -284,6 +293,26 @@ class MainActivity : Activity() {
       startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PAUSE })
       status.text = "Music pause requested; game audio continues."
     }
+    generateBotToken.setOnClickListener {
+      try {
+        val data = ByteArray(32)
+        SecureRandom().nextBytes(data)
+        val token = Base64.encodeToString(data, Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
+        SecretStore(this).put("bridge_token", token)
+        val clip = ClipData.newPlainText("SweatyClanker music bridge token", token)
+        if (Build.VERSION.SDK_INT >= 33) {
+          clip.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+          }
+        }
+        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
+        status.text = "Secure bridge token created and copied. Paste it into Render environment variable ENCODER_BRIDGE_TOKEN. Do not share it in chat. Replacing it invalidates the old token."
+        bridgeStatus.text = "Bridge token saved locally; set matching Render server secret, then tap Check."
+      } catch (error: Exception) {
+        status.text = "Could not generate secure bridge token (" + error.javaClass.simpleName + ")."
+      }
+    }
+
     saveBotToken.setOnClickListener {
       val token = botToken.text.toString().trim()
       if (token.length < 32 || token.length > 256) status.text = "Bridge token must be 32 to 256 characters."
