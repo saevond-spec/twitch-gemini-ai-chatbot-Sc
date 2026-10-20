@@ -46,10 +46,17 @@ class Ps5LanService : Service() {
   private var wifiAddress: String? = null
   private var report: String? = null
   private var stopping = false
+  private lateinit var phoneSafety: PhoneSafetyMonitor
   private val updateTask = object : Runnable {
     override fun run() {
       if (stopping) return
       val ingest = receiver ?: return
+      val safety = phoneSafety.assess()
+      if (safety.level == SafetyLevel.STOP) {
+        setNotification("Stopped for phone safety: " + safety.message)
+        stopSelf()
+        return
+      }
       if (activeWifiIpv4() != wifiAddress || !ingest.active) {
         setNotification("Receiver stopped: Wi-Fi changed or port unavailable")
         stopSelf()
@@ -58,13 +65,15 @@ class Ps5LanService : Service() {
       val summary = if (ingest.connected)
         "PS5 linked · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
       else "Waiting for PS5 · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
-      if (summary != report) setNotification(summary)
+      val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
+      if (display != report) setNotification(display)
       handler.postDelayed(this, 3000)
     }
   }
 
   override fun onCreate() {
     super.onCreate()
+    phoneSafety = PhoneSafetyMonitor(this)
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .createNotificationChannel(NotificationChannel(
         CHANNEL, "SweatyClanker PS5 LAN receiver", NotificationManager.IMPORTANCE_LOW))
@@ -96,6 +105,12 @@ class Ps5LanService : Service() {
     }
 
     try {
+      val safety = phoneSafety.assess()
+      if (safety.level == SafetyLevel.STOP) {
+        setNotification("Not started: " + safety.message)
+        stopSelf()
+        return START_NOT_STICKY
+      }
       wifiAddress = local
       // Ingest counters come from LanRtmpIngest; media is intentionally discarded
       // until the separate audio-mix + H264 passthrough chain is verified.
