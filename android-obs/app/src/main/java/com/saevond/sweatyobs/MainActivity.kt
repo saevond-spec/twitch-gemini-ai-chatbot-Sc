@@ -32,10 +32,11 @@ import android.widget.Spinner
 import android.widget.ArrayAdapter
 import android.widget.AdapterView
 import java.util.Locale
+import com.saevond.sweatyobs.ingest.RtmpsPublisher
 
 /**
  * Controls a background *network receiver*, never a display or audio recorder.
- * Streaming outputs remain disabled until PS5 media ingest/mux/multi-RTMPS are proven.
+ * Starts an explicit private-LAN ingest and user-selected RTMPS outputs.
  */
 class MainActivity : Activity() {
   companion object {
@@ -69,8 +70,65 @@ class MainActivity : Activity() {
       text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
     }
     val destinations = TextView(this).apply {
-      text = "Twitch · YouTube · Kick: planned simultaneous outputs, NOT operational yet."
+      text = "Each selected RTMPS output has an independent retry loop and health status. Every extra platform uses more upload bandwidth. Video is passed through unchanged; this build cannot convert resolution or draw a video overlay."
     }
+    val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    val enableTwitch = CheckBox(this).apply {
+      text = "Stream to Twitch"
+      isChecked = outputPrefs.getBoolean("twitch_enabled", true)
+    }
+    val enableYouTube = CheckBox(this).apply {
+      text = "Also stream to YouTube"
+      isChecked = outputPrefs.getBoolean("youtube_enabled", false)
+    }
+    val youtubeServer = EditText(this).apply {
+      hint = "YouTube RTMPS server URL from Live Control Room"
+      setSingleLine(true)
+      setText(outputPrefs.getString("youtube_server", ""))
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+    }
+    val youtubeKey = EditText(this).apply {
+      hint = "YouTube stream key (kept in Android Keystore)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val saveYouTube = Button(this).apply { text = "Save YouTube RTMPS server and key" }
+    val enableKick = CheckBox(this).apply {
+      text = "Also stream to Kick"
+      isChecked = outputPrefs.getBoolean("kick_enabled", false)
+    }
+    val kickServer = EditText(this).apply {
+      hint = "Kick RTMPS server URL from Creator Dashboard"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+      setSingleLine(true)
+      setText(outputPrefs.getString("kick_server", ""))
+    }
+    val kickKey = EditText(this).apply {
+      hint = "Kick stream key (kept in Android Keystore)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val saveKick = Button(this).apply { text = "Save Kick RTMPS server and key" }
+    val reconnectOutputs = Button(this).apply { text = "Reconnect stream outputs" }
+    val videoModeNote = TextView(this).apply {
+      text = "Video quality follows the incoming PS5 feed and cannot be changed here. Kick currently accepts up to 1080p; 4K plus overlays requires a separate video decoder, compositor, and hardware encoder."
+    }
+    val metadataTitle = EditText(this).apply {
+      hint = "Stream title (example: PS5 live gameplay and ranked matches)"
+      setSingleLine(true)
+      setText(outputPrefs.getString("metadata_title", ""))
+    }
+    val metadataGame = EditText(this).apply {
+      hint = "Game name"
+      setSingleLine(true)
+      setText(outputPrefs.getString("metadata_game", ""))
+    }
+    val metadataKeywords = EditText(this).apply {
+      hint = "Search phrases / tags, comma separated"
+      setText(outputPrefs.getString("metadata_keywords", ""))
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    }
+    val copyMetadata = Button(this).apply { text = "Generate and copy stream description" }
     val privacy = TextView(this).apply {
       text = "No screen or microphone capture. No gameplay recording. " +
         "You can leave this screen while the user-started PS5 LAN diagnostic runs."
@@ -114,7 +172,7 @@ class MainActivity : Activity() {
     }
     val copyStreamCredit = Button(this).apply {
       id = R.id.copy_ncs_stream_credit
-      text = "Copy NCS Twitch stream credit"
+      text = "Copy NCS live-stream credit"
     }
     val copyTrackCredits = Button(this).apply {
       id = R.id.copy_ncs_track_credits
@@ -159,18 +217,18 @@ class MainActivity : Activity() {
         .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
       text = when {
         remoteCount > 0 -> "$remoteCount remote NCS songs saved. They load over the internet when selected; audio is not saved as a music file."
-        ready -> "Local licensed music selected. Autoplay begins after Twitch publishes."
+        ready -> "Local licensed music selected. Autoplay begins after a platform accepts publishing."
         else -> "No music selected. Add tracks from the remote NCS catalog or choose a local rights-cleared audio file."
       }
     }
     val chooseMusic = Button(this).apply { text = "Choose local licensed music file (MP3 / AAC / WAV)" }
     val autoplayMusic = CheckBox(this).apply {
       id = R.id.music_autoplay
-      text = "Automatically play selected local or remote music when Twitch broadcast starts"
+      text = "Automatically play selected local or remote music when a stream output starts"
       isChecked = getSharedPreferences("ps5_music", MODE_PRIVATE)
         .getBoolean("autoplay", true)
     }
-    val playMusic = Button(this).apply { text = "Play music on Twitch (when stream active)" }
+    val playMusic = Button(this).apply { text = "Play music on active stream" }
     val pauseMusic = Button(this).apply { text = "Pause music (leave game audio playing)" }
     val botToken = EditText(this).apply {
       hint = "Optional private bot music bridge token (32+ characters)"
@@ -203,16 +261,20 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveTwitchKey = Button(this).apply { text = "Save Twitch key securely" }
-    val goLive = Button(this).apply { text = "TEST PUBLIC TWITCH BROADCAST (requires actual PS5 media)" }
+    val goLive = Button(this).apply { text = "START MULTISTREAM (public broadcast)" }
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
-    val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
+    val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
-    listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
+    listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
+      enableYouTube, youtubeServer, youtubeKey, saveYouTube,
+      enableKick, kickServer, kickKey, saveKick, reconnectOutputs, videoModeNote,
+      metadataTitle, metadataGame, metadataKeywords, copyMetadata,
+      privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
       copyStreamCredit, copyTrackCredits, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
-      testMusicBridge, bridgeStatus, openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
+      testMusicBridge, bridgeStatus, openTwitchDashboard,
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
@@ -237,9 +299,9 @@ class MainActivity : Activity() {
     browseRemoteDubstep.setOnClickListener { browseRemoteCatalog(GenrePlaylist.DUBSTEP) }
     copyStreamCredit.setOnClickListener {
       (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
-        ClipData.newPlainText("NCS Twitch stream credit", RemoteMusicCatalog.LIVE_STREAM_CREDIT)
+        ClipData.newPlainText("NCS live-stream credit", RemoteMusicCatalog.LIVE_STREAM_CREDIT)
       )
-      status.text = "Copied the NCS live-stream credit. Paste it into your Twitch stream description."
+      status.text = "Copied the NCS live-stream credit. Paste it into the description on each platform where you stream."
     }
     copyTrackCredits.setOnClickListener {
       val savedTracks = MusicGenreSettings(this).tracks(GenrePlaylist.CLUB) +
@@ -266,7 +328,7 @@ class MainActivity : Activity() {
       if (Ps5LanService.receiverRunning) {
         startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_SKIP })
         status.text = "Requested the next selected song. Game audio continues."
-      } else status.text = "Start a public Twitch test before skipping music."
+      } else status.text = "Start a public stream before skipping music."
     }
 
     var previousMusic = musicVolume.progress.coerceAtLeast(22)
@@ -300,6 +362,81 @@ class MainActivity : Activity() {
     openTwitchDashboard.setOnClickListener {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
     }
+    enableTwitch.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
+    }
+    enableYouTube.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("youtube_enabled", checked).apply()
+    }
+    enableKick.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
+    }
+    saveYouTube.setOnClickListener {
+      val server = youtubeServer.text.toString().trim()
+      val key = youtubeKey.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Paste the secure RTMPS server URL from YouTube Live Control Room."
+      } else if (!RtmpsPublisher.keyValid(key)) {
+        status.text = "Enter a valid YouTube stream key. It is saved only to this phone's Android Keystore."
+      } else try {
+        SecretStore(this).put("youtube_key", key)
+        outputPrefs.edit().putString("youtube_server", server).apply()
+        youtubeKey.text.clear()
+        status.text = "YouTube server saved and key encrypted on this phone. No stream has started."
+      } catch (error: Exception) {
+        status.text = "Could not save YouTube output settings (" + error.javaClass.simpleName + ")."
+      }
+    }
+    saveKick.setOnClickListener {
+      val server = kickServer.text.toString().trim()
+      val key = kickKey.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Paste the secure RTMPS server URL from the Kick Creator Dashboard."
+      } else if (!RtmpsPublisher.keyValid(key)) {
+        status.text = "Enter a valid Kick stream key. It is saved only to this phone's Android Keystore."
+      } else try {
+        SecretStore(this).put("kick_key", key)
+        outputPrefs.edit().putString("kick_server", server).apply()
+        kickKey.text.clear()
+        status.text = "Kick server saved and key encrypted on this phone. No stream has started."
+      } catch (error: Exception) {
+        status.text = "Could not save Kick output settings (" + error.javaClass.simpleName + ")."
+      }
+    }
+    reconnectOutputs.setOnClickListener {
+      if (!Ps5LanService.receiverRunning) {
+        status.text = "Start a stream first. Outputs will reconnect automatically after a network interruption."
+      } else {
+        startService(Intent(this, Ps5LanService::class.java).apply {
+          action = Ps5LanService.ACTION_RECONNECT_OUTPUTS
+        })
+        status.text = "Manual reconnect requested. Waiting for a clean video keyframe; automatic retry stays enabled."
+      }
+    }
+    copyMetadata.setOnClickListener {
+      outputPrefs.edit()
+        .putString("metadata_title", metadataTitle.text.toString())
+        .putString("metadata_game", metadataGame.text.toString())
+        .putString("metadata_keywords", metadataKeywords.text.toString())
+        .apply()
+      val activePlatforms = buildList {
+        if (enableTwitch.isChecked) add("Twitch")
+        if (enableYouTube.isChecked) add("YouTube")
+        if (enableKick.isChecked) add("Kick")
+      }
+      val savedTracks = MusicGenreSettings(this).tracks(GenrePlaylist.CLUB) +
+        MusicGenreSettings(this).tracks(GenrePlaylist.DUBSTEP)
+      val trackCredits = RemoteMusicCatalog.creditsForAudioUrls(savedTracks)
+      val musicCredits = if (trackCredits.isBlank()) "" else
+        RemoteMusicCatalog.LIVE_STREAM_CREDIT + "\n" + trackCredits
+      val description = StreamMetadataBuilder.build(
+        metadataTitle.text.toString(), metadataGame.text.toString(),
+        metadataKeywords.text.toString(), activePlatforms, musicCredits)
+      (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
+        ClipData.newPlainText("Stream title and searchable description", description)
+      )
+      status.text = "Copied your stream description. Paste it into the title/description fields in each selected platform dashboard."
+    }
 
     checkSafety.setOnClickListener {
       safetyReading.text = "Reading battery and temperature…"
@@ -315,8 +452,8 @@ class MainActivity : Activity() {
     autoplayMusic.setOnCheckedChangeListener { _, checked ->
       getSharedPreferences("ps5_music", MODE_PRIVATE).edit()
         .putBoolean("autoplay", checked).apply()
-      status.text = if (checked) "Music will start when Twitch publishing begins, if a licensed local or remote track is selected."
-        else "Music autoplay disabled; use Play when your Twitch stream is active."
+      status.text = if (checked) "Music will start when a platform accepts publishing, if a licensed local or remote track is selected."
+        else "Music autoplay disabled; use Play when your stream is active."
     }
 
     chooseMusic.setOnClickListener {
@@ -401,21 +538,35 @@ class MainActivity : Activity() {
         SecretStore(this).put("rtmps", value)
         twitchKey.text.clear()
         status.text = "Twitch key stored with Android Keystore. Nothing is broadcasting."
-        twitchStatus.text = "Twitch key saved locally; authorization verified during public test."
+        twitchStatus.text = "Twitch key saved locally; Twitch will check it when a stream starts."
       } catch (error: Exception) {
         status.text = "Could not securely save Twitch key (" + error.javaClass.simpleName + ")."
       }
     }
 
     goLive.setOnClickListener {
-      status.text = "Public Twitch test requested. Checking phone, PS5 address, and saved key…"
+      status.text = "Public multistream requested. Checking selected platforms, phone, and PS5 address…"
       val ip = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(ip)) {
         status.text = "Enter the PS5 local IPv4 address first."
         return@setOnClickListener
       }
-      if (!com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher.keyValid(SecretStore(this).get("rtmps"))) {
-        status.text = "Save your Twitch stream key on this phone first."
+      val secrets = SecretStore(this)
+      val destinations = buildList {
+        if (enableTwitch.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
+          "twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
+        if (enableYouTube.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
+          "youtube", "YouTube", outputPrefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
+        if (enableKick.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
+          "kick", "Kick", outputPrefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
+      }
+      val missing = destinations.firstOrNull { !it.isValid() }
+      if (destinations.isEmpty()) {
+        status.text = "Choose at least one platform output above."
+        return@setOnClickListener
+      }
+      if (missing != null) {
+        status.text = "Save a valid ${missing.label} RTMPS server URL and stream key before going live."
         return@setOnClickListener
       }
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
@@ -424,7 +575,7 @@ class MainActivity : Activity() {
           action = Ps5LanService.ACTION_START_TWITCH
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
-        status.text = "Waiting for PS5 H.264/AAC RTMP feed; Twitch publishing begins only if valid media arrives."
+        status.text = "Waiting for PS5 H.264/AAC RTMP feed. Selected outputs publish independently and retry if a connection drops."
       } catch (error: RuntimeException) {
         status.text = "Android could not start public test: " + error.javaClass.simpleName
       }
@@ -444,7 +595,7 @@ class MainActivity : Activity() {
           action = Ps5LanService.ACTION_START
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, address)
         })
-        status.text = "Network-only diagnostic requested. You can switch to Twitch chat; no broadcast is sent."
+        status.text = "Network-only diagnostic requested. No broadcast is sent."
       } catch (error: RuntimeException) {
         status.text = "Unable to start network diagnostic: check app permissions and Android service restrictions."
       }
@@ -452,7 +603,7 @@ class MainActivity : Activity() {
 
     stopLan.setOnClickListener {
       stopService(Intent(this, Ps5LanService::class.java))
-      status.text = "PS5 network diagnostic stopped. No broadcasting was started."
+      status.text = "PS5 receiver and all streaming outputs stopped."
     }
   }
 

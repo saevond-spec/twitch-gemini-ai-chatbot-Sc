@@ -1,49 +1,33 @@
-# SweatyClanker OBS Lite — Background Multistream (development)
+# SweatyClanker OBS Lite — Android network relay (development)
 
-**Canonical requirements (October 20, 2026):** Android control app that operates as a user-started background **network streaming service**. PS5 game media must enter via a network protocol. The app is intended to mix original game audio with separately licensed music and distribute a live-only feed to **Twitch, YouTube, and Kick simultaneously**.
+This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and can forward the H.264/AAC feed to selected RTMPS platforms. The stream is live-only: media is held briefly in bounded memory queues and is not recorded.
 
-## Explicitly excluded
-- No screen capture, MediaProjection, mirroring, Android AudioRecord, microphone or camera capture.
-- No gameplay recording, VOD recording, screen recording, clips, or file archival by this app.
-- No need to keep an activity/browser/media-player visible to broadcast.
-- No false claim that PS5 native broadcasting can be redirected to the app by a chat command alone.
+## What this build adds
 
-## Experimental Twitch output (v0.1.3-dev)
-- The app now includes a **separate explicitly initiated public Twitch test** (not the existing network diagnostic). The user enters their Twitch key *on their own phone*, stores it with Android Keystore using `SecretStore`, and must explicitly press the public test button. Never share stream keys via chat or commit them.
-- A `MediaRelayGate` validates FLV AVC/H.264 and AAC config packets and waits for the first keyframe, then the `TwitchRtmpsPublisher` attempts an authenticated TLS connection to Twitch and writes chunked media. No media is saved locally; no implicit retry.
-- **NOT VERIFIED ON ACTUAL PS5, AND NOT VERIFIED TO SHOW PLAYABLE VIDEO ON TWITCH.** Passing a local emulator/unit test is not Twitch end-to-end proof. Real PS5 native broadcast is already sent directly to Twitch and its LAN IPv4 does not redirect that stream to Android. The app can publish only after it receives an authorized compatible RTMP feed from the specified PS5 IP to the phone's port 1935. We have not established that the retail PS5 can provide this.
-- No DNS changes or TLS interception are included or endorsed. No YouTube, Kick or music mixing output is implemented yet. A Twitch RTMPS publish response is not proof viewers receive audio/video.
-- Keep PR draft until independent Twitch viewer playback, thermal resilience, PS5 ingest, and UI error validation on the actual Android device are complete.
+- Twitch, YouTube, and Kick can be configured as separate RTMPS outputs. Each selected destination has its own queue, connection state, backoff retry loop, and health summary.
+- Each additional output uses additional upload bandwidth because the app sends the same H.264/AAC feed to every selected platform.
+- When a publisher falls behind, the app discards stale queued packets and waits for the next clean AVC keyframe before resuming. A **Reconnect stream outputs** button starts a manual reconnect; automatic reconnect remains enabled.
+- Platform stream keys are stored using Android Keystore encryption. YouTube and Kick server URLs are taken from the creator's dashboard and stored as ordinary app settings.
+- A description helper creates a title and searchable live-stream description for the selected platforms, includes up to eight tags, and adds NCS track credits for catalog songs. It copies text to the clipboard; the platform titles/descriptions must still be pasted into each creator dashboard.
+- A network-only diagnostic remains available and does not broadcast.
 
-## Previous network-only diagnostic implementation
-- The app manifest has **no capture or recording permission** and declares just the user-started `connectedDevice` foreground service for the PS5 LAN diagnostic.
-- `MainActivity` now starts/stops only an authorized PS5 IPv4 LAN diagnostic and shows device safety status; it never requests screen-capture permission.
-- `Ps5LanService` accepts one private-LAN source, counts RTMP H.264/AAC *packet types* and discards payloads. It is **not** a working video/audio relay.
-- Music decoding, mixing primitives, and an authenticated bot command poller are development components not yet wired to an end-to-end network streaming pipeline.
-- Twitch, YouTube and Kick output delivery is **not implemented or enabled**. There is no real multistream yet.
+## Set up and test
 
-## Proposed live-only media path
+1. Put the phone and PS5 on the same private Wi-Fi network. Enter the PS5's private IPv4 address in the app.
+2. Select each platform you want. Save the Twitch key, or paste the RTMPS server URL and stream key from the YouTube or Kick creator dashboard. Keys stay on the device; do not send them in chat.
+3. In **Stream title**, **Game name**, and **Search phrases / tags**, enter your metadata and choose **Generate and copy stream description**. Paste the copied text into each platform's stream setup.
+4. Choose **START MULTISTREAM (public broadcast)** only when ready to publish. Outputs begin only after compatible PS5 media arrives and a video keyframe is available. The ongoing notification shows each platform's state, recent send rate, buffer delay, reconnect count, and skipped stale packets.
+5. If a platform is stuck, tap **Reconnect stream outputs**. The sender waits for a clean keyframe and then establishes a fresh RTMPS session. **Stop receiver and all outputs** ends the session.
+6. Use **Start PS5 network connection test** for a private packet-count diagnostic. That button never sends a public broadcast.
 
-```text
-PS5 broadcast source (authorized network H.264 + AAC, if accessible)
-       ↓ private Wi-Fi RTMP input on Android
-       ↓ verify timestamps, video/audio formats and sustained link
-       ├── H.264 pass-through, if compatible
-       └── AAC decode → licensed music PCM mix → AAC encode
-       ↓ bounded live multiplexing (RAM only, no recording)
-       ├── Twitch RTMPS
-       ├── YouTube RTMPS
-       └── Kick RTMPS
-```
+## Video limits
 
-All three outputs need separate connection state and retry limits. Credentials must be encrypted with Android Keystore, never printed or committed. If PS5 emits RTMPS, **DNS redirection alone cannot intercept it**. Do not change DNS/router configuration until an independently verified legitimate input path exists.
+The current implementation passes incoming H.264 video through unchanged. It has no Android video decoder, compositor, resolution converter, or video encoder, so it cannot apply an on-stream overlay, make a 4K stream, or choose output bitrate. All platforms receive the same input resolution. Kick's published maximum is 1920×1080, so a 4K-to-Kick output would require downscaling and transcoding. Do not assume this phone can encode 4K; Android codec support and sustained performance vary by device.
 
-## Android background behavior
+The health label describes this app's output queue only. It is not a platform health check or an internet speed test. A successful RTMPS publish acknowledgement does not prove that viewers see or hear the stream.
 
-User taps Start once while the app is visible. Android runs a **foreground service** with an ongoing notification so the UI can be closed or Twitch chat can be used. It is not an invisible unrestricted daemon; Android battery/thermal rules and OS policies may still stop it. Never restart a stream behind the user's back after a phone-safety STOP.
+## Verification limits
 
-## Release gate
+Unit and emulator tests use synthetic RTMP media and fake publishing destinations. They verify protocol handling, retry behavior, bounded queues, and metadata generation; they cannot prove stable PS5 ingest, platform acceptance, playable video, viewer audio, or multi-hour phone thermals. Test each selected platform with its creator dashboard and an independent viewer before relying on it.
 
-Not production ready, not merged, not live, and not confirmed on the owner's PS5 or Android phone. Before enabling Go Live: build and device tests, actual compatible PS5 ingest, H.264+AAC mux, secure RTMPS output to 3 services, music mix, independent listener verification on each platform, long-run thermal/bandwidth tests, start/stop safety, and stream-key handling.
-
-PR #48 remains a draft. Keep live Twitch service and existing chat bot untouched.
+No screen, microphone, or camera capture is included. No media is archived. Phone safety stop conditions still end the service and require a conscious restart.
