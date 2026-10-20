@@ -11,8 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.pedro.common.ConnectChecker
-import com.pedro.encoder.input.sources.audio.InternalAudioSource
-import com.pedro.encoder.input.sources.audio.MicrophoneSource
+import android.net.Uri
+import kotlin.concurrent.thread
 import com.pedro.encoder.input.sources.video.NoVideoSource
 import com.pedro.encoder.input.sources.video.ScreenSource
 import com.pedro.library.generic.GenericStream
@@ -24,6 +24,7 @@ import com.pedro.library.generic.GenericStream
 class StreamService : Service(), ConnectChecker {
   private var stream: GenericStream? = null
   private var projection: MediaProjection? = null
+  private var audioMixer: StreamAudioMixer? = null
   private var started = false
   private val channel = "stream_capture"
 
@@ -52,7 +53,9 @@ class StreamService : Service(), ConnectChecker {
       projection = mp
       mp.registerCallback(object : MediaProjection.Callback() { override fun onStop() { stopSelf() } }, android.os.Handler(mainLooper))
       // Do not activate a microphone without an explicit user choice.
-      val stream = GenericStream(this, this, NoVideoSource(), InternalAudioSource(mp))
+      val mixer = StreamAudioMixer(mp)
+      audioMixer = mixer
+      val stream = GenericStream(this, this, NoVideoSource(), mixer.source)
       this.stream = stream
       stream.getGlInterface().setForceRender(true, 30)
       check(stream.prepareVideo(1280, 720, 3500000, 30, 2, 0) &&
@@ -60,6 +63,18 @@ class StreamService : Service(), ConnectChecker {
       stream.changeVideoSource(ScreenSource(this, mp))
       started = true
       stream.startStream(target)
+      mixer.start()
+      val musicUri = intent.getStringExtra("musicUri").orEmpty()
+      if (musicUri.isNotBlank()) thread(name = "SweatyOBS-track") {
+        runCatching { MusicDecoder(this).decode(Uri.parse(musicUri)) }
+          .onSuccess { mixer.replaceTrack(it) }
+          .onFailure { Log.w("SweatyClankerOBS", "Local audio file could not be decoded", it) }
+      }
+      val botOrigin = intent.getStringExtra("botOrigin").orEmpty()
+      val botToken = SecretStore(this).get("bridge_token")
+      if (botOrigin.startsWith("https://") && botToken.length >= 32) {
+        MusicBridgePoller(botOrigin, botToken, mixer, this).start()
+      }
     } catch (e: Exception) {
       Log.e("SweatyClankerOBS", "Stream unavailable; source audio permission or codec may have failed", e)
       stopSelf()
@@ -67,9 +82,11 @@ class StreamService : Service(), ConnectChecker {
     return START_NOT_STICKY
   }
   override fun onDestroy() {
+    MusicBridgePoller.stopActive()
+    runCatching { audioMixer?.stop() }
     runCatching { stream?.release() }
     runCatching { projection?.stop() }
-    stream = null; projection = null; started = false
+    stream = null; projection = null; audioMixer = null; started = false
     super.onDestroy()
   }
   override fun onConnectionStarted(url: String) { Log.i("SweatyClankerOBS", "Connecting to RTMPS") }
