@@ -3,7 +3,7 @@ package com.saevond.sweatyobs
 import android.content.Context
 import org.json.JSONArray
 
-/** Persist only content URIs the user explicitly granted; never fetch music URLs. */
+/** Persist user-granted local URIs and allowlisted NCS track URLs, never audio bytes. */
 class MusicGenreSettings(context: Context) {
   private val prefs = context.getSharedPreferences("ps5_music", Context.MODE_PRIVATE)
   fun tracks(genre: String): List<String> {
@@ -12,13 +12,13 @@ class MusicGenreSettings(context: Context) {
     return runCatching {
       val parsed = JSONArray(data)
       (0 until minOf(parsed.length(), GenrePlaylist.MAX_TRACKS_PER_GENRE))
-        .map { parsed.getString(it) }.filter { it.startsWith("content://") && it.length <= 2048 }
+        .map { parsed.getString(it) }.filter { (it.startsWith("content://") && it.length <= 2048) || RemoteMusicCatalog.isSupportedAudioUrl(it) }
         .distinct()
     }.getOrDefault(emptyList())
   }
   fun add(genre: String, tracks: List<String>) {
     require(genre == "club" || genre == "dubstep")
-    require(tracks.all { it.startsWith("content://") && it.length <= 2048 })
+    require(tracks.all { (it.startsWith("content://") && it.length <= 2048) || RemoteMusicCatalog.isSupportedAudioUrl(it) })
     val combined = (tracks(genre) + tracks).distinct().take(GenrePlaylist.MAX_TRACKS_PER_GENRE)
     prefs.edit().putString("library_$genre", JSONArray(combined).toString()).apply()
   }
