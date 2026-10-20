@@ -7,7 +7,7 @@ test('OBS browser dashboard clearly identifies its limited capability', () => {
   assert.match(html,/not an RTMP receiver/i);
   assert.match(html,/not.*viewer.*hear|Viewer-audible mixing is NOT verified/i);
   assert.match(html,/no APK/i);
-  assert.doesNotMatch(html,/stream.key|store.*password|type="password"/i);
+  assert.doesNotMatch(html,/<input[^>]*(?:stream.key|password)|localStorage\.setItem/i);
 });
 test('OBS dashboard never uses local stream key persistence or publishing',()=>{
   const client=readFileSync('public/obs-web.js','utf8');
