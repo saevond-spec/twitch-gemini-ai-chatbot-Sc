@@ -150,7 +150,7 @@ internal class BrandVideoOverlay(
     releaseCodecs()
     val parsed = AvcFlv.parseConfig(message)
     val decoderInfo = findDecoder(parsed.width, parsed.height)
-    val profile = chooseEncoderProfile(holder.width, holder.height)
+    val profile = chooseEncoderProfile(parsed.width, parsed.height)
     outputWidth = profile.first
     outputHeight = profile.second
     outputFps = profile.third
