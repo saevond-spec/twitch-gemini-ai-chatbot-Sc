@@ -2,6 +2,7 @@ package com.saevond.sweatyobs
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
@@ -44,6 +45,8 @@ class MainActivity : Activity() {
     private const val PICK_CLUB = 31417
     private const val PICK_DUBSTEP = 31418
     private const val PICK_POP_TRAP = 31419
+    private const val YOUTUBE_DASHBOARD_URL = "https://studio.youtube.com/"
+    private const val KICK_DASHBOARD_URL = "https://dashboard.kick.com/stream"
   }
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
@@ -95,6 +98,10 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveYouTube = Button(this).apply { text = "Save YouTube RTMPS server and key" }
+    val openYouTubeDashboard = Button(this).apply {
+      id = R.id.open_youtube_dashboard
+      text = "Open YouTube Studio — Go Live / stream key"
+    }
     val enableKick = CheckBox(this).apply {
       text = "Also stream to Kick"
       isChecked = outputPrefs.getBoolean("kick_enabled", false)
@@ -111,6 +118,10 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveKick = Button(this).apply { text = "Save Kick RTMPS server and key" }
+    val openKickDashboard = Button(this).apply {
+      id = R.id.open_kick_dashboard
+      text = "Open Kick Creator Dashboard — Stream URL & key"
+    }
     val enableBrandOverlay = CheckBox(this).apply {
       text = "Add the @saevond live overlay to the stream"
       isChecked = outputPrefs.getBoolean("brand_overlay", true)
@@ -279,8 +290,8 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
     listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
-      enableYouTube, youtubeServer, youtubeKey, saveYouTube,
-      enableKick, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
+      enableYouTube, openYouTubeDashboard, youtubeServer, youtubeKey, saveYouTube,
+      enableKick, openKickDashboard, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
       privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
@@ -376,6 +387,12 @@ class MainActivity : Activity() {
     }
     openTwitchDashboard.setOnClickListener {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
+    }
+    openYouTubeDashboard.setOnClickListener {
+      openCreatorDashboard("YouTube", YOUTUBE_DASHBOARD_URL)
+    }
+    openKickDashboard.setOnClickListener {
+      openCreatorDashboard("Kick", KICK_DASHBOARD_URL)
     }
     enableTwitch.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
@@ -737,6 +754,15 @@ class MainActivity : Activity() {
       } catch (error: Exception) {
         status.text = "Cannot access music file (" + error.javaClass.simpleName + "). Select a local audio file instead."
       }
+    }
+  }
+
+  private fun openCreatorDashboard(platform: String, url: String) {
+    try {
+      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+      status.text = "Opened $platform. Copy its RTMPS server URL and stream key into this app, then save them securely."
+    } catch (_: ActivityNotFoundException) {
+      status.text = "No browser is available to open the $platform dashboard."
     }
   }
 
