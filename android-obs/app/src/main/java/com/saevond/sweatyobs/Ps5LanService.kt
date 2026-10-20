@@ -23,7 +23,7 @@ import java.net.Inet4Address
 /**
  * Android 14-compatible, user-started network-connected foreground service.
  *
- * Authorized LAN diagnostic and opt-in experimental Twitch relay. No media recording or music mixing.
+ * Authorized LAN diagnostic and opt-in experimental Twitch relay with optional licensed music mixing. No recording.
  */
 class Ps5LanService : Service() {
   companion object {
@@ -39,6 +39,8 @@ class Ps5LanService : Service() {
     const val PREF_STATUS_MESSAGE = "latest_message"
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
+    // Shared in-process gain settings are synchronized and visible immediately to audio worker.
+    val liveLevels = MixLevels(85, 20)
 
     /** Accept only literal private IPv4, never DNS names or external addresses. */
     fun privateIpv4(value: String): Boolean {
@@ -83,7 +85,7 @@ class Ps5LanService : Service() {
         return
       }
       val summary = if (publicTest && outputConnected)
-        "Twitch publishing. Video ${ingest.videoPackets} / audio ${ingest.audioPackets} · mixed AAC ${audioMixer?.audioOutputPackets ?: 0L} · music " + (if (musicTrack?.playing == true) "playing" else "paused")
+        "Twitch publishing. Video ${ingest.videoPackets} / audio ${ingest.audioPackets} · mixed AAC ${audioMixer?.audioOutputPackets ?: 0L} · ${liveLevels.description()}"
       else if (publicTest && ingest.rtpmPublished)
         "PS5 sending RTMP to phone. Waiting for H.264/AAC keyframe or Twitch publish. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
       else if (publicTest && ingest.connected)
@@ -105,6 +107,8 @@ class Ps5LanService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    val saved = getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
+    liveLevels.update(saved.getInt("game",85).coerceIn(0,100), saved.getInt("music",20).coerceIn(0,100))
     phoneSafety = PhoneSafetyMonitor(this)
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .createNotificationChannel(NotificationChannel(
@@ -189,7 +193,7 @@ class Ps5LanService : Service() {
                   val loop = musicTrack ?: error("Music control unavailable")
                   loop.load(decoded)
                   loop.command("play")
-                  audioMixer = LiveAacMusicMixer(loop)
+                  audioMixer = LiveAacMusicMixer(loop, liveLevels)
                   beginReceiver(local, ps5Address)
                 } catch (error: Exception) { startFailed(error) }
               }
@@ -214,6 +218,10 @@ class Ps5LanService : Service() {
 
   private fun beginReceiver(local: String, ps5Address: String) {
     try {
+      if (publicTest && audioMixer == null) {
+        // Game volume is independently controllable even with no music selected.
+        audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
+      }
       // Diagnostic mode discards packets; only explicit Twitch test sends media.
       val ingest = LanRtmpIngest(local, ps5Address) { packet ->
         if (publicTest) {
