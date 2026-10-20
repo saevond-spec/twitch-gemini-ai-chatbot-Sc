@@ -8,7 +8,14 @@
 - No need to keep an activity/browser/media-player visible to broadcast.
 - No false claim that PS5 native broadcasting can be redirected to the app by a chat command alone.
 
-## Current code, as of this branch
+## Experimental Twitch output (v0.1.3-dev)
+- The app now includes a **separate explicitly initiated public Twitch test** (not the existing network diagnostic). The user enters their Twitch key *on their own phone*, stores it with Android Keystore using `SecretStore`, and must explicitly press the public test button. Never share stream keys via chat or commit them.
+- A `MediaRelayGate` validates FLV AVC/H.264 and AAC config packets and waits for the first keyframe, then the `TwitchRtmpsPublisher` attempts an authenticated TLS connection to Twitch and writes chunked media. No media is saved locally; no implicit retry.
+- **NOT VERIFIED ON ACTUAL PS5, AND NOT VERIFIED TO SHOW PLAYABLE VIDEO ON TWITCH.** Passing a local emulator/unit test is not Twitch end-to-end proof. Real PS5 native broadcast is already sent directly to Twitch and its LAN IPv4 does not redirect that stream to Android. The app can publish only after it receives an authorized compatible RTMP feed from the specified PS5 IP to the phone's port 1935. We have not established that the retail PS5 can provide this.
+- No DNS changes or TLS interception are included or endorsed. No YouTube, Kick or music mixing output is implemented yet. A Twitch RTMPS publish response is not proof viewers receive audio/video.
+- Keep PR draft until independent Twitch viewer playback, thermal resilience, PS5 ingest, and UI error validation on the actual Android device are complete.
+
+## Previous network-only diagnostic implementation
 - The app manifest has **no capture or recording permission** and declares just the user-started `connectedDevice` foreground service for the PS5 LAN diagnostic.
 - `MainActivity` now starts/stops only an authorized PS5 IPv4 LAN diagnostic and shows device safety status; it never requests screen-capture permission.
 - `Ps5LanService` accepts one private-LAN source, counts RTMP H.264/AAC *packet types* and discards payloads. It is **not** a working video/audio relay.
