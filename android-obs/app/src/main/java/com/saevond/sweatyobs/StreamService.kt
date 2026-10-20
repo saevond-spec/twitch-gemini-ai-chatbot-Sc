@@ -73,7 +73,7 @@ class StreamService : Service(), ConnectChecker {
       val botOrigin = intent.getStringExtra("botOrigin").orEmpty()
       val botToken = SecretStore(this).get("bridge_token")
       if (botOrigin.startsWith("https://") && botToken.length >= 32) {
-        MusicBridgePoller(botOrigin, botToken, mixer, this).start()
+        MusicBridgePoller(botOrigin, botToken, mixer).start()
       }
     } catch (e: Exception) {
       Log.e("SweatyClankerOBS", "Stream unavailable; source audio permission or codec may have failed", e)
