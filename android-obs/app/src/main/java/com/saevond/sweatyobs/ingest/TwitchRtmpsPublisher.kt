@@ -40,7 +40,7 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
     try {
       plain.connect(InetSocketAddress(destinations.first(), PORT), 10000)
       // Wrapping with HOST gives TLS the real hostname even though DNS was prechecked.
-      val tls = SSLSocketFactory.getDefault().createSocket(plain, HOST, PORT, true) as SSLSocket
+      val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(plain, HOST, PORT, true) as SSLSocket
       socket = tls
       tls.soTimeout = 12000
       tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
