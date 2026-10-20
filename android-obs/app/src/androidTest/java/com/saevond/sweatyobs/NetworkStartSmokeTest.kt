@@ -26,6 +26,11 @@ class NetworkStartSmokeTest {
       )))
   }
 
+  @Test fun youtubeAndKickStreamKeyDashboardLinksAreAvailable() {
+    onView(withId(R.id.open_youtube_dashboard)).perform(scrollTo()).check(matches(isDisplayed()))
+    onView(withId(R.id.open_kick_dashboard)).perform(scrollTo()).check(matches(isDisplayed()))
+  }
+
   @Test fun invalidAddressTapReportsVisibleFailure() {
     onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())
