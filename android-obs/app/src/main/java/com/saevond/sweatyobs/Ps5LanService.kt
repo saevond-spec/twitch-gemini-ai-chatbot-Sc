@@ -27,6 +27,10 @@ class Ps5LanService : Service() {
     const val ACTION_START = "com.saevond.sweatyobs.START_PS5_INGEST"
     const val ACTION_STOP = "com.saevond.sweatyobs.STOP_PS5_INGEST"
     const val EXTRA_PS5_IPV4 = "ps5_ipv4"
+    const val ACTION_STATUS = "com.saevond.sweatyobs.DIAGNOSTIC_STATUS"
+    const val EXTRA_STATUS_MESSAGE = "diagnostic_status"
+    const val STATUS_PREFS = "diagnostic_status_v1"
+    const val PREF_STATUS_MESSAGE = "latest_message"
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
 
@@ -46,6 +50,7 @@ class Ps5LanService : Service() {
   private var wifiAddress: String? = null
   private var report: String? = null
   private var stopping = false
+  private var terminalReason = false
   private lateinit var phoneSafety: PhoneSafetyMonitor
   private val updateTask = object : Runnable {
     override fun run() {
@@ -54,11 +59,13 @@ class Ps5LanService : Service() {
       val safety = phoneSafety.assess()
       if (safety.level == SafetyLevel.STOP) {
         setNotification("Stopped for phone safety: " + safety.message)
+        terminalReason = true
         stopSelf()
         return
       }
       if (activeWifiIpv4() != wifiAddress || !ingest.active) {
         setNotification("Receiver stopped: Wi-Fi changed or port unavailable")
+        terminalReason = true
         stopSelf()
         return
       }
@@ -86,20 +93,29 @@ class Ps5LanService : Service() {
       stopSelf()
       return START_NOT_STICKY
     }
-    if (intent?.action != ACTION_START || receiver != null || stopping) return START_NOT_STICKY
+    if (intent?.action != ACTION_START || stopping) return START_NOT_STICKY
+    if (receiver != null) { setNotification("Receiver already running; waiting for authorized PS5 packets."); return START_NOT_STICKY }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
 
     // Promote promptly after a user explicitly starts this diagnostic service.
     val notification = notification("Checking private Wi-Fi connection…")
-    if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-    } else {
-      startForeground(NOTIFICATION_ID, notification)
+    try {
+      if (Build.VERSION.SDK_INT >= 29) {
+        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+      } else {
+        startForeground(NOTIFICATION_ID, notification)
+      }
+    } catch (error: RuntimeException) {
+      terminalReason = true
+      publishUiStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
+      stopSelf()
+      return START_NOT_STICKY
     }
 
     val local = activeWifiIpv4()
     if (!privateIpv4(ps5Address) || local == null || local == ps5Address) {
       setNotification("Unavailable: use Wi-Fi and enter the PS5's private IPv4")
+      terminalReason = true
       stopSelf()
       return START_NOT_STICKY
     }
@@ -108,6 +124,7 @@ class Ps5LanService : Service() {
       val safety = phoneSafety.assess()
       if (safety.level == SafetyLevel.STOP) {
         setNotification("Not started: " + safety.message)
+        terminalReason = true
         stopSelf()
         return START_NOT_STICKY
       }
@@ -121,7 +138,8 @@ class Ps5LanService : Service() {
       handler.postDelayed(updateTask, 3000)
     } catch (error: Exception) {
       Log.w("SweatyOBS-PS5", "LAN receiver unavailable: ${error.javaClass.simpleName}")
-      setNotification("PS5 receiver could not start")
+      setNotification("PS5 receiver could not start (" + error.javaClass.simpleName + ")")
+      terminalReason = true
       stopSelf()
     }
     return START_NOT_STICKY
@@ -144,7 +162,16 @@ class Ps5LanService : Service() {
     .setOngoing(true)
     .build()
 
+  private fun publishUiStatus(message: String) {
+    getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit().putString(PREF_STATUS_MESSAGE, message).apply()
+    sendBroadcast(Intent(ACTION_STATUS).apply {
+      setPackage(packageName)
+      putExtra(EXTRA_STATUS_MESSAGE, message)
+    })
+  }
+
   private fun setNotification(message: String) {
+    publishUiStatus(message)
     report = message
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .notify(NOTIFICATION_ID, notification(message))
@@ -155,6 +182,7 @@ class Ps5LanService : Service() {
     handler.removeCallbacks(updateTask)
     receiver?.stop()
     receiver = null
+    if (!terminalReason) publishUiStatus("Receiver stopped. No broadcast was sent.")
     super.onDestroy()
   }
 }
