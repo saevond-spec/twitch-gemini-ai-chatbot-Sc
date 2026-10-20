@@ -24,6 +24,23 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("Enter the PS5"))))
   }
 
+  @Test fun volumeSlidersAndMusicMuteActuallyUpdateLiveMixer() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    activityRule.scenario.onActivity { activity ->
+      val game = activity.findViewById<android.widget.SeekBar>(R.id.game_volume)
+      val music = activity.findViewById<android.widget.SeekBar>(R.id.music_volume)
+      game.progress = 60
+      music.progress = 35
+      assertEquals(60, Ps5LanService.liveLevels.gamePercent)
+      assertEquals(35, Ps5LanService.liveLevels.musicPercent)
+    }
+    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
+    assertEquals(0, Ps5LanService.liveLevels.musicPercent)
+    assertEquals(60, Ps5LanService.liveLevels.gamePercent)
+    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
+    assertEquals(35, Ps5LanService.liveLevels.musicPercent)
+  }
+
   @Test fun validAddressTapReportsRealServiceOutcome() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences(Ps5LanService.STATUS_PREFS, 0)
