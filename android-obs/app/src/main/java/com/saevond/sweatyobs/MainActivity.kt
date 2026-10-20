@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.SeekBar
+import android.widget.CheckBox
 import java.util.Locale
 
 /**
@@ -90,10 +91,17 @@ class MainActivity : Activity() {
     val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 22%" }
     val musicNote = TextView(this).apply {
       val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
-      text = if (ready) "Local licensed music selected for next public stream."
+      text = if (ready) "Local licensed music selected. Autoplay begins after Twitch publishes."
+
         else "No music selected. Choose your own rights-cleared audio file to make music audible on Twitch."
     }
     val chooseMusic = Button(this).apply { text = "Choose licensed music file (MP3 / AAC / WAV)" }
+    val autoplayMusic = CheckBox(this).apply {
+      id = R.id.music_autoplay
+      text = "Automatically play selected music when Twitch broadcast starts"
+      isChecked = getSharedPreferences("ps5_music", MODE_PRIVATE)
+        .getBoolean("autoplay", true)
+    }
     val playMusic = Button(this).apply { text = "Play music on Twitch (when stream active)" }
     val pauseMusic = Button(this).apply { text = "Pause music (leave game audio playing)" }
     val botToken = EditText(this).apply {
@@ -121,7 +129,7 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
     listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
-      chooseMusic, musicNote, gameLabel, gameVolume, musicLabel, musicVolume,
+      chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken,
       openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
       startLan, goLive, stopLan, status)
@@ -169,6 +177,13 @@ class MainActivity : Activity() {
         ?.let { String.format(Locale.US, "%.1f°C", it / 10.0) } ?: "unavailable"
       safetyReading.text = "Battery $battery · temperature $temp · " +
         "thermal level ${sample.thermalStatus} · ${decision.level}: ${decision.message}"
+    }
+
+    autoplayMusic.setOnCheckedChangeListener { _, checked ->
+      getSharedPreferences("ps5_music", MODE_PRIVATE).edit()
+        .putBoolean("autoplay", checked).apply()
+      status.text = if (checked) "Music will start when Twitch publishing begins, if a licensed file is selected."
+        else "Music autoplay disabled; use Play when your Twitch stream is active."
     }
 
     chooseMusic.setOnClickListener {
