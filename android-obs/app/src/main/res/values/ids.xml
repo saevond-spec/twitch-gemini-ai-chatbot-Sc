@@ -7,4 +7,6 @@
   <item name="music_auto_next" type="id"/>
   <item name="music_skip" type="id"/>
   <item name="genre_library_status" type="id"/>
+  <item name="test_music_bridge" type="id"/>
+  <item name="music_bridge_status" type="id"/>
 </resources>

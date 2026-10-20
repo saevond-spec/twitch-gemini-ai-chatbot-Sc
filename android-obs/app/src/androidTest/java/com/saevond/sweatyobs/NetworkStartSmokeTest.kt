@@ -55,6 +55,15 @@ class NetworkStartSmokeTest {
     }
   }
 
+  @Test fun remoteMusicBridgeShowsMissingTokenInsteadOfStartingStream() {
+    // No real network dependency; the app should reject absent credentials locally.
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    // Delete any test-provided secret only from this disposable emulator.
+    onView(withId(R.id.test_music_bridge)).perform(scrollTo(), click())
+    onView(withId(R.id.music_bridge_status)).check(
+      matches(not(withText("Bridge not checked. Twitch music controls require matching private bot token."))))
+  }
+
   @Test fun validAddressTapReportsRealServiceOutcome() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences(Ps5LanService.STATUS_PREFS, 0)
