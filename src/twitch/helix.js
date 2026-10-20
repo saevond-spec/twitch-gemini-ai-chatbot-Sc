@@ -40,6 +40,30 @@ export class HelixClient {
     return res.data.data[0];
   }
 
+
+  async getChatters(broadcasterId, moderatorId, { maxPages = 10 } = {}) {
+    const headers = await this.getHeaders();
+    const chatters = [];
+    let after = null;
+    let page = 0;
+
+    do {
+      const params = new URLSearchParams({
+        broadcaster_id: broadcasterId,
+        moderator_id: moderatorId,
+        first: '1000',
+      });
+      if (after) params.set('after', after);
+
+      const res = await axios.get(`${this.baseURL}/chat/chatters?${params.toString()}`, { headers });
+      chatters.push(...(res.data?.data || []));
+      after = res.data?.pagination?.cursor || null;
+      page += 1;
+    } while (after && page < maxPages);
+
+    return chatters;
+  }
+
   async createEventSubSubscription(type, version, condition, transport) {
     const headers = await this.getHeaders();
     const body = { type, version, condition, transport };

@@ -138,6 +138,10 @@ services:
         value: "100"
       - key: JOIN_WELCOME_DEDUPE_MINUTES
         value: "1"
+      - key: CHATTER_WATCH_POLL_SECONDS
+        value: "30"
+      - key: CHATTER_REJOIN_SUPPRESS_MINUTES
+        value: "30"
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
