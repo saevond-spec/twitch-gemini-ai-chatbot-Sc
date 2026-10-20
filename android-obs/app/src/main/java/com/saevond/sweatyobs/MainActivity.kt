@@ -86,6 +86,7 @@ class MainActivity : Activity() {
       contentDescription = "Music genre: Mixed, Club or Dubstep"
     }
     val genreStatus = TextView(this).apply {
+      id = R.id.genre_library_status
       text = "Local library: Club ${genreSettings.tracks("club").size} · Dubstep ${genreSettings.tracks("dubstep").size}"
     }
     val addClub = Button(this).apply { text = "Add licensed Club / House songs" }
@@ -173,6 +174,7 @@ class MainActivity : Activity() {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
         val genre = stationCodes[position.coerceIn(0, stationCodes.lastIndex)]
+        if (genre == genreSettings.selected()) return
         genreSettings.select(genre)
         if (Ps5LanService.receiverRunning) {
           startService(Intent(this@MainActivity, Ps5LanService::class.java).apply {
@@ -382,6 +384,8 @@ class MainActivity : Activity() {
       if (granted.isNotEmpty()) {
         val store = MusicGenreSettings(this)
         store.add(genre, granted)
+        findViewById<TextView>(R.id.genre_library_status)?.text =
+          "Local library: Club ${store.tracks("club").size} · Dubstep ${store.tracks("dubstep").size}"
         status.text = "Saved ${granted.size} locally authorized $genre songs. Club ${store.tracks("club").size}, Dubstep ${store.tracks("dubstep").size}."
         if (Ps5LanService.receiverRunning) refreshGenreService()
       } else status.text = "No accessible local songs were selected."
