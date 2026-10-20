@@ -26,9 +26,10 @@ class MainActivity : Activity() {
     val bridgeToken = EditText(this).apply { hint = "Bridge secret"; inputType = 129 }
     val chooseMusic = Button(this).apply { text = "Select licensed track" }
     val start = Button(this).apply { text = "Request screen capture and start" }
+    val chatSafe = Button(this).apply { text = "Chat Safe Mode (hide screen)" }
     val stop = Button(this).apply { text = "Stop stream" }
     layout.addView(status); layout.addView(endpoint); layout.addView(botOrigin)
-    layout.addView(bridgeToken); layout.addView(chooseMusic); layout.addView(start); layout.addView(stop)
+    layout.addView(bridgeToken); layout.addView(chooseMusic); layout.addView(start); layout.addView(chatSafe); layout.addView(stop)
     chooseMusic.setOnClickListener {
       startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"
@@ -43,6 +44,10 @@ class MainActivity : Activity() {
       getPreferences(MODE_PRIVATE).edit().putString("botOrigin", botOrigin.text.toString().trim()).apply()
       val projection = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
       startActivityForResult(projection.createScreenCaptureIntent(), requestCode)
+    }
+    chatSafe.setOnClickListener {
+      startService(Intent(this, StreamService::class.java).setAction("CHAT_SAFE"))
+      status.text = "Chat Safe Mode requested: screen hidden; music remains available."
     }
     stop.setOnClickListener { startService(Intent(this, StreamService::class.java).setAction("STOP")); status.text = "Stop requested" }
   }
