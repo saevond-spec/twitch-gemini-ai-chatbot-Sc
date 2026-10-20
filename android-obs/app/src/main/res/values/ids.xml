@@ -2,4 +2,8 @@
   <item name="music_volume" type="id"/>
   <item name="music_mute" type="id"/>
   <item name="music_autoplay" type="id"/>
+  <item name="music_genre" type="id"/>
+  <item name="music_shuffle" type="id"/>
+  <item name="music_auto_next" type="id"/>
+  <item name="music_skip" type="id"/>
 </resources>
