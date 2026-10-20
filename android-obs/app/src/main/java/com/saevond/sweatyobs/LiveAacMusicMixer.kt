@@ -15,7 +15,7 @@ import java.nio.ByteBuffer
  * must be created per stream. Requires incoming AAC-LC 48kHz stereo; failures
  * abort the public test rather than pretending the music was mixed.
  */
-class LiveAacMusicMixer(private val music: MusicTrackLooper) : AutoCloseable {
+class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume: MixLevels = MixLevels()) : AutoCloseable {
   private var decoder: MediaCodec? = null
   private var encoder: MediaCodec? = null
   private var hasOutputConfig = false
@@ -92,8 +92,12 @@ class LiveAacMusicMixer(private val music: MusicTrackLooper) : AutoCloseable {
               output.limit(info.offset + info.size)
               output.get(raw)
               check(raw.size % 4 == 0 && raw.size <= 131072) { "Invalid PCM frame" }
-              val pcm = if (music.playing) PcmMixer.mix(raw, music.nextWindow(raw.size))
-              else raw
+              val playing = music.playing && music.ready
+              val (gameGain, musicGain) = volume.gains(playing)
+              // All coefficients are bounded so their worst-case sum stays under unity.
+              val pcm = PcmMixer.mix(raw,
+                if (playing && musicGain > 0.0) music.nextWindow(raw.size) else ByteArray(raw.size),
+                gameGain, musicGain)
               val audioEncoder = encoder ?: error("Encoder unavailable")
               val writable = audioEncoder.dequeueInputBuffer(20_000)
               check(writable >= 0) { "AAC encoder backpressure" }
