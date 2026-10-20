@@ -307,7 +307,10 @@ class Ps5LanService : Service() {
       if (publicTest) {
         val bridgeToken = SecretStore(this).get("bridge_token")
         if (bridgeToken.length >= 32) {
-          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action, level, station ->
+          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com",
+            bridgeToken, statusSink = { message ->
+              handler.post { if (!stopping) setNotification(message) }
+            }) { action, level, station ->
             // Bot sends authenticated controls only; volume affects music gain,
             // never the game gain and never the Android system speaker volume.
             if (action == "volume" && level != null && level in 0..100) {
