@@ -14,6 +14,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import com.saevond.sweatyobs.ingest.LanRtmpIngest
+import com.saevond.sweatyobs.ingest.MediaRelayGate
+import com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher
 import java.net.Inet4Address
 
 /**
@@ -25,6 +27,7 @@ import java.net.Inet4Address
 class Ps5LanService : Service() {
   companion object {
     const val ACTION_START = "com.saevond.sweatyobs.START_PS5_INGEST"
+    const val ACTION_START_TWITCH = "com.saevond.sweatyobs.START_PUBLIC_TWITCH"
     const val ACTION_STOP = "com.saevond.sweatyobs.STOP_PS5_INGEST"
     const val EXTRA_PS5_IPV4 = "ps5_ipv4"
     const val ACTION_STATUS = "com.saevond.sweatyobs.DIAGNOSTIC_STATUS"
@@ -51,6 +54,10 @@ class Ps5LanService : Service() {
   private var report: String? = null
   private var stopping = false
   private var terminalReason = false
+  @Volatile private var publicTest = false
+  @Volatile private var outputConnected = false
+  private var twitchOutput: TwitchRtmpsPublisher? = null
+  private var liveGate: MediaRelayGate? = null
   private lateinit var phoneSafety: PhoneSafetyMonitor
   private val updateTask = object : Runnable {
     override fun run() {
@@ -69,7 +76,13 @@ class Ps5LanService : Service() {
         stopSelf()
         return
       }
-      val summary = if (ingest.connected)
+      val summary = if (publicTest && outputConnected)
+        "Twitch RTMPS publisher connected; verify viewer playback independently. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
+      else if (publicTest && ingest.connected)
+        "PS5 RTMP connected; waiting for supported H.264 + AAC configs and keyframe for Twitch"
+      else if (publicTest)
+        "Public Twitch test armed; waiting for actual PS5 RTMP media on ${wifiAddress}:1935"
+      else if (ingest.connected)
         "PS5 linked · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
       else "Waiting for PS5 · video ${ingest.videoPackets} · audio ${ingest.audioPackets}"
       val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
@@ -93,9 +106,20 @@ class Ps5LanService : Service() {
       stopSelf()
       return START_NOT_STICKY
     }
-    if (intent?.action != ACTION_START || stopping) return START_NOT_STICKY
+    if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
     if (receiver != null) { setNotification("Receiver already running; waiting for authorized PS5 packets."); return START_NOT_STICKY }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
+    publicTest = intent.action == ACTION_START_TWITCH
+    if (publicTest) {
+      val saved = SecretStore(this).get("rtmps")
+      if (!TwitchRtmpsPublisher.keyValid(saved)) {
+        publishUiStatus("No valid Twitch key saved. Open app and save it on your phone.")
+        stopSelf()
+        return START_NOT_STICKY
+      }
+      twitchOutput = TwitchRtmpsPublisher(saved)
+      liveGate = MediaRelayGate()
+    }
 
     // Promote promptly after a user explicitly starts this diagnostic service.
     val notification = notification("Checking private Wi-Fi connection…")
@@ -131,10 +155,33 @@ class Ps5LanService : Service() {
       wifiAddress = local
       // Ingest counters come from LanRtmpIngest; media is intentionally discarded
       // until the separate audio-mix + H264 passthrough chain is verified.
-      val ingest = LanRtmpIngest(local, ps5Address) { _ -> }
+      val ingest = LanRtmpIngest(local, ps5Address) { packet ->
+        if (publicTest) {
+          try {
+            val frames = liveGate?.process(packet).orEmpty()
+            if (frames.isNotEmpty()) {
+              val output = twitchOutput ?: error("Twitch publisher missing")
+              if (!outputConnected) {
+                output.connect()
+                outputConnected = true
+                handler.post { setNotification("Twitch server publish acknowledged; sending PS5 media. Check channel playback.") }
+              }
+              frames.forEach { output.publish(it) }
+            }
+          } catch (error: Exception) {
+            Log.w("SweatyOBS-PS5", "Public stream stopped: " + error.javaClass.simpleName)
+            terminalReason = true
+            handler.post {
+              setNotification("Twitch publishing failed (" + error.javaClass.simpleName + "). Stopped safely.")
+              stopSelf()
+            }
+            throw error
+          }
+        }
+      }
       receiver = ingest
       ingest.start()
-      setNotification("Waiting for PS5 at ${local}:1935 — ingest test only")
+      setNotification(if (publicTest) "Public Twitch test armed. Waiting for PS5 at ${local}:1935" else "Waiting for PS5 at ${local}:1935 — ingest test only")
       handler.postDelayed(updateTask, 3000)
     } catch (error: Exception) {
       Log.w("SweatyOBS-PS5", "LAN receiver unavailable: ${error.javaClass.simpleName}")
@@ -181,6 +228,10 @@ class Ps5LanService : Service() {
     stopping = true
     handler.removeCallbacks(updateTask)
     receiver?.stop()
+    twitchOutput?.close()
+    twitchOutput = null
+    liveGate = null
+    outputConnected = false
     receiver = null
     if (!terminalReason) publishUiStatus("Receiver stopped. No broadcast was sent.")
     super.onDestroy()

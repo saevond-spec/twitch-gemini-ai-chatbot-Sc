@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.view.View
+import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -55,10 +56,17 @@ class MainActivity : Activity() {
       hint = "PS5 private LAN IPv4 address"
       inputType = android.text.InputType.TYPE_CLASS_PHONE
     }
+    val twitchKey = EditText(this).apply {
+      hint = "Twitch stream key (stored securely on this phone)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val saveTwitchKey = Button(this).apply { text = "Save Twitch key securely" }
+    val goLive = Button(this).apply { text = "TEST PUBLIC TWITCH BROADCAST (requires actual PS5 media)" }
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
-    listOf(destinations, privacy, checkSafety, safetyReading, ps5Ip, startLan, stopLan, status)
+    listOf(destinations, privacy, checkSafety, safetyReading, ps5Ip, twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
@@ -71,6 +79,41 @@ class MainActivity : Activity() {
         ?.let { String.format(Locale.US, "%.1f°C", it / 10.0) } ?: "unavailable"
       safetyReading.text = "Battery $battery · temperature $temp · " +
         "thermal level ${sample.thermalStatus} · ${decision.level}: ${decision.message}"
+    }
+
+    saveTwitchKey.setOnClickListener {
+      val value = twitchKey.text.toString().trim()
+      if (!com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher.keyValid(value)) {
+        status.text = "Invalid Twitch key format. Obtain the full stream key from Twitch Creator Dashboard; never send it in chat."
+      } else try {
+        SecretStore(this).put("rtmps", value)
+        twitchKey.text.clear()
+        status.text = "Twitch key stored with Android Keystore. Nothing is broadcasting."
+      } catch (error: Exception) {
+        status.text = "Could not securely save Twitch key (" + error.javaClass.simpleName + ")."
+      }
+    }
+
+    goLive.setOnClickListener {
+      status.text = "Public Twitch test requested. Checking phone, PS5 address, and saved key…"
+      val ip = ps5Ip.text.toString().trim()
+      if (!Ps5LanService.privateIpv4(ip)) {
+        status.text = "Enter the PS5 local IPv4 address first."
+        return@setOnClickListener
+      }
+      if (!com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher.keyValid(SecretStore(this).get("rtmps"))) {
+        status.text = "Save your Twitch stream key on this phone first."
+        return@setOnClickListener
+      }
+      try {
+        startForegroundService(Intent(this, Ps5LanService::class.java).apply {
+          action = Ps5LanService.ACTION_START_TWITCH
+          putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
+        })
+        status.text = "Waiting for PS5 H.264/AAC RTMP feed; Twitch publishing begins only if valid media arrives."
+      } catch (error: RuntimeException) {
+        status.text = "Android could not start public test: " + error.javaClass.simpleName
+      }
     }
 
     startLan.setOnClickListener {
