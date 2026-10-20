@@ -41,6 +41,8 @@ class Ps5LanService : Service() {
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
     val liveLevels = MixLevels(85, 20)
+    @Volatile var receiverRunning: Boolean = false
+      private set
 
     /** Accept only literal private IPv4, never DNS names or external addresses. */
     fun privateIpv4(value: String): Boolean {
@@ -119,6 +121,11 @@ class Ps5LanService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_MUSIC_PLAY || intent?.action == ACTION_MUSIC_PAUSE) {
+      if (!receiverRunning) {
+        // A music control must never start an unpromoted background service.
+        stopSelf()
+        return START_NOT_STICKY
+      }
       val action = if (intent.action == ACTION_MUSIC_PLAY) "play" else "pause"
       musicTrack?.command(action)
       setNotification(if (musicTrack?.ready == true) "Licensed music $action requested; await next AAC frame." else "No music track loaded; choose a rights-cleared file first.")
@@ -256,6 +263,7 @@ class Ps5LanService : Service() {
       }
       receiver = ingest
       ingest.start()
+      receiverRunning = true
       val trackReady = musicTrack?.ready == true
       setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "loaded and set to play" else "not loaded")
@@ -307,6 +315,7 @@ class Ps5LanService : Service() {
   }
 
   override fun onDestroy() {
+    receiverRunning = false
     stopping = true
     handler.removeCallbacks(updateTask)
     receiver?.stop()
