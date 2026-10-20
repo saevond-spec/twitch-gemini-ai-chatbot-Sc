@@ -20,7 +20,9 @@ class MainActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 20, 24, 20) }
-    status = TextView(this).apply { text = "Dev prototype: consent to screen capture. PS Remote Play may block capture." }
+    status = TextView(this).apply { text = "SweatyClanker OBS Lite — diagnostics only. No stream starts automatically." }
+    val safetyReading = TextView(this).apply { text = "Safety not checked" }
+    val checkSafety = Button(this).apply { text = "CHECK PHONE SAFETY (no streaming)" }
     val endpoint = EditText(this).apply { hint = "RTMPS Twitch ingest URL (private)"; inputType = 129 }
     val botOrigin = EditText(this).apply { hint = "Bot HTTPS URL"; inputType = 17 }
     val bridgeToken = EditText(this).apply { hint = "Bridge secret"; inputType = 129 }
@@ -31,7 +33,8 @@ class MainActivity : Activity() {
     val startLan = Button(this).apply { text = "Test PS5 LAN receiver (no broadcast)" }
     val stopLan = Button(this).apply { text = "Stop PS5 LAN receiver" }
     val stop = Button(this).apply { text = "Stop stream" }
-    layout.addView(status); layout.addView(endpoint); layout.addView(botOrigin)
+    layout.addView(status); layout.addView(checkSafety); layout.addView(safetyReading)
+    layout.addView(endpoint); layout.addView(botOrigin)
     layout.addView(bridgeToken); layout.addView(chooseMusic); layout.addView(start); layout.addView(chatSafe); layout.addView(stop)
     layout.addView(ps5Ip); layout.addView(startLan); layout.addView(stopLan)
     chooseMusic.setOnClickListener {
@@ -39,7 +42,15 @@ class MainActivity : Activity() {
         addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*"
       }, musicRequestCode)
     }
-    setContentView(layout)
+    setContentView(android.widget.ScrollView(this).apply { addView(layout) })
+    checkSafety.setOnClickListener {
+      val monitor = PhoneSafetyMonitor(this)
+      val sample = monitor.sample()
+      val decision = PowerSafetyPolicy.assess(sample)
+      val temperature = sample.batteryTempDeciC?.let { "%.1f".format(java.util.Locale.US, it / 10.0) + "°C" } ?: "unavailable"
+      val battery = sample.batteryPercent?.let { "$it%" } ?: "unavailable"
+      safetyReading.text = "Battery: $battery | Battery temperature: $temperature | Charging: ${sample.charging} | Android thermal status: ${sample.thermalStatus} | Safety: ${decision.level} — ${decision.message}"
+    }
     start.setOnClickListener {
       val target = endpoint.text.toString()
       if (!target.startsWith("rtmps://")) { status.text = "Enter an RTMPS URL."; return@setOnClickListener }
