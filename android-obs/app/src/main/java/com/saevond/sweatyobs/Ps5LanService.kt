@@ -336,6 +336,58 @@ class Ps5LanService : Service() {
     } catch (error: Exception) { startFailed(error) }
   }
 
+  /**
+   * Load next licensed song asynchronously. Until the replacement is ready, keep
+   * the current PCM available so a slow decoder does not stall PS5 game audio.
+   */
+  private fun playNextLicensedTrack(manual: Boolean) {
+    val program = genrePlaylist ?: return
+    if (decodingTrack) {
+      if (!manual) return
+      // Supersede a pending decode on user-initiated station/skip change.
+      musicDecodeGeneration++
+    }
+    val uriText = program.next(manual) ?: run {
+      musicTrack?.command("pause")
+      setNotification("No licensed tracks in " + program.station + ". Music paused; game audio continues.")
+      return
+    }
+    val generation = ++musicDecodeGeneration
+    decodingTrack = true
+    thread(name = "SweatyOBS-genre-decode") {
+      try {
+        val pcm = MusicDecoder(this).decode(Uri.parse(uriText))
+        handler.post {
+          if (generation == musicDecodeGeneration) {
+            decodingTrack = false
+            if (!stopping) {
+              val loop = musicTrack
+              if (loop != null) {
+                if (loop.ready) loop.replace(pcm)
+                else {
+                  val autoplay = getSharedPreferences("ps5_music", MODE_PRIVATE)
+                    .getBoolean("autoplay", true)
+                  loop.load(pcm, autoStart = autoplay)
+                }
+                if (outputConnected) loop.onBroadcastStarted()
+                setNotification("Loaded " + program.station + " song. " + program.summary() +
+                  ". Viewer playback is not yet verified.")
+              }
+            }
+          }
+        }
+      } catch (error: Exception) {
+        handler.post {
+          if (generation == musicDecodeGeneration) {
+            decodingTrack = false
+            if (!stopping) setNotification("Song decode failed (" + error.javaClass.simpleName +
+              "). Previous game audio continues.")
+          }
+        }
+      }
+    }
+  }
+
   private fun activeWifiIpv4(): String? {
     val manager = getSystemService(ConnectivityManager::class.java)
     val network = manager.activeNetwork ?: return null
