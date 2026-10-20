@@ -50,7 +50,7 @@ class LicensedMusicCodecSmokeTest {
               val asc = upstream.outputFormat.getByteBuffer("csd-0")!!
               val config = ByteArray(asc.remaining())
               asc.get(config)
-              mixer.onAudio(RtmpMessage(8,0,1,byteArrayOf(0xaf.toByte(),0) + config))
+              packetTypes.addAll(mixer.onAudio(RtmpMessage(8,0,1,byteArrayOf(0xaf.toByte(),0) + config)).map { it.data[1].toInt() and 255 })
               configFound = true
             }
             in 0..Int.MAX_VALUE -> {
