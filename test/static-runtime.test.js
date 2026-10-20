@@ -351,3 +351,21 @@ test('Twitch OAuth uses a durable versioned vault instead of ephemeral file auth
   assert.match(app, /\/api\/auth\/status/);
   assert.match(env, /TWITCH_TOKEN_DATABASE_URL=/);
 });
+
+
+test('reliable join welcomes use IRC plus Get Chatters fallback', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const auth = fs.readFileSync(path.join(root, 'src/twitch/auth.js'), 'utf8');
+  const helix = fs.readFileSync(path.join(root, 'src/twitch/helix.js'), 'utf8');
+  const watcher = fs.readFileSync(path.join(root, 'src/twitch/chatterWatcher.js'), 'utf8');
+
+  assert.match(auth, /moderator:read:chatters/);
+  assert.match(helix, /\/chat\/chatters/);
+  assert.match(app, /new ChatterWatcher/);
+  assert.match(app, /chatterWatcher\.observeIrcJoin/);
+  assert.match(app, /chatterWatcher\.observeIrcPart/);
+  assert.match(app, /source.*helix-chatters/s);
+  assert.match(watcher, /baselineReady/);
+  assert.match(watcher, /missing_moderator_read_chatters/);
+  assert.match(watcher, /rejoinSuppressMs/);
+});
