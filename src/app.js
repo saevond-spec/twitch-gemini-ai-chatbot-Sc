@@ -1040,6 +1040,21 @@ async function handleClearChat({ channel }) {
   log.info(`Chat cleared in ${channel}`);
 }
 
+app.get('/obs-web', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "connect-src 'self' wss: ws:",
+    "img-src 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'self'"
+  ].join('; '));
+  res.sendFile('obs-web.html', { root: 'public' });
+});
+
 app.get('/music-player', (req, res) => {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
