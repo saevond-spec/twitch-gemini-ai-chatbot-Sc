@@ -2,7 +2,7 @@ package com.saevond.sweatyobs
 
 import kotlin.random.Random
 
-/** Pure, testable licensed-file selection. No network, audio capture or disk writes. */
+/** Selects local licensed files and verified remote NCS catalog tracks. */
 class GenrePlaylist(private val random: Random = Random.Default) {
   companion object {
     const val CLUB = "club"
@@ -33,7 +33,7 @@ class GenrePlaylist(private val random: Random = Random.Default) {
   @Synchronized fun setTracks(genre: String, uris: List<String>) {
     require(genre == CLUB || genre == DUBSTEP)
     require(uris.size <= MAX_TRACKS_PER_GENRE)
-    require(uris.all { it.startsWith("content://") && it.length <= 2048 })
+    require(uris.all { (it.startsWith("content://") && it.length <= 2048) || RemoteMusicCatalog.isSupportedAudioUrl(it) })
     catalogs[genre] = uris.distinct()
     deck.clear()
     current = null
