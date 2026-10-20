@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.view.View
 import android.text.InputType
 import android.net.ConnectivityManager
+import android.net.Uri
 import android.net.NetworkCapabilities
 import java.net.Inet4Address
 import android.widget.Button
@@ -24,6 +25,7 @@ import java.util.Locale
  * Streaming outputs remain disabled until PS5 media ingest/mux/multi-RTMPS are proven.
  */
 class MainActivity : Activity() {
+  companion object { private const val PICK_MUSIC = 31416 }
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -65,6 +67,20 @@ class MainActivity : Activity() {
       setSingleLine(true)
       setText(getSharedPreferences("ps5_setup", MODE_PRIVATE).getString("ps5_ipv4", ""))
     }
+    val musicNote = TextView(this).apply {
+      val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
+      text = if (ready) "Local licensed music selected for next public stream."
+        else "No music selected. Choose your own rights-cleared audio file to make music audible on Twitch."
+    }
+    val chooseMusic = Button(this).apply { text = "Choose licensed music file (MP3 / AAC / WAV)" }
+    val playMusic = Button(this).apply { text = "Play music on Twitch (when stream active)" }
+    val pauseMusic = Button(this).apply { text = "Pause music (leave game audio playing)" }
+    val botToken = EditText(this).apply {
+      hint = "Optional private bot music bridge token (32+ characters)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val saveBotToken = Button(this).apply { text = "Save private !play bridge token" }
     val twitchKey = EditText(this).apply {
       hint = "Twitch stream key (stored securely on this phone)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -75,7 +91,9 @@ class MainActivity : Activity() {
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
-    listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip, twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
+    listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
+      chooseMusic, musicNote, playMusic, pauseMusic, botToken, saveBotToken,
+      twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
@@ -88,6 +106,32 @@ class MainActivity : Activity() {
         ?.let { String.format(Locale.US, "%.1f°C", it / 10.0) } ?: "unavailable"
       safetyReading.text = "Battery $battery · temperature $temp · " +
         "thermal level ${sample.thermalStatus} · ${decision.level}: ${decision.message}"
+    }
+
+    chooseMusic.setOnClickListener {
+      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "audio/*"
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+      }
+      startActivityForResult(intent, PICK_MUSIC)
+    }
+    playMusic.setOnClickListener {
+      startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PLAY })
+      status.text = "Music play requested for active stream; local file required."
+    }
+    pauseMusic.setOnClickListener {
+      startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PAUSE })
+      status.text = "Music pause requested; game audio continues."
+    }
+    saveBotToken.setOnClickListener {
+      val token = botToken.text.toString().trim()
+      if (token.length < 32 || token.length > 256) status.text = "Bridge token must be 32 to 256 characters."
+      else try {
+        SecretStore(this).put("bridge_token", token)
+        botToken.text.clear()
+        status.text = "Bot !play token saved locally. SweatyClanker server must also have the same ENCODER_BRIDGE_TOKEN configured."
+      } catch (error: Exception) { status.text = "Music bridge token storage failed (" + error.javaClass.simpleName + ")." }
     }
 
     saveTwitchKey.setOnClickListener {
@@ -149,6 +193,20 @@ class MainActivity : Activity() {
     stopLan.setOnClickListener {
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 network diagnostic stopped. No broadcasting was started."
+    }
+  }
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    if (requestCode == PICK_MUSIC && resultCode == RESULT_OK) {
+      val uri = data?.data ?: return
+      try {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        getSharedPreferences("ps5_music", MODE_PRIVATE).edit().putString("track_uri", uri.toString()).apply()
+        status.text = "Music file saved for next public test. Only use tracks licensed for live streams and VODs."
+      } catch (error: Exception) {
+        status.text = "Cannot access music file (" + error.javaClass.simpleName + "). Select a local audio file instead."
+      }
     }
   }
 

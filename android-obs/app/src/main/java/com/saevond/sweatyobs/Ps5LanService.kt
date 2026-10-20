@@ -9,6 +9,8 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.net.Uri
+import kotlin.concurrent.thread
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -27,6 +29,8 @@ class Ps5LanService : Service() {
   companion object {
     const val ACTION_START = "com.saevond.sweatyobs.START_PS5_INGEST"
     const val ACTION_START_TWITCH = "com.saevond.sweatyobs.START_PUBLIC_TWITCH"
+    const val ACTION_MUSIC_PLAY = "com.saevond.sweatyobs.MUSIC_PLAY"
+    const val ACTION_MUSIC_PAUSE = "com.saevond.sweatyobs.MUSIC_PAUSE"
     const val ACTION_STOP = "com.saevond.sweatyobs.STOP_PS5_INGEST"
     const val EXTRA_PS5_IPV4 = "ps5_ipv4"
     const val ACTION_STATUS = "com.saevond.sweatyobs.DIAGNOSTIC_STATUS"
@@ -57,6 +61,9 @@ class Ps5LanService : Service() {
   @Volatile private var outputConnected = false
   private var twitchOutput: TwitchRtmpsPublisher? = null
   private var liveGate: MediaRelayGate? = null
+  private var audioMixer: LiveAacMusicMixer? = null
+  private var musicTrack: MusicTrackLooper? = null
+  private var musicBridge: MusicBridgePoller? = null
   private lateinit var phoneSafety: PhoneSafetyMonitor
   private val updateTask = object : Runnable {
     override fun run() {
@@ -69,14 +76,14 @@ class Ps5LanService : Service() {
         stopSelf()
         return
       }
-      if (activeWifiIpv4() != wifiAddress || !ingest.active) {
+      if (activeWifiIpv4() != wifiAddress || !ingest.active || (outputConnected && !ingest.connected)) {
         setNotification("Receiver stopped: Wi-Fi changed or port unavailable")
         terminalReason = true
         stopSelf()
         return
       }
       val summary = if (publicTest && outputConnected)
-        "Twitch RTMPS publisher connected; verify viewer playback independently. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
+        "Twitch publishing. Video ${ingest.videoPackets} / audio ${ingest.audioPackets} · mixed AAC ${audioMixer?.audioOutputPackets ?: 0L} · music " + (if (musicTrack?.playing == true) "playing" else "paused")
       else if (publicTest && ingest.rtpmPublished)
         "PS5 sending RTMP to phone. Waiting for H.264/AAC keyframe or Twitch publish. Video ${ingest.videoPackets} / audio ${ingest.audioPackets}"
       else if (publicTest && ingest.connected)
@@ -107,12 +114,21 @@ class Ps5LanService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action == ACTION_MUSIC_PLAY || intent?.action == ACTION_MUSIC_PAUSE) {
+      val action = if (intent.action == ACTION_MUSIC_PLAY) "play" else "pause"
+      musicTrack?.command(action)
+      setNotification(if (musicTrack?.ready == true) "Licensed music $action requested; await next AAC frame." else "No music track loaded; choose a rights-cleared file first.")
+      return START_NOT_STICKY
+    }
     if (intent?.action == ACTION_STOP) {
       stopSelf()
       return START_NOT_STICKY
     }
     if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
-    if (receiver != null) { setNotification("Receiver already running; waiting for authorized PS5 packets."); return START_NOT_STICKY }
+    if (receiver != null) {
+      setNotification("Receiver already active. Stop current test before switching diagnostic/public mode.")
+      return START_NOT_STICKY
+    }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
     publicTest = intent?.action == ACTION_START_TWITCH
     if (publicTest) {
@@ -124,6 +140,7 @@ class Ps5LanService : Service() {
       }
       twitchOutput = TwitchRtmpsPublisher(saved)
       liveGate = MediaRelayGate()
+      musicTrack = MusicTrackLooper()
     }
 
     // Promote promptly after a user explicitly starts this diagnostic service.
@@ -158,26 +175,72 @@ class Ps5LanService : Service() {
         return START_NOT_STICKY
       }
       wifiAddress = local
-      // Diagnostic mode discards media; explicit public test uses H264/AAC passthrough.
+      val uriText = if (publicTest) getSharedPreferences("ps5_music", MODE_PRIVATE).getString("track_uri", null) else null
+      if (uriText.isNullOrBlank()) {
+        beginReceiver(local, ps5Address)
+      } else {
+        setNotification("Loading rights-cleared music file. Receiver is not yet listening.")
+        thread(name = "SweatyOBS-music-decode") {
+          try {
+            val decoded = MusicDecoder(this).decode(Uri.parse(uriText))
+            handler.post {
+              if (!stopping) {
+                try {
+                  val loop = musicTrack ?: error("Music control unavailable")
+                  loop.load(decoded)
+                  loop.command("play")
+                  audioMixer = LiveAacMusicMixer(loop)
+                  beginReceiver(local, ps5Address)
+                } catch (error: Exception) { startFailed(error) }
+              }
+            }
+          } catch (error: Exception) {
+            handler.post { if (!stopping) startFailed(error) }
+          }
+        }
+      }
+    } catch (error: Exception) {
+      Log.w("SweatyOBS-PS5", "LAN receiver unavailable: ${error.javaClass.simpleName}")
+      startFailed(error)
+    }
+    return START_NOT_STICKY
+  }
+
+  private fun startFailed(error: Exception) {
+    terminalReason = true
+    setNotification("Receiver/music startup failed (" + error.javaClass.simpleName + "). Stopped; no broadcast.")
+    stopSelf()
+  }
+
+  private fun beginReceiver(local: String, ps5Address: String) {
+    try {
+      // Diagnostic mode discards packets; only explicit Twitch test sends media.
       val ingest = LanRtmpIngest(local, ps5Address) { packet ->
         if (publicTest) {
           try {
-            val frames = liveGate?.process(packet).orEmpty()
-            if (frames.isNotEmpty()) {
-              val output = twitchOutput ?: error("Twitch publisher missing")
-              if (!outputConnected) {
-                output.connect()
-                outputConnected = true
-                handler.post { setNotification("Twitch server publish acknowledged; sending PS5 media. Check channel playback.") }
+            val input = if (packet.type == 8 && audioMixer != null) {
+              audioMixer!!.onAudio(packet)
+            } else listOf(packet)
+            input.forEach { item ->
+              val frames = liveGate?.process(item).orEmpty()
+              if (frames.isNotEmpty()) {
+                val output = twitchOutput ?: error("Twitch publisher missing")
+                if (!outputConnected) {
+                  output.connect()
+                  outputConnected = true
+                  handler.post { setNotification("Twitch server acknowledged publish; verify actual viewer playback.") }
+                }
+                frames.forEach { output.publish(it) }
               }
-              frames.forEach { output.publish(it) }
             }
           } catch (error: Exception) {
-            Log.w("SweatyOBS-PS5", "Public stream stopped: " + error.javaClass.simpleName)
+            Log.w("SweatyOBS-PS5", "Media relay stopped: " + error.javaClass.simpleName)
             terminalReason = true
             handler.post {
-              setNotification("Twitch publishing failed (" + error.javaClass.simpleName + "). Stopped safely.")
-              stopSelf()
+              if (!stopping) {
+                setNotification("Twitch/music relay failed (" + error.javaClass.simpleName + "). Stopped.")
+                stopSelf()
+              }
             }
             throw error
           }
@@ -185,15 +248,22 @@ class Ps5LanService : Service() {
       }
       receiver = ingest
       ingest.start()
-      setNotification(if (publicTest) "Public Twitch test armed. Waiting for PS5 at ${local}:1935" else "Waiting for PS5 at ${local}:1935 — ingest test only")
+      val trackReady = musicTrack?.ready == true
+      setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
+        (if (trackReady) "loaded and set to play" else "not loaded")
+        else "Waiting for PS5 at $local:1935 — diagnostic only")
+      if (publicTest && trackReady) {
+        val bridgeToken = SecretStore(this).get("bridge_token")
+        if (bridgeToken.length >= 32) {
+          musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com", bridgeToken) { action ->
+            // The bot controls the audio mixer, not a separate web page.
+            val selected = if (action == "station") "skip" else action
+            if (selected in setOf("play", "pause", "skip")) musicTrack?.command(selected)
+          }.also { it.start() }
+        }
+      }
       handler.postDelayed(updateTask, 3000)
-    } catch (error: Exception) {
-      Log.w("SweatyOBS-PS5", "LAN receiver unavailable: ${error.javaClass.simpleName}")
-      setNotification("PS5 receiver could not start (" + error.javaClass.simpleName + ")")
-      terminalReason = true
-      stopSelf()
-    }
-    return START_NOT_STICKY
+    } catch (error: Exception) { startFailed(error) }
   }
 
   private fun activeWifiIpv4(): String? {
@@ -232,6 +302,12 @@ class Ps5LanService : Service() {
     stopping = true
     handler.removeCallbacks(updateTask)
     receiver?.stop()
+    musicBridge?.stop()
+    musicBridge = null
+    audioMixer?.close()
+    audioMixer = null
+    musicTrack?.clear()
+    musicTrack = null
     twitchOutput?.close()
     twitchOutput = null
     liveGate = null
