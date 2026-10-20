@@ -32,6 +32,7 @@ export const BOT_SCOPES = [
   'user:bot', 'user:read:chat', 'user:write:chat',
   'moderation:read', 'channel:manage:moderators',
   'moderator:read:followers',
+  'moderator:read:chatters',
   'moderator:manage:shoutouts',
   'channel:manage:clips',
 ];
