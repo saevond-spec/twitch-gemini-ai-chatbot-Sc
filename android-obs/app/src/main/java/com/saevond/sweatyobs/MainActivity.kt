@@ -18,6 +18,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.SeekBar
 import java.util.Locale
 
 /**
@@ -67,6 +68,26 @@ class MainActivity : Activity() {
       setSingleLine(true)
       setText(getSharedPreferences("ps5_setup", MODE_PRIVATE).getString("ps5_ipv4", ""))
     }
+    val savedLevels = getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
+    val gameVolume = SeekBar(this).apply {
+      id = R.id.game_volume
+      max = 100
+      progress = savedLevels.getInt("game", 85).coerceIn(0,100)
+      contentDescription = "Game audio volume"
+    }
+    val musicVolume = SeekBar(this).apply {
+      id = R.id.music_volume
+      max = 100
+      progress = savedLevels.getInt("music", 20).coerceIn(0,100)
+      contentDescription = "Music volume"
+    }
+    val gameLabel = TextView(this).apply { text = "Game volume: ${gameVolume.progress}%" }
+    val musicLabel = TextView(this).apply { text = "Music volume: ${musicVolume.progress}%" }
+    val volumeHint = TextView(this).apply {
+      text = "Live audio mix is peak-safe. Lower music to hear more game audio."
+    }
+    val muteMusic = Button(this).apply { id = R.id.music_mute; text = "Mute music" }
+    val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 20%" }
     val musicNote = TextView(this).apply {
       val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
       text = if (ready) "Local licensed music selected for next public stream."
@@ -81,6 +102,14 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveBotToken = Button(this).apply { text = "Save private !play bridge token" }
+    val twitchStatus = TextView(this).apply {
+      text = if (com.saevond.sweatyobs.ingest.TwitchRtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("rtmps")))
+        "Twitch key saved securely (not verified by Twitch yet)."
+      else "Twitch needs your channel's stream key."
+    }
+    val openTwitchDashboard = Button(this).apply {
+      text = "Open Twitch Creator Dashboard — stream key"
+    }
     val twitchKey = EditText(this).apply {
       hint = "Twitch stream key (stored securely on this phone)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -92,10 +121,44 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop PS5 network test" }
 
     listOf(phoneIp, destinations, privacy, checkSafety, safetyReading, ps5Ip,
-      chooseMusic, musicNote, playMusic, pauseMusic, botToken, saveBotToken,
-      twitchKey, saveTwitchKey, startLan, goLive, stopLan, status)
+      chooseMusic, musicNote, gameLabel, gameVolume, musicLabel, musicVolume,
+      volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken,
+      openTwitchDashboard, twitchStatus, twitchKey, saveTwitchKey,
+      startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
+
+    var previousMusic = musicVolume.progress.coerceAtLeast(20)
+    val volumeChange = object : SeekBar.OnSeekBarChangeListener {
+      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+        gameLabel.text = "Game volume: ${gameVolume.progress}%"
+        musicLabel.text = "Music volume: ${musicVolume.progress}%"
+        Ps5LanService.liveLevels.update(gameVolume.progress, musicVolume.progress)
+        if (musicVolume.progress > 0) previousMusic = musicVolume.progress
+        muteMusic.text = if (musicVolume.progress == 0) "Unmute music" else "Mute music"
+      }
+      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+      override fun onStopTrackingTouch(seekBar: SeekBar?) {
+        savedLevels.edit().putInt("game", gameVolume.progress)
+          .putInt("music", musicVolume.progress).apply()
+      }
+    }
+    gameVolume.setOnSeekBarChangeListener(volumeChange)
+    musicVolume.setOnSeekBarChangeListener(volumeChange)
+    Ps5LanService.liveLevels.update(gameVolume.progress, musicVolume.progress)
+    muteMusic.setOnClickListener {
+      musicVolume.progress = if (musicVolume.progress > 0) 0 else previousMusic.coerceIn(1,100)
+      savedLevels.edit().putInt("game", gameVolume.progress)
+        .putInt("music", musicVolume.progress).apply()
+    }
+    resetMix.setOnClickListener {
+      gameVolume.progress = 85
+      musicVolume.progress = 20
+      savedLevels.edit().putInt("game",85).putInt("music",20).apply()
+    }
+    openTwitchDashboard.setOnClickListener {
+      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
+    }
 
     checkSafety.setOnClickListener {
       safetyReading.text = "Reading battery and temperature…"
@@ -142,6 +205,7 @@ class MainActivity : Activity() {
         SecretStore(this).put("rtmps", value)
         twitchKey.text.clear()
         status.text = "Twitch key stored with Android Keystore. Nothing is broadcasting."
+        twitchStatus.text = "Twitch key saved locally; authorization verified during public test."
       } catch (error: Exception) {
         status.text = "Could not securely save Twitch key (" + error.javaClass.simpleName + ")."
       }
