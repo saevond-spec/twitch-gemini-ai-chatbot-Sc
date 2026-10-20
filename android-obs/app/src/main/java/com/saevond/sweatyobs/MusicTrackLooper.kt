@@ -7,22 +7,36 @@ package com.saevond.sweatyobs
 class MusicTrackLooper {
   private var pcm = ByteArray(0)
   private var offset = 0
+  private var autoStartArmed = false
   @Volatile var playing: Boolean = false
     private set
   val ready: Boolean get() = synchronized(this) { pcm.isNotEmpty() }
 
-  @Synchronized fun load(track: ByteArray) {
+  @Synchronized fun load(track: ByteArray, autoStart: Boolean = true) {
     require(track.size in 4..(60 * 1024 * 1024) && track.size % 4 == 0)
     // Ownership of the decoded PCM transfers to this single-stream looper.
     // Avoid doubling up to 60 MB on a 4 GB Android phone.
     pcm = track
     offset = 0
     playing = false
+    autoStartArmed = autoStart
   }
+
+  /**
+   * Invoked ONLY after Twitch has acknowledged RTMP publishing and the first
+   * usable PS5 media batch exists. Never during receiver diagnostics or arming.
+   * An explicit pause/play command before this point overrides auto-start.
+   */
+  @Synchronized fun onBroadcastStarted(): Boolean {
+    if (autoStartArmed && pcm.isNotEmpty()) playing = true
+    autoStartArmed = false
+    return playing
+  }
+
   @Synchronized fun command(action: String) {
     when (action) {
-      "play" -> playing = pcm.isNotEmpty()
-      "pause" -> playing = false
+      "play" -> { autoStartArmed = false; playing = pcm.isNotEmpty() }
+      "pause" -> { autoStartArmed = false; playing = false }
       "skip" -> offset = 0  // one local rights-cleared track; restart it
       else -> throw IllegalArgumentException("Unsupported music action")
     }
@@ -40,5 +54,5 @@ class MusicTrackLooper {
     }
     return out
   }
-  @Synchronized fun clear() { pcm = ByteArray(0); playing = false; offset = 0 }
+  @Synchronized fun clear() { pcm = ByteArray(0); playing = false; offset = 0; autoStartArmed = false }
 }
