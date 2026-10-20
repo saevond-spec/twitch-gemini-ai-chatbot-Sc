@@ -180,10 +180,18 @@ class MainActivity : Activity() {
       startActivityForResult(intent, PICK_MUSIC)
     }
     playMusic.setOnClickListener {
+      if (!Ps5LanService.receiverRunning) {
+        status.text = "Start the PS5 connection test or public stream before playing music."
+        return@setOnClickListener
+      }
       startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PLAY })
       status.text = "Music play requested for active stream; local file required."
     }
     pauseMusic.setOnClickListener {
+      if (!Ps5LanService.receiverRunning) {
+        status.text = "No active PS5 receiver. Music is not playing."
+        return@setOnClickListener
+      }
       startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_PAUSE })
       status.text = "Music pause requested; game audio continues."
     }
