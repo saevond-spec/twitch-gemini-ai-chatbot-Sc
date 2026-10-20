@@ -1,25 +1,32 @@
-# SweatyClanker OBS for Android (experimental source tree)
+# SweatyClanker OBS Android — Development build
 
-Goal: PS5 Remote Play on Android -> user-consented MediaProjection screen video + permitted playback audio -> custom music mixer -> Twitch RTMPS, controlled by SweatyClanker's existing authenticated !play bridge.
+Goal: PS5 gameplay on Android + free streaming app + local licensed music controlled by SweatyClanker's `!play`, audible inside a Twitch RTMPS stream.
 
-## Current reality
+## Implemented in source
 
-This is an initial source scaffold, NOT a tested APK, and not ready for Twitch streaming. Initial service wires screen + Android playback capture to RTMPS through RootEncoder 2.8.1, but does **not yet** wire the PCM music mixer into the live encoder. PcmMixer.kt is a separately testable initial DSP building block. No console or Twitch verification has occurred. Existing cloud FFmpeg encoder remains separate.
+- Foreground Android screen capture with user-initiated MediaProjection consent
+- Android AudioPlaybackCapture (respects source-app capture policies) and H.264/AAC RTMPS output using RootEncoder 2.8.1
+- Stereo 48kHz PCM game/music mixing, bounded playback source, game and music RMS measurements in mixer
+- User-selected local audio file (decoded by MediaCodec), up to 5 minutes, loop playback
+- Authenticated HTTPS polling of SweatyClanker command bridge for `!play`, `!music pause`, `!skip`
+- Android Keystore encryption for stream destination and bridge token
+- GitHub Actions APK build workflow at `.github/workflows/android-obs.yml`
 
-**Non-negotiable capture test:** Android MediaProjection and AudioPlaybackCapture do not override other applications' video and audio capture policies; PS Remote Play may block video, audio, or both. Protected output stays protected. If PS Remote Play blocks capture, the app must display an error and must not attempt a circumvention.
+## Essential limitations
 
-To build: Android SDK (API 36), JDK 17+, Gradle with AGP 8.13.2 and Kotlin 2.2.21, download dependencies from Google's Maven and JitPack, assemble the debug APK. A Gradle wrapper is not yet committed; the current environment lacks Android SDK so build/runtime are not verified.
+- **Not yet tested on a physical Android device or PS5.** PS Remote Play may restrict MediaProjection screenshot/video and audio playback capture. Android cannot override those protections. No guaranteed solution exists from Android capture alone if Sony blocks it.
+- **Debug prototype, not production:** only one locally selected music track; station switching currently restarts the same track, not distinct dubstep/club playlists; output audio meters are computed internally but not displayed in UI; no automatic fallback if captured gameplay audio is silent.
+- Build must succeed on GitHub Actions before an APK is considered available. Successful APK compilation alone cannot verify viewer audio.
+- For now, you must supply your RTMPS ingest endpoint/stream key manually. Keep it secret, never post it in chat/screenshots or public code. The bot command bridge needs the same 32+ character `ENCODER_BRIDGE_TOKEN` in its hosting environment and in the app, plus the bot's HTTPS base URL.
+- Licensed local music means you already hold permission for live broadcasts and VODs. Being free to listen is not equivalent to rights for Twitch distribution.
+- Starting music while ScreenService is streaming updates the live AAC audio mix, not just a browser page. This only works if media capture and RTMPS transmission are running and accepted.
 
-## Security
+## Device acceptance procedure
 
-Never commit or screenshot a Twitch stream key. The minimal UI currently stores the full RTMPS URL in app-private preferences for development; production must replace it with Android encrypted keystore-backed storage and OAuth/ingest selection and redact exceptions. Capture permission must be user-initiated each session and stays foreground. The 2026 design must support newer MediaProjection lifecycle requirements before release.
+1. Obtain the debug APK from the Actions run **after the build passes**, not an unverified external APK.
+2. Test with an ordinary capturable Android game/app first. Confirm the Twitch stream has video and native game audio using a second device.
+3. Select a licensed local music file; configure the bot HTTPS origin and matching bridge token; grant screen capture; use `!play` in Twitch chat. A second viewer device must hear **both game sound and music**.
+4. Repeat using PS Remote Play. If Remote Play video becomes black or internal audio is silence, do not label the product PS5-compatible. Diagnose source-app restrictions without attempting to bypass Android/Sony capture protections.
+5. Check thermal throttling, battery use, reconnection, RTMPS stream ingest, VOD audio, chat latency, and audio clipping before production use.
 
-## Acceptance tests
-
-1. On a real Android device, capture a permitted test game/app, verify picture and internal audio.
-2. Open PS Remote Play and check whether capture outputs video and nonzero/game-identifiable audio without protections being bypassed.
-3. Generate synthetic gameplay and music tones; verify both in captured audio samples.
-4. Add licensed music decoder and custom PCM audio source, apply PcmMixer mixed buffers before AAC encoding.
-5. Poll the authenticated SweatyClanker bridge for !play/!skip and reconcile after disconnections.
-6. Private Twitch test stream: verify picture + game + music using a *different viewer device*.
-7. Only then request PR review/merge and Android APK rollout.
+Project branch: `feat/stream-encoder-mvp`, draft PR #48. Do not merge or deploy to live Twitch until device tests pass.
