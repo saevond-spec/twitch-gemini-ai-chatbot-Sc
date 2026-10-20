@@ -22,40 +22,62 @@ class LanRtmpIngest(
     private set
   @Volatile var videoPackets = 0L
     private set
-  private var listener: ServerSocket? = null
-  private var peer: Socket? = null
+  @Volatile private var listener: ServerSocket? = null
+  @Volatile private var peer: Socket? = null
+  @Volatile var lastFailure: String? = null
+    private set
 
-  fun start() {
-    check(!active)
+  /** Bind before returning: occupied/unavailable port is a synchronous failure, not a thread crash. */
+  @Synchronized fun start() {
+    check(!active) { "Receiver already started" }
     val host = InetAddress.getByName(listenAddress)
     val source = InetAddress.getByName(permittedPs5Address)
     require(host is Inet4Address && host.isSiteLocalAddress)
     require(source is Inet4Address && source.isSiteLocalAddress && source != host)
+    val server = ServerSocket()
+    try {
+      server.reuseAddress = false
+      server.bind(InetSocketAddress(host, 1935), 1)
+      server.soTimeout = 1000
+    } catch (e: Exception) {
+      runCatching { server.close() }
+      throw IllegalStateException("Private RTMP listener unavailable", e)
+    }
+    listener = server
+    lastFailure = null
     active = true
-    thread(name = "SweatyOBS-ingest") {
-      try {
-        ServerSocket().use { server ->
-          listener = server
-          server.bind(InetSocketAddress(host, 1935), 1)
-          server.soTimeout = 1000
-          while (active) {
-            val socket = try { server.accept() } catch (_: SocketTimeoutException) { continue }
-            if (socket.inetAddress != source) { socket.close(); continue }
-            connected = true
-            peer = socket
-            try { session(socket) } catch (_: Exception) {
-              // Disconnect the malformed or unavailable publisher; never leak stream credentials.
-            } finally {
-              connected = false
-              peer = null
-              socket.close()
+    try {
+      thread(name = "SweatyOBS-ingest") {
+        try {
+          server.use {
+            while (active) {
+              val socket = try { it.accept() } catch (_: SocketTimeoutException) { continue }
+              if (!active) { socket.close(); break }
+              if (socket.inetAddress != source) { socket.close(); continue }
+              connected = true
+              peer = socket
+              try { socket.use { client -> session(client) } } catch (_: Exception) {
+                // One malformed peer must not crash the phone or restart the stream.
+              } finally {
+                connected = false
+                peer = null
+              }
             }
           }
+        } catch (_: Exception) {
+          if (active) lastFailure = "Listener closed unexpectedly"
+        } finally {
+          active = false
+          connected = false
+          listener = null
+          peer = null
         }
-      } finally {
-        active = false
-        listener = null
       }
+    } catch (e: Exception) {
+      active = false
+      listener = null
+      runCatching { server.close() }
+      throw IllegalStateException("RTMP worker unavailable", e)
     }
   }
 
@@ -106,7 +128,7 @@ class LanRtmpIngest(
     }
   }
 
-  fun stop() {
+  @Synchronized fun stop() {
     active = false
     runCatching { peer?.close() }
     runCatching { listener?.close() }
