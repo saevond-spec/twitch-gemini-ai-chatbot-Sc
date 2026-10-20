@@ -14,6 +14,7 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
 import com.saevond.sweatyobs.ingest.AvcFlv
+import com.saevond.sweatyobs.ingest.AvcFlvConfig
 import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
 import com.saevond.sweatyobs.ingest.RtmpMessage
 import java.io.Closeable
@@ -44,7 +45,7 @@ internal class BrandVideoOverlay(
   private var pendingBytes = 0
   private val closed = AtomicBoolean(false)
   private var configMessage: RtmpMessage? = null
-  private var config: AvcFlvConfigHolder? = null
+  private var config: AvcFlvConfig? = null
   private var decoder: MediaCodec? = null
   private var encoder: MediaCodec? = null
   private var encoderInputSurface: Surface? = null
@@ -58,14 +59,6 @@ internal class BrandVideoOverlay(
   private var lastOutputTimestampMs = -1L
   private var announcedConfig = false
   private var lastStatusAt = 0L
-
-  private data class AvcFlvConfigHolder(
-    val nalLengthBytes: Int,
-    val sps: ByteArray,
-    val pps: ByteArray,
-    val width: Int,
-    val height: Int
-  )
 
   fun setConfiguration(message: RtmpMessage) {
     if (closed.get()) return
@@ -156,8 +149,7 @@ internal class BrandVideoOverlay(
   private fun configure(message: RtmpMessage) {
     releaseCodecs()
     val parsed = AvcFlv.parseConfig(message)
-    val holder = AvcFlvConfigHolder(parsed.nalLengthBytes, parsed.sps, parsed.pps, parsed.width, parsed.height)
-    val decoderInfo = findDecoder(holder.width, holder.height)
+    val decoderInfo = findDecoder(parsed.width, parsed.height)
     val profile = chooseEncoderProfile(holder.width, holder.height)
     outputWidth = profile.first
     outputHeight = profile.second
@@ -187,7 +179,7 @@ internal class BrandVideoOverlay(
       val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight)
       val gl = try {
         GlBrandCompositor(
-          encoderSurface, holder.width, holder.height, outputWidth, outputHeight,
+          encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
           overlayCanvas, handler,
           onFrame = { drainEncoder() },
           onFailure = { error -> fail("Brand overlay compositor failed (${error.javaClass.simpleName})") }
@@ -199,9 +191,9 @@ internal class BrandVideoOverlay(
       createdCompositor = gl
       val videoDecoder = MediaCodec.createByCodecName(decoderInfo.name)
       try {
-        val decodeFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, holder.width, holder.height)
-        decodeFormat.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + holder.sps))
-        decodeFormat.setByteBuffer("csd-1", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + holder.pps))
+        val decodeFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, parsed.width, parsed.height)
+        decodeFormat.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.sps))
+        decodeFormat.setByteBuffer("csd-1", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.pps))
         videoDecoder.configure(decodeFormat, gl.decoderSurface, null, 0)
         videoEncoder.start()
         videoDecoder.start()
@@ -216,7 +208,7 @@ internal class BrandVideoOverlay(
       createdInputSurface = null
       compositor = gl
       createdCompositor = null
-      config = holder
+      config = parsed
       announcedConfig = false
       lastOutputTimestampMs = -1L
       runCatching { onStatus("@saevond overlay active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode") }

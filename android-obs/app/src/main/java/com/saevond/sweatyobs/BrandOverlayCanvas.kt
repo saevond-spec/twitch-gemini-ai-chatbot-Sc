@@ -297,7 +297,8 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
 
     panel(1550f, 371f, 1890f, 890f, CYAN)
     drawText("◈  CHAT PREVIEW  //  SIMULATED", 1570f, 408f, 16f, WHITE, bold = true, spacing = .02f)
-    canvas.drawLine(1570f, 422f, 1870f, 422f, paint(Color.argb(145, CYAN), 1f, Paint.Style.STROKE))
+    canvas.drawLine(1570f, 422f, 1870f, 422f,
+      paint(Color.argb(145, Color.red(CYAN), Color.green(CYAN), Color.blue(CYAN)), 1f, Paint.Style.STROKE))
     val rows = chat.toList()
     rows.forEachIndexed { index, row ->
       val y = 450f + index * 53f
@@ -336,7 +337,8 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
       val x = cell.first
       val label = cell.second
       val (value, color) = cell.third
-      if (index > 0) canvas.drawLine(x - 20f, 919f, x - 20f, 975f, paint(Color.argb(92, CYAN), 1f, Paint.Style.STROKE))
+      if (index > 0) canvas.drawLine(x - 20f, 919f, x - 20f, 975f,
+        paint(Color.argb(92, Color.red(CYAN), Color.green(CYAN), Color.blue(CYAN)), 1f, Paint.Style.STROKE))
       drawFit(label, x, 934f, 300f, 12f, MUTED, bold = true, spacing = .055f)
       val pulse = if (now - eventsPulseAt < 550L && index != 2 && index != 5) 1.12f else 1f
       drawFit(value, x, 964f, 300f, 16f * pulse, color, bold = true)

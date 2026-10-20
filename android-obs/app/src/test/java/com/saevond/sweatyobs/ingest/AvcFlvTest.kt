@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Random
 
 class AvcFlvTest {
   @Test fun sampleConvertsLengthPrefixedNalsToAnnexB() {
@@ -40,5 +41,23 @@ class AvcFlvTest {
     assertEquals(1, message.data[1].toInt())
     assertTrue(message.data.copyOfRange(5, message.data.size).contentEquals(
       byteArrayOf(0, 0, 0, 2, 0x65, 0x44)))
+  }
+
+  @Test fun malformedAvcSamplesStayInsideParserBounds() {
+    val random = Random(0x5ae70L)
+    repeat(5_000) {
+      val length = 6 + random.nextInt(2_043)
+      val data = ByteArray(length).also(random::nextBytes)
+      data[0] = 0x17
+      data[1] = 1
+      val config = AvcFlvConfig(1 + random.nextInt(4), byteArrayOf(0x67), byteArrayOf(0x68), 1280, 720)
+      try {
+        AvcFlv.sample(RtmpMessage(9, 0, 1, data), config)?.let { output ->
+          assertTrue("converted AVC sample must remain bounded", output.size <= length + 4 * 256)
+        }
+      } catch (_: IllegalArgumentException) {
+        // Reject malformed NAL lengths before handing input to MediaCodec.
+      }
+    }
   }
 }

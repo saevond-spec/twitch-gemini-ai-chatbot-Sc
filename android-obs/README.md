@@ -29,15 +29,17 @@ With the overlay enabled, the app decodes the PS5 H.264 feed, composites the ful
 
 ## Upload and latency budget
 
-At the 1080p overlay profile, the video encoder targets 8 Mbps and the AAC mixer targets 128 kbps. Every selected platform receives its own copy, so the ideal payload rate is `destinations × (8.000 + 0.128) Mbps`. Keeping payload below 70% of a measured, sustained phone upload rate leaves about 30% for Wi-Fi variation and protocol overhead:
+At the 1080p overlay profile, the video encoder targets 8 Mbps and the AAC mixer targets 128 kbps. Every selected platform receives its own copy, so the ideal payload rate is `destinations × (8.000 + 0.128) Mbps`. [Kick's current Go Live guidance](https://help.kick.com/en/articles/15159752-settings-and-stream-quality-on-the-kick-go-live-app) recommends keeping bitrate below half of upload speed. Applying that conservative ratio to the app's aggregate stream payload gives these planning thresholds:
 
-| Destinations | Ideal media upload | Sustained upload target with 30% headroom |
+| Destinations | Ideal media upload | Sustained upload target at 50% payload utilization |
 | --- | ---: | ---: |
-| 1 | 8.13 Mbps | at least 12 Mbps |
-| 2 | 16.26 Mbps | at least 24 Mbps |
-| 3 | 24.38 Mbps | at least 35 Mbps |
+| 1 | 8.13 Mbps | over 16.3 Mbps |
+| 2 | 16.26 Mbps | over 32.6 Mbps |
+| 3 | 24.38 Mbps | over 48.8 Mbps |
 
-These are planning thresholds, not a speed guarantee. The sender keeps at most 2.5 MB, 1.5 seconds of media, or 2 seconds of queued age per destination, whichever limit is reached first; it discards stale media and waits for a keyframe rather than letting delay grow indefinitely. The overlay input queue is capped at 12 frames (about 200 ms at 60 fps or 400 ms at 30 fps). Encoding, internet routing, ingest servers, and viewer players add delay outside those queue bounds. **Good** output health means under 300 ms queued, **Fair** is 300–899 ms, and **Poor** starts at 900 ms. For a stable three-platform 1080p stream, verify at least 35 Mbps sustained upload and keep every destination at Good health with no skipped packets during a real test.
+These are planning thresholds, not a speed guarantee or a measured network test. [YouTube currently recommends 17 Mbps H.264 for 1080p60](https://support.google.com/youtube/answer/2853702?hl=en); [Kick's guide lists 6–8 Mbps for 1080p60 with an 8 Mbps maximum](https://help.kick.com/en/articles/7066931-how-to-stream-on-kick-com). This app uses one shared 8 Mbps video encode for all destinations, so it cannot simultaneously meet YouTube's 17 Mbps recommendation and Kick's 8 Mbps limit. The current profile targets Kick's upper range, not YouTube's highest recommended quality; platform-specific encoders would be needed to meet both targets. The overlay does not output 4K. [Twitch's current broadcast guidance lists 6,000 kbps](https://help.twitch.tv/s/article/broadcasting-guidelines), so validate the shared 8 Mbps profile with Twitch before using that destination.
+
+The sender keeps at most 2.5 MB, 1.5 seconds of media, or 2 seconds of queued age per destination, whichever limit is reached first; it discards stale media and waits for a keyframe rather than letting delay grow indefinitely. The overlay input queue is capped at 12 frames (about 200 ms at 60 fps or 400 ms at 30 fps). Encoding, internet routing, ingest servers, and viewer players add delay outside those queue bounds. **Good** output health means under 300 ms queued, **Fair** is 300–899 ms, and **Poor** starts at 900 ms. For three 1080p outputs under the conservative half-upload planning rule, measure more than 48.8 Mbps sustained upload and keep every destination at Good health with no skipped packets during a real test.
 
 The health label describes this app's output queue only. It is not a platform health check or an internet speed test. A successful RTMPS publish acknowledgement does not prove that viewers see or hear the stream.
 
