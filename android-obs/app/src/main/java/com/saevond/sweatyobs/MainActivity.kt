@@ -71,6 +71,7 @@ class MainActivity : Activity() {
       text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
     }
     val destinations = TextView(this).apply {
+      id = R.id.output_upload_budget
       text = "Each RTMPS output has an independent retry loop. At 1080p, this encoder sends 8 Mbps video + 128 kbps AAC to each destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule. Check measured upload and output health; lower bitrate or destinations if needed."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
