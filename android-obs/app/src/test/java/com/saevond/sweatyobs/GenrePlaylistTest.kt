@@ -41,10 +41,19 @@ class GenrePlaylistTest {
     p.configure("club",true,true)
     assertNotNull(p.next())
   }
-  @Test fun rejectsUntrustedOrHugeCatalog() {
-    val p=GenrePlaylist()
-    try {p.setTracks("club",listOf("https://youtube.com/music")); fail()}catch (_: IllegalArgumentException){}
-    try {p.configure("rock",true,true); fail()}catch (_: IllegalArgumentException){}
-    try{p.setTracks("dubstep",List(21){"content://dub/$it"});fail()}catch (_:IllegalArgumentException){}
+  @Test fun allowsOnlyVerifiedRemoteNcsTracks() {
+    val p = GenrePlaylist()
+    val remote = RemoteMusicCatalog.forGenre("club").first().audioUrl
+    p.setTracks("club", listOf(remote))
+    assertEquals(remote, p.next())
+    try { p.setTracks("club", listOf("https://youtube.com/music")); fail() }
+    catch (_: IllegalArgumentException) {}
+    try { p.setTracks("club", listOf("https://ncs.io/track/download/00000000-0000-0000-0000-000000000000")); fail() }
+    catch (_: IllegalArgumentException) {}
+  }
+  @Test fun rejectsInvalidStationAndOversizedCatalog() {
+    val p = GenrePlaylist()
+    try { p.configure("rock",true,true); fail() } catch (_: IllegalArgumentException) {}
+    try { p.setTracks("dubstep",List(21){"content://dub/$it"});fail() } catch (_:IllegalArgumentException) {}
   }
 }
