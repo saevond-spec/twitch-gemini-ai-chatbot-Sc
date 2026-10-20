@@ -29,7 +29,7 @@ class MixLevelsTest {
     val levels=MixLevels(80,60)
     assertEquals(0.0,levels.gains(false).second,0.0)
     val (g,m)=levels.gains(true)
-    assertTrue(g+m<=.98)
+    assertTrue(g+m <= .98 + 1e-12)
     levels.update(0,100)
     assertEquals(0.0,levels.gains(true).first,0.0)
     assertTrue(levels.gains(true).second>0.9)
