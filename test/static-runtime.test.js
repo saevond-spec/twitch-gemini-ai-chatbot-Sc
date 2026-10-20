@@ -359,7 +359,10 @@ test('reliable join welcomes use IRC plus Get Chatters fallback', () => {
   const helix = fs.readFileSync(path.join(root, 'src/twitch/helix.js'), 'utf8');
   const watcher = fs.readFileSync(path.join(root, 'src/twitch/chatterWatcher.js'), 'utf8');
 
+  assert.match(auth, /CORE_BOT_SCOPES/);
+  assert.match(auth, /OPTIONAL_BOT_SCOPES/);
   assert.match(auth, /moderator:read:chatters/);
+  assert.match(auth, /BOT_SCOPES = \[\.\.\.CORE_BOT_SCOPES, \.\.\.OPTIONAL_BOT_SCOPES\]/);
   assert.match(helix, /\/chat\/chatters/);
   assert.match(app, /new ChatterWatcher/);
   assert.match(app, /chatterWatcher\.observeIrcJoin/);
