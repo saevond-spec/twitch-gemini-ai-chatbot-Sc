@@ -17,8 +17,8 @@ fun interface MusicControlSink {
 class MusicBridgePoller(
   private val origin: String,
   private val token: String,
-  private val mixer: MusicControlSink,
-  private val statusSink: (String) -> Unit = {}
+  private val statusSink: (String) -> Unit = {},
+  private val mixer: MusicControlSink
 ) {
   @Volatile private var active = false
   private var worker: Thread? = null
