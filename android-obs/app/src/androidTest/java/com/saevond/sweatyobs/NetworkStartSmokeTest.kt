@@ -19,6 +19,7 @@ class NetworkStartSmokeTest {
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
   @Test fun invalidAddressTapReportsVisibleFailure() {
+    onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("Enter the PS5"))))
   }
