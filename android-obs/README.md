@@ -30,3 +30,7 @@ Goal: PS5 gameplay on Android + free streaming app + local licensed music contro
 5. Check thermal throttling, battery use, reconnection, RTMPS stream ingest, VOD audio, chat latency, and audio clipping before production use.
 
 Project branch: `feat/stream-encoder-mvp`, draft PR #48. Do not merge or deploy to live Twitch until device tests pass.
+
+## Background Twitch chat / privacy mode
+
+The Android foreground capture/encoder service continues when the app UI is no longer visible. A **Chat Safe Mode** button replaces the encoded phone screen with black video and silences captured-app sound while keeping licensed local music and authenticated `!play` available. On Android 14+ when an individual shared app is hidden, the MediaProjection visibility callback also engages this privacy guard. **This does not keep PS5 gameplay visible or audible** while the user chats: true PS5 gameplay needs a separate capture feed not dependent on the phone's screen, or a second device. There is no PlayStation login bypass. This code is experimental until tested on the phone and Twitch ingest.
