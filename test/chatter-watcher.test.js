@@ -168,3 +168,44 @@ test('401/403 disables polling until updated OAuth scope is granted', async () =
   await watcher.tick();
   assert.equal(watcher.disabledReason, 'missing_moderator_read_chatters');
 });
+
+
+test('OAuth scope upgrade resumes watcher, rebuilds baseline, and welcomes only future arrivals', async () => {
+  const arrivals = [];
+  let calls = 0;
+  let now = 6_000_000;
+  const watcher = new ChatterWatcher({
+    helix: {
+      async getUserByLogin(login) { return { id: 'broadcaster-1', login }; },
+      async getTokenOwnerId() { return 'moderator-1'; },
+      async getChatters() {
+        calls += 1;
+        if (calls === 1) {
+          const err = new Error('missing scope');
+          err.response = { status: 401 };
+          throw err;
+        }
+        if (calls === 2) return [{ user_login: 'alice' }, { user_login: 'bob' }];
+        return [{ user_login: 'alice' }, { user_login: 'bob' }, { user_login: 'charlie' }];
+      },
+    },
+    channels: ['saevond'],
+    botLogin: 'sweatyclanker',
+    ignoredUsers: [],
+    now: () => now,
+    onArrival: async event => arrivals.push(event),
+  });
+
+  watcher.running = true;
+  await watcher.tick();
+  assert.equal(watcher.disabledReason, 'missing_moderator_read_chatters');
+
+  const resumed = await watcher.resumeAfterAuthorization();
+  assert.equal(resumed, true);
+  assert.equal(watcher.disabledReason, null);
+  assert.equal(arrivals.length, 0, 'existing chatters must become baseline after OAuth upgrade');
+
+  now += 30_000;
+  await watcher.tick();
+  assert.deepEqual(arrivals.map(event => event.username), ['charlie']);
+});
