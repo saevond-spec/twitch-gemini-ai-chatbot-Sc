@@ -9,6 +9,7 @@ class MediaRelayGate {
   private var timelineOffset = 0L
   private var videoTime = 0L
   private var audioTime = 0L
+  private var outputReconnectRequested = false
   var frames = 0L
     private set
 
@@ -20,8 +21,7 @@ class MediaRelayGate {
       if ((bytes[0].toInt() and 15) != 7) return emptyList() // AVC only
       when (bytes[1].toInt() and 255) {
         0 -> {
-          if (live) throw IllegalStateException("Video configuration changed during relay")
-          if (bytes.size >= 8) videoConfig = message.copy(data = bytes.copyOf())
+          if (bytes.size >= 8) updateVideoConfig(message)
           return emptyList()
         }
         1 -> {}
@@ -31,8 +31,7 @@ class MediaRelayGate {
       if ((bytes[0].toInt() and 240) != 0xa0) return emptyList() // AAC only
       when (bytes[1].toInt() and 255) {
         0 -> {
-          if (live) throw IllegalStateException("Audio configuration changed during relay")
-          if (bytes.size >= 4) audioConfig = message.copy(data = bytes.copyOf())
+          if (bytes.size >= 4) updateAudioConfig(message)
           return emptyList()
         }
         1 -> {}
@@ -61,6 +60,40 @@ class MediaRelayGate {
     return listOf(message.copy(timestamp = monotonic, streamId = 1))
   }
 
+  /** True once after a changed codec header invalidates the current output session. */
+  fun consumeOutputReconnectRequest(): Boolean {
+    val requested = outputReconnectRequested
+    outputReconnectRequested = false
+    return requested
+  }
+
+  private fun updateVideoConfig(message: RtmpMessage) {
+    val next = message.copy(data = message.data.copyOf())
+    val previous = videoConfig
+    if (live && previous != null && !previous.data.contentEquals(next.data)) {
+      beginCodecReconfiguration()
+    }
+    videoConfig = next
+  }
+
+  private fun updateAudioConfig(message: RtmpMessage) {
+    val next = message.copy(data = message.data.copyOf())
+    val previous = audioConfig
+    if (live && previous != null && !previous.data.contentEquals(next.data)) {
+      beginCodecReconfiguration()
+    }
+    audioConfig = next
+  }
+
+  private fun beginCodecReconfiguration() {
+    // Drop deltas until a keyframe arrives, then begin a fresh RTMPS session
+    // with new headers on a monotonic output timeline.
+    timelineOffset = maxOf(videoTime, audioTime, timelineOffset) + 1L
+    baseTime = null
+    live = false
+    outputReconnectRequested = true
+  }
+
   /** Reset codec headers for a reconnected PS5 session while preserving output timestamps. */
   fun resetForSourceReconnect() {
     timelineOffset = maxOf(videoTime, audioTime, timelineOffset) + 1L
@@ -68,5 +101,6 @@ class MediaRelayGate {
     audioConfig = null
     live = false
     baseTime = null
+    outputReconnectRequested = false
   }
 }
