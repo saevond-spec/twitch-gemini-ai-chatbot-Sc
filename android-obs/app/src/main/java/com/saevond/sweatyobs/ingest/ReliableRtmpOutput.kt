@@ -83,6 +83,7 @@ class ReliableRtmpOutput(
   }
 
   private data class Pending(val message: RtmpMessage, val enqueuedAtMs: Long)
+  private data class StartGeneration(val media: Long, val connection: Long)
   private val lock = Object()
   private val queue = ArrayDeque<Pending>()
   private var queueBytes = 0
@@ -91,6 +92,8 @@ class ReliableRtmpOutput(
   private var aligned = false
   /** Changes whenever a reset makes a previous sender failure stale. */
   private var mediaGeneration = 0L
+  /** Changes when the current destination connection must be abandoned. */
+  private var connectionGeneration = 0L
   private var running = false
   @Volatile private var publisher: MediaPublisher? = null
   @Volatile private var worker: Thread? = null
@@ -144,7 +147,10 @@ class ReliableRtmpOutput(
         // Keep the visible state accurate until the in-flight handshake finishes.
         state = if (wasConnecting) "CONNECTING" else "WAITING FOR KEYFRAME"
         queueReset = true
-        if (wasLive) publisherToAbort = publisher
+        if (wasLive) {
+          connectionGeneration++
+          publisherToAbort = publisher
+        }
         enqueueStartupGopLocked(message)
         if (wasConnecting) state = "CONNECTING"
         lock.notifyAll()
@@ -172,7 +178,10 @@ class ReliableRtmpOutput(
       avcConfig = null
       aacConfig = null
       aligned = false
-      if (state == "LIVE") publisherToAbort = publisher
+      if (state == "LIVE") {
+        connectionGeneration++
+        publisherToAbort = publisher
+      }
       if (state != "CONNECTING") state = "WAITING FOR KEYFRAME"
       lock.notifyAll()
     }
@@ -187,6 +196,7 @@ class ReliableRtmpOutput(
     synchronized(lock) {
       if (!running) return
       mediaGeneration++
+      connectionGeneration++
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
       aligned = false
@@ -207,6 +217,7 @@ class ReliableRtmpOutput(
     synchronized(lock) {
       running = false
       mediaGeneration++
+      connectionGeneration++
       clearQueueLocked()
       avcConfig = null
       aacConfig = null
@@ -227,8 +238,11 @@ class ReliableRtmpOutput(
     while (isRunning()) {
       var active: MediaPublisher? = null
       var activeMediaGeneration = -1L
+      var activeConnectionGeneration = -1L
       try {
-        activeMediaGeneration = awaitFreshStartAndMarkConnecting() ?: break
+        val startGeneration = awaitFreshStartAndMarkConnecting() ?: break
+        activeMediaGeneration = startGeneration.media
+        activeConnectionGeneration = startGeneration.connection
         notifySnapshot()
         active = publisherFactory(destination)
         publisher = active
@@ -236,7 +250,14 @@ class ReliableRtmpOutput(
         if (!isRunning()) break
         // A queue overflow during connect may invalidate the original start GOP.
         // Keep the successful publisher open and wait here for a fresh keyframe.
-        activeMediaGeneration = awaitFreshStartAndMarkLive() ?: break
+        val liveGeneration = awaitFreshStartAndMarkLive(activeConnectionGeneration)
+        if (liveGeneration == null) {
+          if (!isRunning()) break
+          // A manual reconnect or source reset invalidated this publisher while
+          // it was waiting for a keyframe. Retire it and wait for a new start.
+          continue
+        }
+        activeMediaGeneration = liveGeneration.media
         if (everConnected) reconnects++
         everConnected = true
         failures = 0
@@ -261,7 +282,7 @@ class ReliableRtmpOutput(
             aligned = false
             mediaGeneration++
           }
-          state = "RETRYING"
+          state = if (connectionGeneration != activeConnectionGeneration) "WAITING FOR KEYFRAME" else "RETRYING"
           lock.notifyAll()
         }
         notifySnapshot()
@@ -269,7 +290,12 @@ class ReliableRtmpOutput(
         val wait = (base * (0.9 + Math.random() * 0.1)).toLong()
         try {
           if (waitMs != null) waitMs.invoke(wait)
-          else synchronized(lock) { if (running) lock.wait(wait) }
+          else synchronized(lock) {
+            val reconnectWasRequested = connectionGeneration != activeConnectionGeneration
+            val freshGopAlreadyQueued = activeMediaGeneration != mediaGeneration && aligned &&
+              queue.isNotEmpty() && !queueExceedsLimitsLocked()
+            if (running && !reconnectWasRequested && !freshGopAlreadyQueued) lock.wait(wait)
+          }
         } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       } finally {
         active?.close()
@@ -280,11 +306,11 @@ class ReliableRtmpOutput(
     notifySnapshot()
   }
 
-  private fun awaitFreshStartAndMarkConnecting(): Long? = synchronized(lock) {
+  private fun awaitFreshStartAndMarkConnecting(): StartGeneration? = synchronized(lock) {
     while (running) {
       if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
         state = "CONNECTING"
-        return@synchronized mediaGeneration
+        return@synchronized StartGeneration(mediaGeneration, connectionGeneration)
       }
       if (aligned && queue.isNotEmpty()) {
         droppedPackets += queue.size.toLong()
@@ -298,11 +324,11 @@ class ReliableRtmpOutput(
     null
   }
 
-  private fun awaitFreshStartAndMarkLive(): Long? = synchronized(lock) {
-    while (running) {
+  private fun awaitFreshStartAndMarkLive(expectedConnectionGeneration: Long): StartGeneration? = synchronized(lock) {
+    while (running && connectionGeneration == expectedConnectionGeneration) {
       if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
         state = "LIVE"
-        return@synchronized mediaGeneration
+        return@synchronized StartGeneration(mediaGeneration, connectionGeneration)
       }
       if (aligned && queue.isNotEmpty()) {
         droppedPackets += queue.size.toLong()
