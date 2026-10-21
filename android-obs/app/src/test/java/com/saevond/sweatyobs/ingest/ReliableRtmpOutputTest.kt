@@ -130,7 +130,7 @@ class ReliableRtmpOutputTest {
 
       // Force the media-time queue bound while TLS/RTMPS setup is still blocked.
       output.offer(RtmpMessage(9, 101, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
-      assertEquals("WAITING FOR KEYFRAME", output.snapshot().state)
+      assertEquals("CONNECTING", output.snapshot().state)
       assertEquals("overflow during connect must not close the publisher", 0, closeCalls.get())
       assertEquals("overflow must still clear stale media", 0, output.snapshot().queueBytes)
 
@@ -138,6 +138,8 @@ class ReliableRtmpOutputTest {
       // that completes just after a GOP/queue window has expired.
       releaseConnect.countDown()
       assertTrue("blocked connect should finish", connectReturned.await(3, TimeUnit.SECONDS))
+      assertTrue("the connected sender should wait for a new keyframe",
+        pollUntil(3_000) { output.snapshot().state == "WAITING FOR KEYFRAME" })
       assertEquals("successful connection should stay open while waiting for media", 0, closeCalls.get())
 
       output.offer(keyframe(500))
@@ -147,6 +149,74 @@ class ReliableRtmpOutputTest {
       assertEquals(listOf(9, 8, 9), sent.take(3).map { it.type })
       assertEquals(listOf(0L, 0L, 0L), sent.take(3).map { it.timestamp })
       assertEquals("LIVE", output.snapshot().state)
+    } finally {
+      releaseConnect.countDown()
+      output.close()
+    }
+  }
+
+  @Test fun sourceSessionResetInvalidatesOldCodecHeadersAndKeyframe() {
+    val connectEntered = CountDownLatch(1)
+    val connectReturned = CountDownLatch(1)
+    val releaseConnect = CountDownLatch(1)
+    val firstBatch = CountDownLatch(3)
+    val attempts = AtomicInteger()
+    val closeCalls = AtomicInteger()
+    val sent = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {
+            connectEntered.countDown()
+            check(releaseConnect.await(10, TimeUnit.SECONDS)) { "blocked fake connect was not released" }
+            connectReturned.countDown()
+          }
+          override fun publish(media: RtmpMessage) {
+            sent += media
+            firstBatch.countDown()
+          }
+          override fun close() { closeCalls.incrementAndGet() }
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      waitMs = { Thread.sleep(1) }
+    )
+    val newAvcConfig = avcConfig().copy(data = byteArrayOf(0x17, 0, 0, 0, 0, 9, 9, 9))
+    val newAacConfig = aacConfig().copy(data = byteArrayOf(0xaf.toByte(), 0, 0x34, 0x12))
+    val newKeyframe = keyframe(500).copy(data = byteArrayOf(0x17, 1, 0, 0, 0, 0, 0, 9))
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(100))
+      assertTrue("old source should start destination connect", connectEntered.await(3, TimeUnit.SECONDS))
+
+      output.resetForSourceSession()
+      assertEquals("CONNECTING", output.snapshot().state)
+      assertEquals("source reset must discard the old queued GOP", 0, output.snapshot().queueBytes)
+      releaseConnect.countDown()
+      assertTrue("destination handshake should finish", connectReturned.await(3, TimeUnit.SECONDS))
+      assertTrue("connected destination should await new source media",
+        pollUntil(3_000) { output.snapshot().state == "WAITING FOR KEYFRAME" })
+
+      // A keyframe without new codec headers must not reuse prior-session config.
+      output.offer(keyframe(400))
+      Thread.sleep(40)
+      assertTrue("old codec headers must not make a new-session keyframe publishable", sent.isEmpty())
+      assertEquals(0, closeCalls.get())
+
+      output.offer(newAvcConfig)
+      output.offer(newAacConfig)
+      output.offer(newKeyframe)
+      assertTrue("new source headers and keyframe should resume the connected output",
+        firstBatch.await(3, TimeUnit.SECONDS))
+      assertEquals("source reconnect should reuse the already established destination", 1, attempts.get())
+      assertArrayEquals(newAvcConfig.data, sent[0].data)
+      assertArrayEquals(newAacConfig.data, sent[1].data)
+      assertArrayEquals(newKeyframe.data, sent[2].data)
+      assertEquals(0, closeCalls.get())
     } finally {
       releaseConnect.countDown()
       output.close()
