@@ -1232,7 +1232,7 @@ class ReliableRtmpOutputTest {
               override fun close() {
                 if (index == 1) {
                   firstCloseEntered.countDown()
-                  try { releaseFirstClose.await(5, TimeUnit.SECONDS) }
+                  try { releaseFirstClose.await(10, TimeUnit.SECONDS) }
                   finally { firstCloseFinished.countDown() }
                 }
               }
