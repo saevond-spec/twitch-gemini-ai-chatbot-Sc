@@ -335,7 +335,7 @@ class ReliableRtmpOutputTest {
           override fun connect() {
             if (session == 1) {
               firstConnectEntered.countDown()
-              check(releaseFirstConnect.await(2, TimeUnit.SECONDS)) { "first fake connect was not released" }
+              check(releaseFirstConnect.await(10, TimeUnit.SECONDS)) { "first fake connect was not released" }
             } else {
               secondConnected.countDown()
             }
@@ -378,6 +378,122 @@ class ReliableRtmpOutputTest {
       assertEquals(2, attempts.get())
     } finally {
       releaseFirstConnect.countDown()
+      output.close()
+    }
+  }
+
+  @Test fun manualReconnectDuringPublisherFactorySkipsTheStaleConnect() {
+    val factoryEntered = CountDownLatch(1)
+    val releaseFactory = CountDownLatch(1)
+    val stalePublisherClosed = CountDownLatch(1)
+    val secondConnected = CountDownLatch(1)
+    val attempts = AtomicInteger()
+    val staleConnectCalls = AtomicInteger()
+    val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val session = attempts.incrementAndGet()
+        if (session == 1) {
+          factoryEntered.countDown()
+          check(releaseFactory.await(10, TimeUnit.SECONDS)) { "stale factory was not released" }
+        }
+        object : MediaPublisher {
+          override fun connect() {
+            if (session == 1) staleConnectCalls.incrementAndGet() else secondConnected.countDown()
+          }
+          override fun publish(media: RtmpMessage) {
+            if (session == 2) resumedPackets += media
+          }
+          override fun close() {
+            if (session == 1) stalePublisherClosed.countDown()
+          }
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      waitMs = { Thread.sleep(1) }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("publisher factory should start", factoryEntered.await(2, TimeUnit.SECONDS))
+
+      // Reconnect before the first publisher has been assigned. The old factory
+      // result must be closed without starting a stale network handshake.
+      output.reconnectNow()
+      releaseFactory.countDown()
+      assertTrue("stale publisher should be retired", stalePublisherClosed.await(2, TimeUnit.SECONDS))
+      assertEquals("stale publisher must not connect", 0, staleConnectCalls.get())
+
+      output.offer(keyframe(120))
+      assertTrue("fresh publisher should connect", secondConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("fresh publisher should receive a complete GOP", pollUntil(2_000) { resumedPackets.size >= 3 })
+      assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), resumedPackets.take(3).map { it.timestamp })
+      assertEquals(2, attempts.get())
+    } finally {
+      releaseFactory.countDown()
+      output.close()
+    }
+  }
+
+  @Test fun manualReconnectBetweenLiveSnapshotAndDequeueKeepsTheFreshGopIntact() {
+    val liveSnapshotEntered = CountDownLatch(1)
+    val releaseLiveSnapshot = CountDownLatch(1)
+    val secondConnected = CountDownLatch(1)
+    val firstLiveSnapshot = AtomicInteger()
+    val attempts = AtomicInteger()
+    val stalePackets = CopyOnWriteArrayList<RtmpMessage>()
+    val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val firstCloseCount = AtomicInteger()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val session = attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {
+            if (session == 2) secondConnected.countDown()
+          }
+          override fun publish(media: RtmpMessage) {
+            if (session == 1 && firstCloseCount.get() > 0) throw IOException("stale publisher was closed")
+            if (session == 1) stalePackets += media else resumedPackets += media
+          }
+          override fun close() {
+            if (session == 1) firstCloseCount.incrementAndGet()
+          }
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      onSnapshot = { snapshot ->
+        if (snapshot.state == "LIVE" && firstLiveSnapshot.compareAndSet(0, 1)) {
+          liveSnapshotEntered.countDown()
+          check(releaseLiveSnapshot.await(10, TimeUnit.SECONDS)) { "LIVE snapshot was not released" }
+        }
+      }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("worker should pause after marking the first publisher LIVE",
+        liveSnapshotEntered.await(2, TimeUnit.SECONDS))
+
+      output.reconnectNow()
+      output.offer(keyframe(250))
+      releaseLiveSnapshot.countDown()
+
+      assertTrue("new publisher should connect", secondConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("new publisher should receive the complete fresh GOP",
+        pollUntil(2_000) { resumedPackets.size >= 3 })
+      assertTrue("stale publisher must not consume any fresh-GOP packets", stalePackets.isEmpty())
+      assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), resumedPackets.take(3).map { it.timestamp })
+      assertEquals(2, attempts.get())
+    } finally {
+      releaseLiveSnapshot.countDown()
       output.close()
     }
   }
