@@ -14,6 +14,36 @@ const FAILURE_PHASES = new Set(['audio_mix', 'relay_gate', 'overlay_config', 'ov
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VERSION = /^[a-zA-Z0-9._-]{1,32}$/;
+const EVENT_MODES = new Set(['idle', 'diagnostic', 'public']);
+const EVENT_NAMES = new Set([
+  'app_opened', 'diagnostics_enabled', 'destination_toggled', 'stream_key_saved', 'server_url_saved',
+  'overlay_toggled', 'profile_selected', 'stream_start_requested', 'stream_start_rejected',
+  'diagnostic_start_requested', 'diagnostic_start_rejected', 'stop_requested', 'manual_reconnect_requested',
+  'manual_reconnect_rejected', 'service_started', 'service_start_failed', 'service_stopped',
+  'receiver_listening', 'source_connected', 'source_publishing', 'source_disconnected',
+  'ingest_state_changed', 'output_state_changed', 'output_retry', 'stale_packets_dropped',
+  'keyframe_wait', 'overlay_ready', 'overlay_fallback', 'music_play', 'music_pause', 'music_skip',
+  'music_station_selected', 'music_decode_failed', 'music_bridge_state', 'music_command_applied',
+  'safety_warning', 'safety_stop', 'permission_state', 'file_picker_failed', 'metadata_copied',
+  'bot_token_saved', 'diagnostic_test_requested', 'setting_changed', 'dashboard_opened',
+  'catalog_opened', 'track_selection_saved', 'music_file_selected', 'safety_check_requested',
+  'bridge_check_requested', 'ps5_address_saved',
+]);
+const EVENT_RESULTS = new Set([
+  'none', 'requested', 'accepted', 'rejected', 'started', 'failed', 'stopped', 'enabled', 'disabled',
+  'connected', 'disconnected', 'publishing', 'live', 'connecting', 'retrying', 'waiting', 'dropped',
+  'warning', 'blocked', 'saved', 'selected', 'granted', 'denied', 'applied', 'completed',
+]);
+const EVENT_TARGETS = new Set([
+  'none', 'app', 'diagnostics', 'network', 'permissions', 'settings', 'overlay', 'music',
+  'multiple', 'twitch', 'youtube', 'kick',
+]);
+const EVENT_ERRORS = new Set([
+  'NONE', 'IOException', 'IllegalStateException', 'IllegalArgumentException', 'SocketTimeoutException',
+  'UnknownHostException', 'SocketException', 'SSLException', 'MediaCodec', 'OTHER', 'MISSING_CONFIG',
+  'INVALID_INPUT', 'PERMISSION_DENIED', 'NETWORK_CHANGED', 'PHONE_SAFETY', 'SERVICE_START_DENIED',
+  'SOURCE_LOST', 'BRIDGE_AUTH', 'USER_CANCELLED', 'APP_RESTRICTION', 'NO_FILE_PICKER',
+]);
 
 function safeEqual(expected, candidate) {
   if (typeof expected !== 'string' || !expected || typeof candidate !== 'string') return false;
@@ -107,6 +137,39 @@ function normalizeSample(sample) {
   };
 }
 
+function normalizeEventBatch(batch) {
+  if (!exactKeys(batch, ['sessionId', 'appVersion', 'mode', 'events', 'droppedEvents'])) return null;
+  if (typeof batch.sessionId !== 'string' || !SESSION_ID.test(batch.sessionId) ||
+      typeof batch.appVersion !== 'string' || !VERSION.test(batch.appVersion) ||
+      !EVENT_MODES.has(batch.mode) || !Array.isArray(batch.events) || batch.events.length > 50 ||
+      !boundedInteger(batch.droppedEvents, 0, 1_000_000)) return null;
+  if (batch.events.length === 0 && batch.droppedEvents === 0) return null;
+
+  const events = [];
+  let previousSequence = -1;
+  for (const event of batch.events) {
+    if (!exactKeys(event, ['sequence', 'name', 'result', 'target', 'errorCategory']) ||
+        !boundedInteger(event.sequence, 0, 1_000_000_000_000) || event.sequence <= previousSequence ||
+        !EVENT_NAMES.has(event.name) || !EVENT_RESULTS.has(event.result) || !EVENT_TARGETS.has(event.target) ||
+        !EVENT_ERRORS.has(event.errorCategory)) return null;
+    previousSequence = event.sequence;
+    events.push({
+      sequence: event.sequence,
+      name: event.name,
+      result: event.result,
+      target: event.target,
+      errorCategory: event.errorCategory,
+    });
+  }
+  return {
+    sessionId: batch.sessionId,
+    appVersion: batch.appVersion,
+    mode: batch.mode,
+    events,
+    droppedEvents: batch.droppedEvents,
+  };
+}
+
 /**
  * Short-lived, diagnostics-only upload sessions. The phone uses the existing
  * bridge secret only to mint a scoped token; that token and all reports remain
@@ -158,5 +221,40 @@ export function createEncoderDiagnostics({
     return { status: 202, body: { accepted: 1 } };
   }
 
-  return { enabled, issueSession, ingest };
+  function ingestEvents(authorization, body) {
+    if (!enabled) return { status: 404, body: { error: 'Encoder diagnostics disabled' } };
+    const candidate = bearer(authorization);
+    pruneExpired();
+    const expiresAt = candidate ? sessions.get(digest(candidate)) : undefined;
+    if (!candidate || !expiresAt || expiresAt <= now()) return { status: 401, body: { error: 'Unauthorized' } };
+    const batch = normalizeEventBatch(body);
+    if (!batch) return { status: 400, body: { error: 'Invalid diagnostics event batch' } };
+    try {
+      for (const event of batch.events) {
+        logEvent({
+          kind: 'encoder_app_event',
+          receivedAt: new Date(now()).toISOString(),
+          sessionId: batch.sessionId,
+          appVersion: batch.appVersion,
+          mode: batch.mode,
+          ...event,
+        });
+      }
+      if (batch.droppedEvents > 0) {
+        logEvent({
+          kind: 'encoder_telemetry_overflow',
+          receivedAt: new Date(now()).toISOString(),
+          sessionId: batch.sessionId,
+          appVersion: batch.appVersion,
+          mode: batch.mode,
+          droppedEvents: batch.droppedEvents,
+        });
+      }
+    } catch {
+      return { status: 503, body: { error: 'Diagnostics unavailable' } };
+    }
+    return { status: 202, body: { accepted: batch.events.length, reportedDropped: batch.droppedEvents } };
+  }
+
+  return { enabled, issueSession, ingest, ingestEvents };
 }

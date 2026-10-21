@@ -18,11 +18,11 @@ import android.os.Looper
 import com.saevond.sweatyobs.ingest.LanRtmpIngest
 import com.saevond.sweatyobs.ingest.MediaRelayGate
 import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
+import com.saevond.sweatyobs.ingest.OutputSnapshot
 import com.saevond.sweatyobs.ingest.RtmpMessage
 import com.saevond.sweatyobs.ingest.RtmpDestination
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
 import java.net.Inet4Address
-import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -85,9 +85,11 @@ class Ps5LanService : Service() {
   @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
   private var musicBridge: MusicBridgePoller? = null
-  private var remoteDiagnosticsReporter: RemoteDiagnosticsReporter? = null
-  private val diagnosticSessionId = UUID.randomUUID().toString()
   private var nextDiagnosticReportAtMs = 0L
+  private var lastDiagnosticIngestState: String? = null
+  private val lastDiagnosticOutputStates = mutableMapOf<String, String>()
+  private val lastDiagnosticDroppedPackets = mutableMapOf<String, Long>()
+  private var lastDiagnosticSafetyLevel: SafetyLevel? = null
   private var genrePlaylist: GenrePlaylist? = null
   private var musicDecodeGeneration = 0
   private var decodingTrack = false
@@ -97,6 +99,18 @@ class Ps5LanService : Service() {
       if (stopping) return
       val ingest = receiver ?: return
       val safety = phoneSafety.assess()
+      if (safety.level != lastDiagnosticSafetyLevel) {
+        lastDiagnosticSafetyLevel = safety.level
+        when (safety.level) {
+          SafetyLevel.WARN -> EncoderDiagnostics.record(this@Ps5LanService,
+            EncoderDiagnosticEventName.SAFETY_WARNING, EncoderDiagnosticResult.WARNING,
+            EncoderDiagnosticTarget.APP, EncoderDiagnosticError.PHONE_SAFETY)
+          SafetyLevel.STOP -> EncoderDiagnostics.record(this@Ps5LanService,
+            EncoderDiagnosticEventName.SAFETY_STOP, EncoderDiagnosticResult.STOPPED,
+            EncoderDiagnosticTarget.APP, EncoderDiagnosticError.PHONE_SAFETY)
+          else -> Unit
+        }
+      }
       if (safety.level == SafetyLevel.STOP) {
         setNotification("Stopped for phone safety: " + safety.message)
         terminalReason = true
@@ -104,6 +118,9 @@ class Ps5LanService : Service() {
         return
       }
       if (activeWifiIpv4() != wifiAddress || !ingest.active) {
+        EncoderDiagnostics.record(this@Ps5LanService, EncoderDiagnosticEventName.SERVICE_START_FAILED,
+          EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.NETWORK,
+          if (!ingest.active) EncoderDiagnosticError.SOURCE_LOST else EncoderDiagnosticError.NETWORK_CHANGED)
         setNotification("Receiver stopped: Wi-Fi changed or port unavailable")
         terminalReason = true
         stopSelf()
@@ -133,6 +150,7 @@ class Ps5LanService : Service() {
       else "Waiting for PS5 on ${wifiAddress}:1935 · connections ${ingest.tcpConnections}, video ${ingest.videoPackets}, audio ${ingest.audioPackets}"
       val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
       if (display != report) setNotification(display)
+      reportStateTransitions(ingest)
       maybeSubmitRemoteDiagnostics(ingest)
       handler.postDelayed(this, 3000)
     }
@@ -153,8 +171,13 @@ class Ps5LanService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_RECONNECT_OUTPUTS) {
       if (!receiverRunning || !publicTest || outputPublishers.isEmpty()) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MANUAL_RECONNECT_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MULTIPLE,
+          EncoderDiagnosticError.MISSING_CONFIG)
         setNotification("Start an enabled stream first; output reconnect is unavailable.")
       } else {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MANUAL_RECONNECT_REQUESTED,
+          EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MULTIPLE)
         outputPublishers.forEach { it.reconnectNow() }
         setNotification("Reconnecting selected stream outputs. Automatic retries remain on; waiting for a clean video keyframe.")
       }
@@ -166,11 +189,15 @@ class Ps5LanService : Service() {
         val genre = intent.getStringExtra(EXTRA_GENRE).orEmpty()
         if (genre !in GenrePlaylist.STATIONS) return START_NOT_STICKY
         store.select(genre)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_STATION_SELECTED,
+          EncoderDiagnosticResult.SELECTED, EncoderDiagnosticTarget.MUSIC)
       }
       if (receiverRunning && publicTest) {
         if (intent?.action != ACTION_MUSIC_SKIP) genrePlaylist = store.playlist()
         playNextLicensedTrack(manual = true)
       }
+      if (intent?.action == ACTION_MUSIC_SKIP) EncoderDiagnostics.record(this,
+        EncoderDiagnosticEventName.MUSIC_SKIP, EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MUSIC)
       return START_NOT_STICKY
     }
     if (intent?.action == ACTION_MUSIC_PLAY || intent?.action == ACTION_MUSIC_PAUSE) {
@@ -180,25 +207,42 @@ class Ps5LanService : Service() {
         return START_NOT_STICKY
       }
       val action = if (intent.action == ACTION_MUSIC_PLAY) "play" else "pause"
+      EncoderDiagnostics.record(this,
+        if (action == "play") EncoderDiagnosticEventName.MUSIC_PLAY else EncoderDiagnosticEventName.MUSIC_PAUSE,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MUSIC)
       musicTrack?.command(action)
       setNotification(if (musicTrack?.ready == true) "Licensed music $action requested; await next AAC frame." else "No music track loaded; choose a rights-cleared file first.")
       return START_NOT_STICKY
     }
     if (intent?.action == ACTION_STOP) {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STOP_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.NETWORK)
       stopSelf()
       return START_NOT_STICKY
     }
     if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
+    publicTest = intent.action == ACTION_START_TWITCH
+    EncoderDiagnostics.setMode(if (publicTest) EncoderDiagnosticMode.PUBLIC else EncoderDiagnosticMode.DIAGNOSTIC)
+    EncoderDiagnostics.record(this,
+      if (publicTest) EncoderDiagnosticEventName.STREAM_START_REQUESTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REQUESTED,
+      EncoderDiagnosticResult.REQUESTED,
+      if (publicTest) EncoderDiagnosticTarget.MULTIPLE else EncoderDiagnosticTarget.NETWORK)
     if (receiver != null) {
+      EncoderDiagnostics.record(this,
+        if (publicTest) EncoderDiagnosticEventName.STREAM_START_REJECTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
+        EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.ILLEGAL_STATE)
       setNotification("Receiver already active. Stop current test before switching diagnostic/public mode.")
       return START_NOT_STICKY
     }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
-    publicTest = intent?.action == ACTION_START_TWITCH
     if (publicTest) {
       val destinations = selectedDestinations()
       val invalid = destinations.firstOrNull { !it.isValid() }
       if (destinations.isEmpty() || invalid != null) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED,
+          invalid?.let { diagnosticTarget(it.id) } ?: EncoderDiagnosticTarget.MULTIPLE,
+          EncoderDiagnosticError.MISSING_CONFIG)
         val message = if (destinations.isEmpty()) "Select at least one output and save its RTMPS server URL and key."
           else "${invalid!!.label} needs a valid RTMPS server URL and stream key."
         publishUiStatus(message)
@@ -222,11 +266,23 @@ class Ps5LanService : Service() {
         runCatching {
           BrandVideoOverlay(
             onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
-            onStatus = { message -> handler.post { if (!stopping) setNotification(message) } },
-            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } },
+            onStatus = { message ->
+              if (message.startsWith("@saevond overlay active · ")) EncoderDiagnostics.record(this,
+                EncoderDiagnosticEventName.OVERLAY_READY, EncoderDiagnosticResult.COMPLETED,
+                EncoderDiagnosticTarget.OVERLAY)
+              handler.post { if (!stopping) setNotification(message) }
+            },
+            onFailure = { message ->
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.OVERLAY_FALLBACK,
+                EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.OVERLAY, EncoderDiagnosticError.MEDIA_CODEC)
+              handler.post { if (!stopping) disableBrandOverlay(message) }
+            },
             encodingProfile = overlayProfile)
         }.onFailure { error ->
           brandOverlayRequested = false
+          EncoderDiagnostics.record(this, EncoderDiagnosticEventName.OVERLAY_FALLBACK,
+            EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.OVERLAY,
+            EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
           handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
         }.getOrNull()
       } else null
@@ -244,6 +300,9 @@ class Ps5LanService : Service() {
       }
     } catch (error: RuntimeException) {
       terminalReason = true
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVICE_START_FAILED,
+        EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.PERMISSIONS,
+        EncoderDiagnosticError.SERVICE_START_DENIED)
       publishUiStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
       stopSelf()
       return START_NOT_STICKY
@@ -251,6 +310,9 @@ class Ps5LanService : Service() {
 
     val local = activeWifiIpv4()
     if (!privateIpv4(ps5Address) || local == null || local == ps5Address) {
+      EncoderDiagnostics.record(this,
+        if (publicTest) EncoderDiagnosticEventName.STREAM_START_REJECTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
+        EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.INVALID_INPUT)
       setNotification("Unavailable: use Wi-Fi and enter the PS5's private IPv4")
       terminalReason = true
       stopSelf()
@@ -260,6 +322,8 @@ class Ps5LanService : Service() {
     try {
       val safety = phoneSafety.assess()
       if (safety.level == SafetyLevel.STOP) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SAFETY_STOP,
+          EncoderDiagnosticResult.STOPPED, EncoderDiagnosticTarget.APP, EncoderDiagnosticError.PHONE_SAFETY)
         setNotification("Not started: " + safety.message)
         terminalReason = true
         stopSelf()
@@ -302,6 +366,9 @@ class Ps5LanService : Service() {
 
   private fun startFailed(error: Exception) {
     terminalReason = true
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVICE_START_FAILED,
+      EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.NETWORK,
+      EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
     setNotification("Receiver/music startup failed (" + error.javaClass.simpleName + "). Stopped; no broadcast.")
     stopSelf()
   }
@@ -354,6 +421,12 @@ class Ps5LanService : Service() {
             handler.post {
               if (!stopping) {
                 submitRemoteFailure(ingest = receiver, phase = mediaPhase, category = safeErrorCategory(error.javaClass.simpleName))
+                EncoderDiagnostics.record(this, EncoderDiagnosticEventName.INGEST_STATE_CHANGED,
+                  EncoderDiagnosticResult.FAILED, when (mediaPhase) {
+                    "audio_mix" -> EncoderDiagnosticTarget.MUSIC
+                    "overlay_config", "overlay_frame" -> EncoderDiagnosticTarget.OVERLAY
+                    else -> EncoderDiagnosticTarget.NETWORK
+                  }, EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
                 setNotification("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
                 stopSelf()
               }
@@ -376,6 +449,10 @@ class Ps5LanService : Service() {
       receiver = ingest
       ingest.start()
       receiverRunning = true
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVICE_STARTED,
+        EncoderDiagnosticResult.STARTED, EncoderDiagnosticTarget.NETWORK)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.RECEIVER_LISTENING,
+        EncoderDiagnosticResult.WAITING, EncoderDiagnosticTarget.NETWORK)
       maybeSubmitRemoteDiagnostics(ingest, force = true)
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
@@ -395,10 +472,16 @@ class Ps5LanService : Service() {
           musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com",
             bridgeToken, statusSink = { message ->
               handler.post { if (!stopping) setNotification(message) }
+            }, onConnectionState = { connected, error ->
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_BRIDGE_STATE,
+                if (connected) EncoderDiagnosticResult.CONNECTED else EncoderDiagnosticResult.DISCONNECTED,
+                EncoderDiagnosticTarget.MUSIC, error)
             }) { action, level, station ->
             // Bot sends authenticated controls only; volume affects music gain,
             // never the game gain and never the Android system speaker volume.
             if (action == "volume" && level != null && level in 0..100) {
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_COMMAND_APPLIED,
+                EncoderDiagnosticResult.APPLIED, EncoderDiagnosticTarget.MUSIC)
               liveLevels.update(liveLevels.gamePercent, level)
               getSharedPreferences("ps5_audio_levels", MODE_PRIVATE)
                 .edit().putInt("music", level).apply()
@@ -406,6 +489,8 @@ class Ps5LanService : Service() {
                 if (!stopping) setNotification("Bot !volume applied: music $level% · game ${liveLevels.gamePercent}%.")
               }
             } else if (action == "station" && station in GenrePlaylist.STATIONS) {
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_COMMAND_APPLIED,
+                EncoderDiagnosticResult.APPLIED, EncoderDiagnosticTarget.MUSIC)
               handler.post {
                 if (!stopping) {
                   val genre = station!!
@@ -415,8 +500,14 @@ class Ps5LanService : Service() {
                 }
               }
             } else if (action == "skip") {
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_COMMAND_APPLIED,
+                EncoderDiagnosticResult.APPLIED, EncoderDiagnosticTarget.MUSIC)
               handler.post { if (!stopping) playNextLicensedTrack(manual = true) }
-            } else if (action == "play" || action == "pause") musicTrack?.command(action)
+            } else if (action == "play" || action == "pause") {
+              EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_COMMAND_APPLIED,
+                EncoderDiagnosticResult.APPLIED, EncoderDiagnosticTarget.MUSIC)
+              musicTrack?.command(action)
+            }
           }.also { it.start() }
         }
       }
@@ -470,6 +561,9 @@ class Ps5LanService : Service() {
         handler.post {
           if (generation == musicDecodeGeneration) {
             decodingTrack = false
+            EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_DECODE_FAILED,
+              EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.MUSIC,
+              EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
             if (!stopping) setNotification("Song decode failed (" + error.javaClass.simpleName +
               "). Previous game audio continues.")
           }
@@ -519,8 +613,9 @@ class Ps5LanService : Service() {
     receiver?.stop()
     musicBridge?.stop()
     musicBridge = null
-    remoteDiagnosticsReporter?.close()
-    remoteDiagnosticsReporter = null
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVICE_STOPPED,
+      EncoderDiagnosticResult.STOPPED, EncoderDiagnosticTarget.NETWORK)
+    EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
     audioMixer?.close()
     audioMixer = null
     musicTrack?.clear()
@@ -554,6 +649,7 @@ class Ps5LanService : Service() {
 
   private fun onOutputSnapshot() {
     val current = outputPublishers.map { it.snapshot() }
+    reportOutputTransitions(current)
     outputConnected = current.any { it.state == "LIVE" }
     outputStatus = current.joinToString(" | ") { it.summary() }
     if (outputConnected && musicStartedOnOutput.compareAndSet(false, true)) {
@@ -583,32 +679,19 @@ class Ps5LanService : Service() {
   private fun maybeSubmitRemoteDiagnostics(ingest: LanRtmpIngest, force: Boolean = false) {
     val preferences = getSharedPreferences(DIAGNOSTICS_PREFS, MODE_PRIVATE)
     if (!preferences.getBoolean(PREF_REMOTE_DIAGNOSTICS_ENABLED, true)) {
-      remoteDiagnosticsReporter?.disable()
-      remoteDiagnosticsReporter = null
+      EncoderDiagnostics.disable()
       nextDiagnosticReportAtMs = 0L
       return
-    }
-    if (remoteDiagnosticsReporter == null) {
-      val bridgeSecret = SecretStore(this).get("bridge_token")
-      if (bridgeSecret.length < 32) return
-      remoteDiagnosticsReporter = RemoteDiagnosticsReporter(bridgeSecret)
     }
     val now = SystemClock.elapsedRealtime()
     if (!force && now < nextDiagnosticReportAtMs) return
     nextDiagnosticReportAtMs = now + 30_000L
-    remoteDiagnosticsReporter?.submit(createDiagnosticSample(ingest))
+    EncoderDiagnostics.submitSample(this, createDiagnosticSample(ingest))
   }
 
   private fun submitRemoteFailure(ingest: LanRtmpIngest?, phase: String, category: String) {
     val current = ingest ?: return
-    val preferences = getSharedPreferences(DIAGNOSTICS_PREFS, MODE_PRIVATE)
-    if (!preferences.getBoolean(PREF_REMOTE_DIAGNOSTICS_ENABLED, true)) return
-    if (remoteDiagnosticsReporter == null) {
-      val bridgeSecret = SecretStore(this).get("bridge_token")
-      if (bridgeSecret.length < 32) return
-      remoteDiagnosticsReporter = RemoteDiagnosticsReporter(bridgeSecret)
-    }
-    remoteDiagnosticsReporter?.submit(createDiagnosticSample(current, phase, category))
+    EncoderDiagnostics.submitSample(this, createDiagnosticSample(current, phase, category))
   }
 
   private fun createDiagnosticSample(
@@ -646,7 +729,7 @@ class Ps5LanService : Service() {
       )
     }
     return EncoderDiagnosticSample(
-      sessionId = diagnosticSessionId,
+      sessionId = EncoderDiagnostics.sessionId,
       appVersion = BuildConfig.VERSION_NAME,
       mode = if (publicTest) "public" else "diagnostic",
       ingestState = state,
@@ -666,5 +749,67 @@ class Ps5LanService : Service() {
     "UnknownHostException", "SocketException", "SSLException", "MediaCodec" -> value
     "CodecException" -> "MediaCodec"
     else -> "OTHER"
+  }
+
+  private fun reportStateTransitions(ingest: LanRtmpIngest) {
+    val state = when {
+      ingest.lastFailure != null -> "FAILED"
+      !ingest.active -> "STOPPED"
+      !ingest.connected -> "LISTENING"
+      !ingest.rtpmPublished -> "CONNECTED"
+      else -> "PUBLISHING"
+    }
+    if (state != lastDiagnosticIngestState) {
+      lastDiagnosticIngestState = state
+      val (event, result) = when (state) {
+        "CONNECTED" -> EncoderDiagnosticEventName.SOURCE_CONNECTED to EncoderDiagnosticResult.CONNECTED
+        "PUBLISHING" -> EncoderDiagnosticEventName.SOURCE_PUBLISHING to EncoderDiagnosticResult.PUBLISHING
+        "FAILED" -> EncoderDiagnosticEventName.INGEST_STATE_CHANGED to EncoderDiagnosticResult.FAILED
+        "STOPPED" -> EncoderDiagnosticEventName.INGEST_STATE_CHANGED to EncoderDiagnosticResult.STOPPED
+        else -> EncoderDiagnosticEventName.INGEST_STATE_CHANGED to EncoderDiagnosticResult.WAITING
+      }
+      EncoderDiagnostics.record(this, event, result, EncoderDiagnosticTarget.NETWORK,
+        if (state == "FAILED") EncoderDiagnosticError.SOURCE_LOST else EncoderDiagnosticError.NONE)
+    }
+    reportOutputTransitions(outputPublishers.map { it.snapshot() })
+  }
+
+  @Synchronized
+  private fun reportOutputTransitions(snapshots: List<OutputSnapshot>) {
+    snapshots.forEach { snapshot ->
+      val oldState = lastDiagnosticOutputStates.put(snapshot.id, snapshot.state)
+      if (oldState != snapshot.state) {
+        val result = when (snapshot.state) {
+          "LIVE" -> EncoderDiagnosticResult.LIVE
+          "RETRYING" -> EncoderDiagnosticResult.RETRYING
+          "CONNECTING" -> EncoderDiagnosticResult.CONNECTING
+          "WAITING FOR KEYFRAME" -> EncoderDiagnosticResult.WAITING
+          "STOPPED" -> EncoderDiagnosticResult.STOPPED
+          else -> EncoderDiagnosticResult.NONE
+        }
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.OUTPUT_STATE_CHANGED,
+          result, diagnosticTarget(snapshot.id), snapshot.lastError?.let {
+            EncoderDiagnosticError.fromThrowableName(it)
+          } ?: EncoderDiagnosticError.NONE)
+        if (snapshot.state == "RETRYING") EncoderDiagnostics.record(this,
+          EncoderDiagnosticEventName.OUTPUT_RETRY, EncoderDiagnosticResult.RETRYING,
+          diagnosticTarget(snapshot.id), snapshot.lastError?.let {
+            EncoderDiagnosticError.fromThrowableName(it)
+          } ?: EncoderDiagnosticError.NONE)
+        if (snapshot.state == "WAITING FOR KEYFRAME") EncoderDiagnostics.record(this,
+          EncoderDiagnosticEventName.KEYFRAME_WAIT, EncoderDiagnosticResult.WAITING, diagnosticTarget(snapshot.id))
+      }
+      val oldDrops = lastDiagnosticDroppedPackets.put(snapshot.id, snapshot.droppedPackets) ?: 0L
+      if (snapshot.droppedPackets > oldDrops) EncoderDiagnostics.record(this,
+        EncoderDiagnosticEventName.STALE_PACKETS_DROPPED, EncoderDiagnosticResult.DROPPED,
+        diagnosticTarget(snapshot.id))
+    }
+  }
+
+  private fun diagnosticTarget(id: String): EncoderDiagnosticTarget = when (id.lowercase()) {
+    "twitch" -> EncoderDiagnosticTarget.TWITCH
+    "youtube" -> EncoderDiagnosticTarget.YOUTUBE
+    "kick" -> EncoderDiagnosticTarget.KICK
+    else -> EncoderDiagnosticTarget.MULTIPLE
   }
 }

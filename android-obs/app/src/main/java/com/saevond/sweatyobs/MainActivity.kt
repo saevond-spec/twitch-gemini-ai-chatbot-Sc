@@ -57,6 +57,13 @@ class MainActivity : Activity() {
 
   private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
 
+  private fun diagnosticTarget(platform: String): EncoderDiagnosticTarget = when (platform.lowercase(Locale.US)) {
+    "twitch" -> EncoderDiagnosticTarget.TWITCH
+    "youtube" -> EncoderDiagnosticTarget.YOUTUBE
+    "kick" -> EncoderDiagnosticTarget.KICK
+    else -> EncoderDiagnosticTarget.NONE
+  }
+
   private fun sectionHeader(label: String): TextView = TextView(this).apply {
     text = label.uppercase(Locale.US)
     textSize = 13f
@@ -96,6 +103,8 @@ class MainActivity : Activity() {
       status.text = "$platform URL could not be saved on this phone."
       return false
     }
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVER_URL_SAVED,
+      EncoderDiagnosticResult.SAVED, diagnosticTarget(platform))
     urlStatus.text = "$platform RTMPS URL saved on this phone ✓"
     urlStatus.setTextColor(getColor(R.color.sweaty_cyan))
     val hasKey = RtmpsPublisher.keyValid(SecretStore(this).get(secretPreference))
@@ -159,6 +168,9 @@ class MainActivity : Activity() {
     // Older builds cached one diagnostic status line on-device. Remove it and
     // keep live status in memory/broadcasts only from this version onward.
     getSharedPreferences(LEGACY_STATUS_PREFS, MODE_PRIVATE).edit().clear().apply()
+    EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.APP_OPENED,
+      EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.APP)
     val layout = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(dp(18), dp(14), dp(18), dp(28))
@@ -480,12 +492,19 @@ class MainActivity : Activity() {
       setOnCheckedChangeListener { _, checked ->
         getSharedPreferences(Ps5LanService.DIAGNOSTICS_PREFS, MODE_PRIVATE).edit()
           .putBoolean(Ps5LanService.PREF_REMOTE_DIAGNOSTICS_ENABLED, checked).apply()
+        if (checked) {
+          EncoderDiagnostics.reset(this@MainActivity)
+          EncoderDiagnostics.record(this@MainActivity, EncoderDiagnosticEventName.DIAGNOSTICS_ENABLED,
+            EncoderDiagnosticResult.ENABLED, EncoderDiagnosticTarget.DIAGNOSTICS)
+        } else {
+          EncoderDiagnostics.disable()
+        }
         status.text = if (checked) "Remote connection summaries are enabled for the active or next session."
           else "Remote connection summaries are disabled."
       }
     }
     val remoteDiagnosticsNote = TextView(this).apply {
-      text = "Every 30 seconds, sends network type and Android internet validation, PS5 packet counts, each output's send rate, queue, retries, dropped packets, and a limited error category. No stream keys, RTMPS URLs, IP/SSID, chat, viewer data, music, or media. Reports stay in memory on the phone and go to Render runtime logs (up to 7 days in the current workspace); delivery is best effort while the free service sleeps. Set the same ENCODER_BRIDGE_TOKEN on Render and under the !play bridge setting below. Real viewer counts need separate platform authorization."
+      text = "Every 30 seconds, sends a connection summary plus fixed event/result/destination/error codes. Reports include a random app-session ID, app version, coarse connection counters, and server receipt times. No arbitrary text, raw logs, exception messages, video/audio, chat, viewer data, track/file names, stream keys, RTMPS URLs, PS5/local IP, or Wi-Fi name are included. Render may see standard HTTPS request metadata such as the phone's public IP and request time. Reports stay in phone memory until upload and go to Render runtime logs; delivery is best effort if a free service is asleep. Set the same ENCODER_BRIDGE_TOKEN on Render and under the !play bridge setting below."
       textSize = 13f
       setTextColor(getColor(R.color.sweaty_muted))
     }
@@ -563,6 +582,8 @@ class MainActivity : Activity() {
         val genre = stationCodes[position.coerceIn(0, stationCodes.lastIndex)]
         if (genre == genreSettings.selected()) return
         genreSettings.select(genre)
+        EncoderDiagnostics.record(this@MainActivity, EncoderDiagnosticEventName.MUSIC_STATION_SELECTED,
+          EncoderDiagnosticResult.SELECTED, EncoderDiagnosticTarget.MUSIC)
         if (Ps5LanService.receiverRunning) {
           startService(Intent(this@MainActivity, Ps5LanService::class.java).apply {
             action = Ps5LanService.ACTION_MUSIC_STATION
@@ -578,6 +599,8 @@ class MainActivity : Activity() {
     browseRemoteDubstep.setOnClickListener { browseRemoteCatalog(GenrePlaylist.DUBSTEP) }
     browseRemotePopTrap.setOnClickListener { browseRemoteCatalog(GenrePlaylist.POP_TRAP) }
     copyStreamCredit.setOnClickListener {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.MUSIC)
       (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
         ClipData.newPlainText("NCS live-stream credit", RemoteMusicCatalog.LIVE_STREAM_CREDIT)
       )
@@ -589,6 +612,8 @@ class MainActivity : Activity() {
       if (credits.isBlank()) {
         status.text = "Add remote NCS tracks first. Their artist and song credits will be copied here for VOD descriptions."
       } else {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+          EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.MUSIC)
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
           ClipData.newPlainText("NCS track credits", credits)
         )
@@ -597,17 +622,25 @@ class MainActivity : Activity() {
     }
     shuffleSongs.setOnCheckedChangeListener { _, on ->
       genreSettings.setShuffle(on)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.MUSIC)
       if (Ps5LanService.receiverRunning) refreshGenreService()
     }
     autoNextSong.setOnCheckedChangeListener { _, on ->
       genreSettings.setAutoNext(on)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.MUSIC)
       if (Ps5LanService.receiverRunning) refreshGenreService()
     }
     skipSong.setOnClickListener {
       if (Ps5LanService.receiverRunning) {
         startService(Intent(this, Ps5LanService::class.java).apply { action = Ps5LanService.ACTION_MUSIC_SKIP })
         status.text = "Requested the next selected song. Game audio continues."
-      } else status.text = "Start a public stream before skipping music."
+      } else {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_SKIP,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.MISSING_CONFIG)
+        status.text = "Start a public stream before skipping music."
+      }
     }
 
     // Preserve quiet user-selected levels when toggling mute. Use the default
@@ -625,6 +658,8 @@ class MainActivity : Activity() {
       override fun onStopTrackingTouch(seekBar: SeekBar?) {
         savedLevels.edit().putInt("game", gameVolume.progress)
           .putInt("music", musicVolume.progress).apply()
+        EncoderDiagnostics.record(this@MainActivity, EncoderDiagnosticEventName.SETTING_CHANGED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
       }
     }
     gameVolume.setOnSeekBarChangeListener(volumeChange)
@@ -632,12 +667,16 @@ class MainActivity : Activity() {
     Ps5LanService.liveLevels.update(gameVolume.progress, musicVolume.progress)
     muteMusic.setOnClickListener {
       musicVolume.progress = if (musicVolume.progress > 0) 0 else previousMusic.coerceIn(1,100)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
       savedLevels.edit().putInt("game", gameVolume.progress)
         .putInt("music", musicVolume.progress).apply()
     }
     resetMix.setOnClickListener {
       gameVolume.progress = 85
       musicVolume.progress = 22
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
       savedLevels.edit().putInt("game",85).putInt("music",22).apply()
     }
     openTwitchDashboard.setOnClickListener {
@@ -652,23 +691,40 @@ class MainActivity : Activity() {
     }
     enableTwitch.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DESTINATION_TOGGLED,
+        if (checked) EncoderDiagnosticResult.ENABLED else EncoderDiagnosticResult.DISABLED,
+        EncoderDiagnosticTarget.TWITCH)
       refreshOutputSummary()
     }
     enableYouTube.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("youtube_enabled", checked).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DESTINATION_TOGGLED,
+        if (checked) EncoderDiagnosticResult.ENABLED else EncoderDiagnosticResult.DISABLED,
+        EncoderDiagnosticTarget.YOUTUBE)
       refreshOutputSummary()
     }
     enableKick.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DESTINATION_TOGGLED,
+        if (checked) EncoderDiagnosticResult.ENABLED else EncoderDiagnosticResult.DISABLED,
+        EncoderDiagnosticTarget.KICK)
       refreshOutputSummary()
     }
     enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.OVERLAY_TOGGLED,
+        if (checked) EncoderDiagnosticResult.ENABLED else EncoderDiagnosticResult.DISABLED,
+        EncoderDiagnosticTarget.OVERLAY)
     }
     overlayQuality.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-        outputPrefs.edit().putString("overlay_profile", if (position == 1) "high_1080" else "stable_720").apply()
+        val profile = if (position == 1) "high_1080" else "stable_720"
+        val previousProfile = outputPrefs.getString("overlay_profile", "stable_720")
+        outputPrefs.edit().putString("overlay_profile", profile).apply()
+        if (profile != previousProfile) EncoderDiagnostics.record(this@MainActivity,
+          EncoderDiagnosticEventName.PROFILE_SELECTED, EncoderDiagnosticResult.SELECTED,
+          EncoderDiagnosticTarget.OVERLAY)
         refreshOutputSummary()
       }
     }
@@ -682,6 +738,8 @@ class MainActivity : Activity() {
         status.text = "Enter a valid YouTube stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("youtube_key", key)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_KEY_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.YOUTUBE)
         youtubeKey.text.clear()
         outputPrefs.edit().putBoolean("youtube_enabled", true).apply()
         enableYouTube.isChecked = true
@@ -702,6 +760,8 @@ class MainActivity : Activity() {
         status.text = "Enter a valid Kick stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("kick_key", key)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_KEY_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.KICK)
         kickKey.text.clear()
         outputPrefs.edit().putBoolean("kick_enabled", true).apply()
         enableKick.isChecked = true
@@ -714,8 +774,13 @@ class MainActivity : Activity() {
     }
     reconnectOutputs.setOnClickListener {
       if (!Ps5LanService.receiverRunning) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MANUAL_RECONNECT_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MULTIPLE,
+          EncoderDiagnosticError.MISSING_CONFIG)
         status.text = "Start a stream first. Outputs will reconnect automatically after a network interruption."
       } else {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MANUAL_RECONNECT_REQUESTED,
+          EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MULTIPLE)
         startService(Intent(this, Ps5LanService::class.java).apply {
           action = Ps5LanService.ACTION_RECONNECT_OUTPUTS
         })
@@ -728,6 +793,8 @@ class MainActivity : Activity() {
         .putString("metadata_game", metadataGame.text.toString())
         .putString("metadata_keywords", metadataKeywords.text.toString())
         .apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.METADATA_COPIED,
+        EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.SETTINGS)
       val activePlatforms = buildList {
         if (enableTwitch.isChecked) add("Twitch")
         if (enableYouTube.isChecked) add("YouTube")
@@ -747,6 +814,8 @@ class MainActivity : Activity() {
     }
 
     checkSafety.setOnClickListener {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SAFETY_CHECK_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.APP)
       safetyReading.text = "Reading battery and temperature…"
       val sample = PhoneSafetyMonitor(this).sample()
       val decision = PowerSafetyPolicy.assess(sample)
@@ -760,6 +829,8 @@ class MainActivity : Activity() {
     autoplayMusic.setOnCheckedChangeListener { _, checked ->
       getSharedPreferences("ps5_music", MODE_PRIVATE).edit()
         .putBoolean("autoplay", checked).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SETTING_CHANGED,
+        EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
       status.text = if (checked) "Music will start when a platform accepts publishing, if a licensed local or remote track is selected."
         else "Music autoplay disabled; use Play when your stream is active."
     }
@@ -773,11 +844,15 @@ class MainActivity : Activity() {
       try {
         startActivityForResult(intent, PICK_MUSIC)
       } catch (_: ActivityNotFoundException) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.FILE_PICKER_FAILED,
+          EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.NO_FILE_PICKER)
         status.text = "No audio file picker is available on this phone."
       }
     }
     playMusic.setOnClickListener {
       if (!Ps5LanService.receiverRunning) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_PLAY,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.MISSING_CONFIG)
         status.text = "Start the PS5 connection test or public stream before playing music."
         return@setOnClickListener
       }
@@ -786,6 +861,8 @@ class MainActivity : Activity() {
     }
     pauseMusic.setOnClickListener {
       if (!Ps5LanService.receiverRunning) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_PAUSE,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.MISSING_CONFIG)
         status.text = "No active PS5 receiver. Music is not playing."
         return@setOnClickListener
       }
@@ -798,6 +875,9 @@ class MainActivity : Activity() {
         SecureRandom().nextBytes(data)
         val token = Base64.encodeToString(data, Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
         SecretStore(this).put("bridge_token", token)
+        EncoderDiagnostics.reset(this)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.BOT_TOKEN_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.SETTINGS)
         val clip = ClipData.newPlainText("SweatyClanker music bridge token", token)
         if (Build.VERSION.SDK_INT >= 33) {
           clip.description.extras = PersistableBundle().apply {
@@ -817,6 +897,9 @@ class MainActivity : Activity() {
       if (token.length < 32 || token.length > 256) status.text = "Bridge token must be 32 to 256 characters."
       else try {
         SecretStore(this).put("bridge_token", token)
+        EncoderDiagnostics.reset(this)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.BOT_TOKEN_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.SETTINGS)
         botToken.text.clear()
         status.text = "Bot !play token saved locally. SweatyClanker server must also have the same ENCODER_BRIDGE_TOKEN configured."
       } catch (error: Exception) { status.text = "Music bridge token storage failed (" + error.javaClass.simpleName + ")." }
@@ -829,6 +912,8 @@ class MainActivity : Activity() {
         return@setOnClickListener
       }
       bridgeStatus.text = "Checking SweatyClanker bot bridge over HTTPS…"
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.BRIDGE_CHECK_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MUSIC)
       testMusicBridge.isEnabled = false
       thread(name = "SweatyOBS-bridge-check") {
         val outcome = MusicBridgePoller.verify(
@@ -848,6 +933,8 @@ class MainActivity : Activity() {
         status.text = "Invalid Twitch key format. Obtain the full stream key from Twitch Creator Dashboard; never send it in chat."
       } else try {
         SecretStore(this).put("rtmps", value)
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_KEY_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.TWITCH)
         twitchKey.text.clear()
         status.text = "Twitch key stored with Android Keystore. Nothing is broadcasting."
         twitchStatus.text = "Twitch key saved locally; Twitch will check it when a stream starts."
@@ -861,6 +948,8 @@ class MainActivity : Activity() {
       status.text = "Checking selected public destinations and PS5 source…"
       val ip = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(ip)) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.INVALID_INPUT)
         status.text = "Enter the PS5 local IPv4 address first."
         return@setOnClickListener
       }
@@ -875,15 +964,23 @@ class MainActivity : Activity() {
       }
       val missing = destinations.firstOrNull { !it.isValid() }
       if (destinations.isEmpty()) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MULTIPLE, EncoderDiagnosticError.MISSING_CONFIG)
         status.text = "Choose at least one platform output above."
         return@setOnClickListener
       }
       if (missing != null) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, diagnosticTarget(missing.id), EncoderDiagnosticError.MISSING_CONFIG)
         status.text = "Save a valid ${missing.label} RTMPS server URL and stream key before going live."
         return@setOnClickListener
       }
       val overlayLabel = if (enableBrandOverlay.isChecked) "@saevond overlay enabled" else "original PS5 video pass-through"
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.PS5_ADDRESS_SAVED,
+        EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.NETWORK)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.MULTIPLE)
       try {
         startForegroundService(Intent(this, Ps5LanService::class.java).apply {
           action = Ps5LanService.ACTION_START_TWITCH
@@ -891,6 +988,9 @@ class MainActivity : Activity() {
         })
         status.text = "Armed for ${destinations.joinToString(" + ") { it.label }} · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media; each destination reconnects independently."
       } catch (error: RuntimeException) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK,
+          EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
         status.text = "Android could not start public test: " + error.javaClass.simpleName
       }
     }
@@ -899,10 +999,16 @@ class MainActivity : Activity() {
       status.text = "Checking the diagnostic-only PS5 ingest. No platform stream or overlay will start."
       val address = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(address)) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.INVALID_INPUT)
         status.text = "Enter the PS5's private IPv4 address."
         return@setOnClickListener
       }
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", address).apply()
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.PS5_ADDRESS_SAVED,
+        EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.NETWORK)
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DIAGNOSTIC_TEST_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.NETWORK)
       try {
         status.text = "Valid PS5 IP. Asking Android to start receiver…"
         startForegroundService(Intent(this, Ps5LanService::class.java).apply {
@@ -911,11 +1017,16 @@ class MainActivity : Activity() {
         })
         status.text = "Network-only diagnostic requested. No broadcast is sent."
       } catch (error: RuntimeException) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.PERMISSIONS,
+          EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
         status.text = "Unable to start network diagnostic: check app permissions and Android service restrictions."
       }
     }
 
     stopLan.setOnClickListener {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STOP_REQUESTED,
+        EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.NETWORK)
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 receiver and all streaming outputs stopped."
     }
@@ -933,6 +1044,8 @@ class MainActivity : Activity() {
       GenrePlaylist.POP_TRAP -> "Pop / Trap"
       else -> "Music"
     }
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.CATALOG_OPENED,
+      EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.MUSIC)
     val selected = linkedSetOf<Int>()
     val options = tracks.map { it.title + " — " + it.artist }.toTypedArray()
     AlertDialog.Builder(this)
@@ -951,6 +1064,8 @@ class MainActivity : Activity() {
         settings.add(genre, selected.map { tracks[it].audioUrl })
         val after = settings.tracks(genre).size
         val added = after - before
+        if (added > 0) EncoderDiagnostics.record(this, EncoderDiagnosticEventName.TRACK_SELECTION_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
         findViewById<TextView>(R.id.genre_library_status)?.text = musicLibrarySummary(settings)
         val savedRemote = allSavedMusicTracks(settings)
           .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
@@ -979,6 +1094,8 @@ class MainActivity : Activity() {
     try {
       startActivityForResult(picker, requestCode)
     } catch (_: ActivityNotFoundException) {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.FILE_PICKER_FAILED,
+        EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.NO_FILE_PICKER)
       status.text = "No file picker is available for adding local music on this phone."
     }
   }
@@ -1021,12 +1138,18 @@ class MainActivity : Activity() {
         } catch (_: SecurityException) { null }
       }
       if (granted.isNotEmpty()) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.TRACK_SELECTION_SAVED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
         val store = MusicGenreSettings(this)
         store.add(genre, granted)
         findViewById<TextView>(R.id.genre_library_status)?.text = musicLibrarySummary(store)
         status.text = "Saved ${granted.size} local licensed $genre tracks. ${musicLibrarySummary(store)}"
         if (Ps5LanService.receiverRunning) refreshGenreService()
-      } else status.text = "No accessible local songs were selected."
+      } else {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.TRACK_SELECTION_SAVED,
+          EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MUSIC, EncoderDiagnosticError.USER_CANCELLED)
+        status.text = "No accessible local songs were selected."
+      }
       return
     }
     if (requestCode == PICK_MUSIC && resultCode == RESULT_OK) {
@@ -1034,8 +1157,13 @@ class MainActivity : Activity() {
       try {
         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         getSharedPreferences("ps5_music", MODE_PRIVATE).edit().putString("track_uri", uri.toString()).apply()
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_FILE_SELECTED,
+          EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.MUSIC)
         status.text = "Music file saved for next public test. Only use tracks licensed for live streams and VODs."
       } catch (error: Exception) {
+        EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MUSIC_FILE_SELECTED,
+          EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.MUSIC,
+          EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
         status.text = "Cannot access music file (" + error.javaClass.simpleName + "). Select a local audio file instead."
       }
     }
@@ -1060,8 +1188,12 @@ class MainActivity : Activity() {
   ) {
     try {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DASHBOARD_OPENED,
+        EncoderDiagnosticResult.COMPLETED, diagnosticTarget(platform))
       status.text = "Opened $platform. $nextStep"
     } catch (_: ActivityNotFoundException) {
+      EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DASHBOARD_OPENED,
+        EncoderDiagnosticResult.FAILED, diagnosticTarget(platform), EncoderDiagnosticError.APP_RESTRICTION)
       status.text = "No browser is available to open the $platform dashboard."
     }
   }

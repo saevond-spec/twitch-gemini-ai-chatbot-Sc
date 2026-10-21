@@ -17,6 +17,7 @@ class MusicBridgePoller(
   private val origin: String,
   private val token: String,
   private val statusSink: (String) -> Unit = {},
+  private val onConnectionState: (Boolean, EncoderDiagnosticError) -> Unit = { _, _ -> },
   private val mixer: MusicControlSink
 ) {
   @Volatile private var active = false
@@ -24,11 +25,18 @@ class MusicBridgePoller(
   private var cursor = ""
   private var failures = 0
   private var lastStatus = ""
+  private var lastConnectionState: Boolean? = null
   private fun status(message: String) {
     if (message != lastStatus) {
       lastStatus = message
       statusSink(message)
     }
+  }
+
+  private fun connectionState(connected: Boolean, error: EncoderDiagnosticError = EncoderDiagnosticError.NONE) {
+    if (lastConnectionState == connected) return
+    lastConnectionState = connected
+    onConnectionState(connected, error)
   }
 
   companion object {
@@ -116,12 +124,14 @@ class MusicBridgePoller(
             }
             cursor = nextCursor
             failures = 0
+            connectionState(true)
             status("Remote music bridge connected; bot commands synced.")
           } finally { connection.disconnect() }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
           failures++
           if (failures == 3) {
             mixer.command("pause", null, null)
+            connectionState(false, EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
             status("Remote music bridge disconnected; licensed music paused until reconnection.")
           }
         }
