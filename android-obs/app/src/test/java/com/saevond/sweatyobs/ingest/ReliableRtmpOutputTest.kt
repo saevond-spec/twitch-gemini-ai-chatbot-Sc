@@ -10,6 +10,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ReliableRtmpOutputTest {
+  private fun snapshot(state: String) =
+    OutputSnapshot("youtube", "YouTube", state, 0, 0, 0, 0, 0, 0, null)
+
+  @Test fun healthSeparatesWaitingAndConnectingFromNetworkFailures() {
+    assertEquals("Waiting", snapshot("WAITING FOR KEYFRAME").health)
+    assertEquals("Connecting", snapshot("CONNECTING").health)
+    assertEquals("Retrying", snapshot("RETRYING").health)
+    assertEquals("Good", snapshot("LIVE").health)
+  }
+
   private fun destination() = RtmpDestination(
     "youtube", "YouTube", "rtmps://ingest.example.com/live", "example_stream_key-12345")
 
