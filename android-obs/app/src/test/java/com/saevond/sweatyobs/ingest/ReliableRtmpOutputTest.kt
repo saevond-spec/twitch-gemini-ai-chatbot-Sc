@@ -1115,7 +1115,7 @@ class ReliableRtmpOutputTest {
         dispatchReturned.await(1, TimeUnit.SECONDS))
       assertTrue("YouTube close should run on its destination lane", closeEntered.await(2, TimeUnit.SECONDS))
       assertEquals("YouTube socket close must use the dedicated cleanup lane",
-        "SweatyOBS-youtube-publisher-close", closeThreadName.get())
+        "SweatyOBS-youtube-socket-close", closeThreadName.get())
 
       val otherSocket = object : Socket() {
         override fun close() {
@@ -1127,11 +1127,78 @@ class ReliableRtmpOutputTest {
       assertTrue("a stalled destination close must not block Twitch",
         otherDestinationClosed.await(2, TimeUnit.SECONDS))
       assertEquals("Twitch close must use its own destination lane",
-        "SweatyOBS-twitch-publisher-close", otherCloseThreadName.get())
+        "SweatyOBS-twitch-socket-close", otherCloseThreadName.get())
     } finally {
       releaseClose.countDown()
       caller.join(1_000)
     }
+  }
+
+  @Test fun stalledSetupSocketCloseDoesNotBlockSameDestinationReconnect() {
+    val closeEntered = CountDownLatch(1)
+    val releaseClose = CountDownLatch(1)
+    val closeFinished = CountDownLatch(1)
+    val firstConnected = CountDownLatch(1)
+    val firstPublisherClosed = CountDownLatch(1)
+    val secondConnected = CountDownLatch(1)
+    val attempts = AtomicInteger()
+    val publisherCloseThread = AtomicReference<String>()
+    val stalledSocket = object : Socket() {
+      override fun close() {
+        closeEntered.countDown()
+        try {
+          releaseClose.await()
+        } finally {
+          closeFinished.countDown()
+        }
+      }
+    }
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      val attempt = attempts.incrementAndGet()
+      object : MediaPublisher {
+        override fun connect() {
+          if (attempt == 1) firstConnected.countDown()
+          if (attempt == 2) secondConnected.countDown()
+        }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {
+          if (attempt == 1) {
+            publisherCloseThread.set(Thread.currentThread().name)
+            firstPublisherClosed.countDown()
+          }
+        }
+      }
+    }, retryDelaysMs = longArrayOf(1), waitMs = { Thread.sleep(it) })
+
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("initial publisher should connect", firstConnected.await(2, TimeUnit.SECONDS))
+
+      ReliableRtmpOutput.scheduleSocketClose("youtube", stalledSocket)
+      assertTrue("setup close should stall only the socket cleanup lane",
+        closeEntered.await(2, TimeUnit.SECONDS))
+
+      output.reconnectNow()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(500))
+      assertTrue("publisher cleanup should run on its separate lane",
+        firstPublisherClosed.await(2, TimeUnit.SECONDS))
+      assertEquals("session cleanup should not share the stalled socket lane",
+        "SweatyOBS-youtube-publisher-close", publisherCloseThread.get())
+      assertTrue("same-destination retry should connect while stale setup close is blocked",
+        secondConnected.await(2, TimeUnit.SECONDS))
+      assertFalse("synthetic setup socket should still be blocked until released",
+        closeFinished.await(100, TimeUnit.MILLISECONDS))
+    } finally {
+      releaseClose.countDown()
+      output.close()
+    }
+    assertTrue("stalled setup socket close should finish after release",
+      closeFinished.await(2, TimeUnit.SECONDS))
   }
 
   @Test fun cleanupUsesAtMostOneBoundedWorkerPerDestination() {

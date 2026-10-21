@@ -4,6 +4,9 @@ import java.io.ByteArrayOutputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.InetAddress
+import java.net.Socket
+import java.net.SocketAddress
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -114,6 +117,79 @@ class TwitchRtmpsPublisherTest {
      publisher.close()
      worker.join(1_000)
    }
+ }
+
+ @Test fun closeFinishesActiveSocketBeforeCleanupCanReleaseItsSession() {
+   val connectEntered = CountDownLatch(1)
+   val dispatchEntered = CountDownLatch(1)
+   val releaseDispatch = CountDownLatch(1)
+   val closeEntered = CountDownLatch(1)
+   val releasePhysicalClose = CountDownLatch(1)
+   val physicalCloseFinished = CountDownLatch(1)
+   val cleanupReturned = CountDownLatch(1)
+   val connectionFailure = AtomicReference<Exception?>(null)
+   val socket = object : Socket() {
+     override fun setTcpNoDelay(on: Boolean) {}
+     override fun setKeepAlive(on: Boolean) {}
+     override fun connect(endpoint: SocketAddress, timeout: Int) {
+       connectEntered.countDown()
+       if (!physicalCloseFinished.await(5, TimeUnit.SECONDS)) {
+         throw SocketTimeoutException("synthetic socket was not closed")
+       }
+       throw SocketException("synthetic socket closed during connect")
+     }
+     override fun close() {
+       closeEntered.countDown()
+       if (!releasePhysicalClose.await(5, TimeUnit.SECONDS)) {
+         throw java.io.IOException("synthetic close gate timed out")
+       }
+       physicalCloseFinished.countDown()
+     }
+   }
+   val publisher = RtmpsPublisher(
+     "rtmps://ingest.example.com:443/app",
+     "sandbox-key-12345",
+     HostAddressResolver { _, _, _ -> arrayOf(InetAddress.getByName("8.8.8.8")) },
+     socketCloser = { candidate ->
+       dispatchEntered.countDown()
+       releaseDispatch.await(5, TimeUnit.SECONDS)
+       candidate.close()
+     },
+     socketFactory = { socket }
+   )
+   val connector = Thread {
+     try { publisher.connect() } catch (error: Exception) { connectionFailure.set(error) }
+   }
+   val canceller = Thread { publisher.requestAbort() }
+   val cleanup = Thread {
+     try { publisher.close() } finally { cleanupReturned.countDown() }
+   }
+
+   try {
+     connector.start()
+     assertTrue("synthetic TCP connect should start", connectEntered.await(2, TimeUnit.SECONDS))
+     canceller.start()
+     assertTrue("cancellation should claim the socket-close callback", dispatchEntered.await(2, TimeUnit.SECONDS))
+
+     cleanup.start()
+     assertTrue("cleanup must directly close the registered setup socket", closeEntered.await(2, TimeUnit.SECONDS))
+     assertFalse("cleanup must retain the session until its active socket is physically closed",
+       cleanupReturned.await(100, TimeUnit.MILLISECONDS))
+
+     releasePhysicalClose.countDown()
+     assertTrue("cleanup should finish after the old socket closes",
+       cleanupReturned.await(2, TimeUnit.SECONDS))
+     assertTrue(physicalCloseFinished.await(1, TimeUnit.SECONDS))
+   } finally {
+     releasePhysicalClose.countDown()
+     releaseDispatch.countDown()
+     publisher.close()
+     connector.join(1_000)
+     if (canceller.state != Thread.State.NEW) canceller.join(1_000)
+     if (cleanup.state != Thread.State.NEW) cleanup.join(1_000)
+   }
+   assertFalse("synthetic connection should stop after cleanup", connector.isAlive)
+   assertTrue("connect should observe the deliberate socket close", connectionFailure.get() != null)
  }
 
  @Test fun blocksPrivateDnsDestinations() {

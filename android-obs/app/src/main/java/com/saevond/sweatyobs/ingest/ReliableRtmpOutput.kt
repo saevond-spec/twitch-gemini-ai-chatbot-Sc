@@ -87,50 +87,43 @@ class ReliableRtmpOutput(
     val DEFAULT_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
 
     /**
-     * One permit and one cleanup lane per supported platform. A session keeps its permit until
-     * close completes, so only one publisher per destination can exist at a time. Each lane also
-     * owns setup-socket closes; one connect can queue at most eight failed-address closes plus the
-     * final session cleanup. The bounded queue isolates destinations and leaves setup workers free.
+     * One permit and a dedicated publisher cleanup lane per supported platform. A session keeps
+     * its permit until the active publisher socket is closed, so sessions cannot overlap.
      */
     private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick")
       .associateWith { Semaphore(1, true) }
 
-    private val CLOSE_LANE_ID = ThreadLocal<String>()
-
-    private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick").associateWith { id ->
+    private fun boundedCleanupExecutor(destinationId: String, threadSuffix: String) =
       ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(16),
         { task ->
-          Thread({
-            CLOSE_LANE_ID.set(id)
-            task.run()
-          }, "SweatyOBS-$id-publisher-close").apply { isDaemon = true }
+          Thread(task, "SweatyOBS-$destinationId-$threadSuffix").apply { isDaemon = true }
         },
         ThreadPoolExecutor.AbortPolicy()
       )
-    }
+
+    // Setup-socket cleanup cannot put a publisher's abort behind a stalled failed-address close.
+    private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick")
+      .associateWith { id -> boundedCleanupExecutor(id, "publisher-close") }
+
+    private val SOCKET_CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick")
+      .associateWith { id -> boundedCleanupExecutor(id, "socket-close") }
 
     /**
-     * Schedule raw socket closure on its destination lane. RTMPS setup can fail on up to
-     * eight resolved addresses; the bounded lane queue leaves room for those closes plus the
-     * final publisher cleanup. A cleanup task running on the same lane closes inline so the
-     * destination lease is not released before its active socket is closed.
+     * Close failed/cancelled setup sockets on a bounded lane separate from publisher cleanup.
+     * The active RTMPS socket is closed synchronously by RtmpsPublisher.close() before its lease
+     * is released.
      */
     internal fun scheduleSocketClose(destinationId: String, socket: Socket) {
-      val executor = CLOSE_EXECUTORS[destinationId]
+      val executor = SOCKET_CLOSE_EXECUTORS[destinationId]
         ?: throw IllegalArgumentException("Unsupported RTMP destination: $destinationId")
       val close = Runnable { runCatching { socket.close() } }
-      if (CLOSE_LANE_ID.get() == destinationId) {
+      try {
+        executor.execute(close)
+      } catch (_: RejectedExecutionException) {
+        // Keep thread growth bounded. Under sustained close pressure, apply backpressure to this
+        // destination's connect worker instead of creating unbounded emergency close threads.
         close.run()
-      } else {
-        try {
-          executor.execute(close)
-        } catch (_: RejectedExecutionException) {
-          // Capacity is bounded by one publisher and eight address candidates per destination.
-          // Keep the rare overflow close off the output worker while still closing the socket.
-          Thread(close, "SweatyOBS-$destinationId-emergency-socket-close")
-            .apply { isDaemon = true }.start()
-        }
       }
     }
 

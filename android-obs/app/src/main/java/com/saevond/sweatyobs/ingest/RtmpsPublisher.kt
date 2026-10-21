@@ -237,7 +237,8 @@ class RtmpsPublisher internal constructor(
   serverUrl: String,
   private val key: String,
   private val addressResolver: HostAddressResolver = AndroidHostAddressResolver,
-  private val socketCloser: (Socket) -> Unit = { it.close() }
+  private val socketCloser: (Socket) -> Unit = { it.close() },
+  private val socketFactory: () -> Socket = { Socket() }
 ) : MediaPublisher {
   companion object {
     const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
@@ -355,10 +356,18 @@ class RtmpsPublisher internal constructor(
       address: InetAddress,
       remainingMs: Int,
       cancellation: ConnectionCancellation,
-      socketCloser: (Socket) -> Unit = { it.close() }
+      socketCloser: (Socket) -> Unit = { it.close() },
+      socketFactory: () -> Socket = { Socket() },
+      registerSetupSocket: (Socket) -> Boolean = { true },
+      unregisterSetupSocket: (Socket) -> Unit = {}
     ): SSLSocket {
       val deadline = System.nanoTime() + remainingMs * 1_000_000L
-      val plain = Socket()
+      val plain = socketFactory()
+      if (!registerSetupSocket(plain)) {
+        runCatching { plain.close() }
+        cancellation.throwIfCancelled()
+        throw InterruptedIOException("RTMPS publisher stopped before socket connect")
+      }
       var tls: SSLSocket? = null
       cancellation.setCancelAction {
         runCatching { socketCloser(plain) }
@@ -385,12 +394,15 @@ class RtmpsPublisher internal constructor(
       } catch (error: Exception) {
         cancellation.clearCancelAction()
         runCatching { socketCloser(plain) }
+        unregisterSetupSocket(plain)
         throw error
       }
     }
   }
 
   private val endpoint = parseEndpoint(serverUrl) ?: throw IllegalArgumentException("Use the RTMPS server URL from the streaming platform")
+  private val setupSocketLock = Any()
+  private var setupSocket: Socket? = null
   @Volatile private var socket: SSLSocket? = null
   @Volatile private var output: OutputStream? = null
   @Volatile private var initialized = false
@@ -398,6 +410,20 @@ class RtmpsPublisher internal constructor(
   @Volatile private var controlReaderThread: Thread? = null
   @Volatile private var connectCancellation: ConnectionCancellation? = null
   private val writeLock = Any()
+
+  /** Register before TCP connect so cleanup can close a socket even if cancellation races setup. */
+  private fun registerSetupSocket(candidate: Socket): Boolean = synchronized(setupSocketLock) {
+    if (stopped) false else {
+      setupSocket = candidate
+      true
+    }
+  }
+
+  private fun unregisterSetupSocket(candidate: Socket) {
+    synchronized(setupSocketLock) {
+      if (setupSocket === candidate) setupSocket = null
+    }
+  }
   @Volatile private var acknowledgementWindow = 0L
   @Volatile private var lastAcknowledgementAt = 0L
   private var lastTimestamp = 0L
@@ -423,12 +449,15 @@ class RtmpsPublisher internal constructor(
       val remaining = remainingTimeoutMs(deadline)
       val tls = tryResolvedAddresses(resolved, remaining) { address, remainingMs ->
         cancellation.throwIfCancelled()
-        openTlsSocket(endpoint, address, remainingMs, cancellation, socketCloser)
+        openTlsSocket(
+          endpoint, address, remainingMs, cancellation, socketCloser,
+          socketFactory, ::registerSetupSocket, ::unregisterSetupSocket
+        )
       }
       cancellation.throwIfCancelled()
       socket = tls
       if (stopped) {
-        close()
+        requestAbort()
         throw InterruptedIOException("Publisher stopped while connecting")
       }
       val deadlineInput = DeadlineInputStream(tls.inputStream, tls, deadline)
@@ -497,7 +526,7 @@ class RtmpsPublisher internal constructor(
       output = out
       initialized = true
       if (stopped) {
-        close()
+        requestAbort()
         throw InterruptedIOException("Publisher stopped while connecting")
       }
       startControlReader(reader, out, countedInput)
@@ -575,15 +604,22 @@ class RtmpsPublisher internal constructor(
 
   /** Nonblocking cancellation path used to release connect/publish before async cleanup. */
   override fun requestAbort() {
-    stopped = true
+    synchronized(setupSocketLock) { stopped = true }
     initialized = false
     output = null
-    // Cancellation closes the underlying plain TCP socket, avoiding TLS-provider close work.
+    // Cancellation is nonblocking and routes socket closure to this destination's socket lane.
     connectCancellation?.cancel()
   }
 
   override fun close() {
     requestAbort()
+    // This runs on the per-destination publisher cleanup lane. Close the currently connecting or
+    // live raw socket here, and finish before its destination lease is released.
+    val activeSetupSocket = synchronized(setupSocketLock) { setupSocket }
+    runCatching { activeSetupSocket?.close() }
+    synchronized(setupSocketLock) {
+      if (setupSocket === activeSetupSocket) setupSocket = null
+    }
     connectCancellation = null
     socket = null
     controlReaderThread = null
