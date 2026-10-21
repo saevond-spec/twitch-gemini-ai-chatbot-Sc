@@ -4,6 +4,8 @@ import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URL
+import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
@@ -23,9 +25,13 @@ internal class RemoteDiagnosticsReporter(
     private const val DEFAULT_BASE_URL = "https://twitch-gemini-ai-chatbot-sc-2.onrender.com"
     private const val SESSION_PATH = "/api/encoder/diagnostics/session"
     private const val REPORT_PATH = "/api/encoder/diagnostics"
+    private const val EVENT_PATH = "/api/encoder/diagnostics/events"
     private const val REFRESH_MARGIN_MS = 30_000L
     private const val CONNECT_TIMEOUT_MS = 3_000
     private const val READ_TIMEOUT_MS = 3_000
+    private const val MAX_PENDING_EVENTS = 256
+    private const val MAX_EVENTS_PER_BATCH = 50
+    private const val MAX_REPORTED_DROPPED_EVENTS = 1_000_000
   }
 
   private val worker = ThreadPoolExecutor(
@@ -33,33 +39,112 @@ internal class RemoteDiagnosticsReporter(
     ThreadFactory { task -> Thread(task, "SweatyOBS-remote-diagnostics").apply { isDaemon = true } },
     ThreadPoolExecutor.DiscardOldestPolicy(),
   )
+  private val pendingLock = Any()
+  private val pendingEvents = ArrayDeque<EncoderDiagnosticEvent>()
+  private var pendingSample: EncoderDiagnosticSample? = null
+  private var droppedEvents = 0
+  private val drainScheduled = AtomicBoolean(false)
   @Volatile private var uploadToken: String? = null
   @Volatile private var tokenExpiresAtElapsedMs = 0L
   @Volatile private var activeConnection: HttpsURLConnection? = null
 
-  /** Safe from the RTMP media callback: it only replaces a queued snapshot. */
+  /** Safe from the RTMP media callback: only the newest snapshot is retained in memory. */
   fun submit(sample: EncoderDiagnosticSample) {
     try {
-      worker.execute { send(sample) }
+      synchronized(pendingLock) { pendingSample = sample }
+      scheduleDrain()
     } catch (_: RuntimeException) {
       // Diagnostics must never affect media flow or service shutdown.
     }
   }
 
-  private fun send(sample: EncoderDiagnosticSample) {
+  /** Keep an in-memory bounded event queue; no event is written to device storage. */
+  fun submitEvent(event: EncoderDiagnosticEvent) {
     try {
-      var token = tokenForUpload() ?: return
-      var response = post(REPORT_PATH, token, JSONObject().put("samples", JSONArray().put(sample.toJson())))
+      synchronized(pendingLock) {
+        if (pendingEvents.size >= MAX_PENDING_EVENTS) {
+          pendingEvents.removeFirst()
+          droppedEvents = (droppedEvents + 1).coerceAtMost(MAX_REPORTED_DROPPED_EVENTS)
+        }
+        pendingEvents.addLast(event)
+      }
+      scheduleDrain()
+    } catch (_: RuntimeException) {
+      // Diagnostics must never affect UI actions or service shutdown.
+    }
+  }
+
+  private fun scheduleDrain() {
+    if (!drainScheduled.compareAndSet(false, true)) return
+    try {
+      worker.execute { drain() }
+    } catch (_: RuntimeException) {
+      drainScheduled.set(false)
+    }
+  }
+
+  private fun drain() {
+    var sendFailed = false
+    try {
+      val sample = synchronized(pendingLock) { pendingSample.also { pendingSample = null } }
+      val eventBatch = synchronized(pendingLock) {
+        val queued = pendingEvents.toList().sortedBy { it.sequence }
+        val batchMode = queued.firstOrNull()?.mode
+        queued.filter { it.mode == batchMode }.take(MAX_EVENTS_PER_BATCH) to droppedEvents
+      }
+      if (sample != null && !postAuthorized(REPORT_PATH,
+          JSONObject().put("samples", JSONArray().put(sample.toJson())))) {
+        synchronized(pendingLock) { if (pendingSample == null) pendingSample = sample }
+        sendFailed = true
+      }
+      val events = eventBatch.first
+      val dropped = eventBatch.second
+      if (events.isNotEmpty() || dropped > 0) {
+        val body = JSONObject()
+          .put("sessionId", events.firstOrNull()?.sessionId ?: sample?.sessionId.orEmpty())
+          .put("appVersion", events.firstOrNull()?.appVersion ?: sample?.appVersion.orEmpty())
+          .put("mode", events.firstOrNull()?.mode?.wire ?: sample?.mode ?: "idle")
+          .put("events", JSONArray().apply { events.forEach { put(it.toJson()) } })
+          .put("droppedEvents", dropped)
+        if (postAuthorized(EVENT_PATH, body)) {
+          val acceptedSequences = events.mapTo(HashSet()) { it.sequence }
+          synchronized(pendingLock) {
+            val remaining = pendingEvents.filterNot { it.sequence in acceptedSequences }
+            pendingEvents.clear()
+            remaining.forEach(pendingEvents::addLast)
+            droppedEvents = (droppedEvents - dropped).coerceAtLeast(0)
+          }
+        } else {
+          sendFailed = true
+        }
+      }
+    } catch (_: Exception) {
+      // Never copy request bodies, credentials, or exception text into local logs.
+    } finally {
+      drainScheduled.set(false)
+      // If a batch exceeded its size bound, immediately send the next bounded batch.
+      // Failures wait for the next 30-second snapshot or app event before retrying.
+      val hasPending = synchronized(pendingLock) {
+        pendingSample != null || pendingEvents.isNotEmpty() || droppedEvents > 0
+      }
+      if (!sendFailed && hasPending) scheduleDrain()
+    }
+  }
+
+  private fun postAuthorized(path: String, body: JSONObject): Boolean {
+    return try {
+      var token = tokenForUpload() ?: return false
+      var response = post(path, token, body)
       if (response.first == 401) {
         uploadToken = null
         tokenExpiresAtElapsedMs = 0L
-        token = tokenForUpload() ?: return
-        response = post(REPORT_PATH, token, JSONObject().put("samples", JSONArray().put(sample.toJson())))
+        token = tokenForUpload() ?: return false
+        response = post(path, token, body)
       }
-      // HTTP failures are intentionally not copied into Android logs or storage.
-      if (response.first !in 200..299) return
+      response.first in 200..299
     } catch (_: Exception) {
-      // Best effort only; a later snapshot retries without a disk-backed queue.
+      // Do not persist or print the endpoint, request body, bearer, or exception text.
+      false
     }
   }
 
@@ -115,12 +200,18 @@ internal class RemoteDiagnosticsReporter(
     activeConnection?.disconnect()
     uploadToken = null
     tokenExpiresAtElapsedMs = 0L
+    synchronized(pendingLock) {
+      pendingEvents.clear()
+      pendingSample = null
+      droppedEvents = 0
+    }
   }
 
   override fun close() {
     // Let an in-flight request finish; queued snapshots remain memory-only.
     worker.shutdown()
   }
+
 }
 
 internal data class EncoderDiagnosticSample(

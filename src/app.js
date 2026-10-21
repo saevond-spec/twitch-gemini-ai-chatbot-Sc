@@ -204,6 +204,7 @@ const encoderDiagnostics = createEncoderDiagnostics({
 const encoderPollLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, validate: false });
 const diagnosticsSessionLimiter = rateLimit({ windowMs: 60 * 1000, max: 4, validate: false });
 const diagnosticsUploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, validate: false });
+const diagnosticsEventLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, validate: false });
 
 app.post('/api/encoder/diagnostics/session', diagnosticsSessionLimiter, express.json({ limit: '1kb' }), (req, res) => {
   const result = encoderDiagnostics.issueSession(req.get('authorization'));
@@ -211,6 +212,10 @@ app.post('/api/encoder/diagnostics/session', diagnosticsSessionLimiter, express.
 });
 app.post('/api/encoder/diagnostics', diagnosticsUploadLimiter, express.json({ limit: '8kb' }), (req, res) => {
   const result = encoderDiagnostics.ingest(req.get('authorization'), req.body);
+  res.status(result.status).json(result.body);
+});
+app.post('/api/encoder/diagnostics/events', diagnosticsEventLimiter, express.json({ limit: '12kb' }), (req, res) => {
+  const result = encoderDiagnostics.ingestEvents(req.get('authorization'), req.body);
   res.status(result.status).json(result.body);
 });
 app.get('/api/encoder/commands', encoderPollLimiter, (req, res) => {
