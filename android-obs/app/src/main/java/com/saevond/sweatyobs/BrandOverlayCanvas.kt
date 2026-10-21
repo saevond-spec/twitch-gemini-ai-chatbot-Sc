@@ -18,7 +18,7 @@ import java.util.Random
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Low-frequency animated, full-screen @saevond overlay. Demo metrics are labeled as simulated. */
+/** Low-frequency animated, full-screen @saevond overlay. Stats, chat, and alerts are simulated by default; live Twitch chat is optional. */
 internal class BrandOverlayCanvas(private val width: Int, private val height: Int) : Closeable {
   val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
   private val canvas = Canvas(bitmap)
