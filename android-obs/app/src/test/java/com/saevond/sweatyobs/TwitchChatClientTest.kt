@@ -54,7 +54,7 @@ class TwitchChatClientTest {
     assertTrue(TwitchChatProtocol.isJoinedConfirmation(":saevond!saevond@saevond.tmi.twitch.tv JOIN #saevond", "saevond", "saevond"))
     assertFalse(TwitchChatProtocol.isJoinedConfirmation(":saevond2!saevond2@host JOIN #saevond", "saevond", "saevond"))
     assertFalse(TwitchChatProtocol.isJoinedConfirmation(":someone!someone@host PRIVMSG #saevond :JOIN #saevond", "saevond", "saevond"))
-    assertTrue(TwitchChatProtocol.isAuthenticationFailure("NOTICE * :Login authentication failed"))
+    assertTrue(TwitchChatProtocol.isAuthenticationFailure(":tmi.twitch.tv NOTICE * :Login authentication failed"))
     assertFalse(TwitchChatProtocol.isAuthenticationFailure("NOTICE #saevond :A chat message"))
   }
 
