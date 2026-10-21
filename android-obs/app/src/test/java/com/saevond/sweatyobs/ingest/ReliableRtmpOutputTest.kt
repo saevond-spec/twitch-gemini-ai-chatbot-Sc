@@ -1203,6 +1203,7 @@ class ReliableRtmpOutputTest {
     val firstCloseEntered = CountDownLatch(1)
     val releaseFirstClose = CountDownLatch(1)
     val firstCloseFinished = CountDownLatch(1)
+    val retrying = CountDownLatch(1)
     val attempts = AtomicInteger()
     val createdSockets = AtomicInteger()
     val output = ReliableRtmpOutput(
@@ -1238,7 +1239,8 @@ class ReliableRtmpOutputTest {
         )
       },
       retryDelaysMs = longArrayOf(1),
-      waitMs = { Thread.sleep(20) }
+      waitMs = { Thread.sleep(20) },
+      onSnapshot = { if (it.state == "RETRYING") retrying.countDown() }
     )
 
     try {
@@ -1248,6 +1250,10 @@ class ReliableRtmpOutputTest {
       output.offer(keyframe(0))
       assertTrue("first failed candidate close should stall on the synthetic socket lane",
         firstCloseEntered.await(2, TimeUnit.SECONDS))
+      assertTrue("the failed connection should enter retry state", retrying.await(2, TimeUnit.SECONDS))
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(500))
       assertTrue("a failed address close must not retain the publisher lease or block retry",
         pollUntil(2_000) { attempts.get() >= 2 })
       assertFalse("the first socket close must still be blocked during retry",
