@@ -6,11 +6,14 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
+import android.graphics.Typeface
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.view.View
 import android.text.InputType
+import android.text.Editable
+import android.text.TextWatcher
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.NetworkCapabilities
@@ -51,6 +54,97 @@ class MainActivity : Activity() {
 
   private fun formatMbps(value: Double): String = String.format(Locale.US, "%.1f", value)
 
+  private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
+
+  private fun sectionHeader(label: String): TextView = TextView(this).apply {
+    text = label.uppercase(Locale.US)
+    textSize = 13f
+    letterSpacing = .12f
+    setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
+    setTextColor(getColor(R.color.sweaty_cyan))
+    setPadding(dp(4), dp(17), dp(4), dp(6))
+  }
+
+  private fun normalizeRtmpsUrl(value: CharSequence?): String {
+    val trimmed = value?.toString()?.trim()?.removeSurrounding("\"")?.removeSurrounding("'").orEmpty()
+    return if (trimmed.startsWith("RTMPS://", ignoreCase = true)) "rtmps://${trimmed.substring(8)}" else trimmed
+  }
+
+  private fun saveOutputServerUrl(
+    platform: String,
+    serverInput: EditText,
+    serverPreference: String,
+    secretPreference: String,
+    enabledPreference: String,
+    enabledToggle: CheckBox,
+    urlStatus: TextView,
+    outputStatus: TextView,
+    onSaved: () -> Unit
+  ): Boolean {
+    val server = normalizeRtmpsUrl(serverInput.text)
+    if (!RtmpsPublisher.endpointValid(server)) {
+      urlStatus.text = "Paste a complete secure RTMPS URL, starting with rtmps://."
+      urlStatus.setTextColor(getColor(R.color.sweaty_red))
+      status.text = "$platform URL not saved. Use its secure RTMPS server URL."
+      return false
+    }
+    val prefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    if (!prefs.edit().putString(serverPreference, server).commit()) {
+      urlStatus.text = "Could not save the $platform URL. Try again."
+      urlStatus.setTextColor(getColor(R.color.sweaty_red))
+      status.text = "$platform URL could not be saved on this phone."
+      return false
+    }
+    urlStatus.text = "$platform RTMPS URL saved on this phone ✓"
+    urlStatus.setTextColor(getColor(R.color.sweaty_cyan))
+    val hasKey = RtmpsPublisher.keyValid(SecretStore(this).get(secretPreference))
+    if (hasKey) {
+      prefs.edit().putBoolean(enabledPreference, true).commit()
+      enabledToggle.isChecked = true
+    }
+    outputStatus.text = outputCredentialStatus(platform, secretPreference, serverPreference)
+    status.text = if (hasKey) "$platform URL saved; destination is ready for the next public stream."
+      else "$platform URL saved. Add its stream key to finish setup."
+    onSaved()
+    return true
+  }
+
+  private fun watchRtmpsUrl(
+    platform: String,
+    serverInput: EditText,
+    serverPreference: String,
+    secretPreference: String,
+    enabledPreference: String,
+    enabledToggle: CheckBox,
+    urlStatus: TextView,
+    outputStatus: TextView,
+    onSaved: () -> Unit
+  ) {
+    var lastSaved = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+      .getString(serverPreference, "").orEmpty()
+    serverInput.addTextChangedListener(object : TextWatcher {
+      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+      override fun afterTextChanged(s: Editable?) {
+        val candidate = normalizeRtmpsUrl(s)
+        if (!RtmpsPublisher.endpointValid(candidate)) {
+          urlStatus.text = "Paste a complete secure RTMPS URL; it saves when valid."
+          urlStatus.setTextColor(getColor(R.color.sweaty_muted))
+          return
+        }
+        if (candidate == lastSaved) {
+          urlStatus.text = "$platform RTMPS URL saved on this phone ✓"
+          urlStatus.setTextColor(getColor(R.color.sweaty_cyan))
+          return
+        }
+        if (saveOutputServerUrl(platform, serverInput, serverPreference, secretPreference,
+            enabledPreference, enabledToggle, urlStatus, outputStatus, onSaved)) {
+          lastSaved = candidate
+        }
+      }
+    })
+  }
+
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -63,13 +157,31 @@ class MainActivity : Activity() {
     super.onCreate(savedInstanceState)
     val layout = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
-      setPadding(24, 20, 24, 20)
+      setPadding(dp(18), dp(14), dp(18), dp(28))
+      setBackgroundColor(getColor(R.color.sweaty_background))
+    }
+    val brandHeader = TextView(this).apply {
+      id = R.id.brand_header
+      text = "SAEVOND"
+      textSize = 28f
+      letterSpacing = .16f
+      setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD))
+      setTextColor(getColor(R.color.sweaty_red))
+      setPadding(dp(4), dp(4), dp(4), 0)
+    }
+    val brandSubtitle = TextView(this).apply {
+      text = "SWEATYCLANKER  //  STREAM CONTROL"
+      textSize = 12f
+      letterSpacing = .12f
+      setTextColor(getColor(R.color.sweaty_cyan))
+      setPadding(dp(4), 0, dp(4), dp(12))
     }
     status = TextView(this).apply {
       id = R.id.connection_status
       text = "Ready. The PS5 network test is diagnostic only; GO LIVE is required to publish or burn in the overlay."
       textSize = 18f
-      setPadding(12, 16, 12, 24)
+      setPadding(dp(14), dp(14), dp(14), dp(14))
+      setBackgroundResource(R.drawable.sweaty_info_card)
       accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
     val phoneIp = TextView(this).apply {
@@ -92,14 +204,22 @@ class MainActivity : Activity() {
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
-      hint = "YouTube RTMPS server URL from Live Control Room"
+      hint = "Paste YouTube RTMPS URL (rtmps://…) · auto-saves"
       setSingleLine(true)
       setText(outputPrefs.getString("youtube_server", ""))
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
     }
+    val youtubeServerStatus = TextView(this).apply {
+      id = R.id.youtube_server_status
+      text = if (RtmpsPublisher.endpointValid(outputPrefs.getString("youtube_server", "").orEmpty()))
+        "YouTube RTMPS URL saved on this phone ✓" else "Paste a complete secure RTMPS URL; it saves when valid."
+      setTextColor(getColor(if (RtmpsPublisher.endpointValid(outputPrefs.getString("youtube_server", "").orEmpty()))
+        R.color.sweaty_cyan else R.color.sweaty_muted))
+      textSize = 13f
+    }
     val saveYouTubeServer = Button(this).apply {
       id = R.id.save_youtube_server
-      text = "Save YouTube RTMPS server URL"
+      text = "Confirm / save YouTube URL"
     }
     val youtubeKey = EditText(this).apply {
       id = R.id.youtube_stream_key
@@ -126,14 +246,22 @@ class MainActivity : Activity() {
     }
     val kickServer = EditText(this).apply {
       id = R.id.kick_server
-      hint = "Kick RTMPS server URL from Creator Dashboard"
+      hint = "Paste Kick RTMPS URL (rtmps://…) · auto-saves"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
       setSingleLine(true)
       setText(outputPrefs.getString("kick_server", ""))
     }
+    val kickServerStatus = TextView(this).apply {
+      id = R.id.kick_server_status
+      text = if (RtmpsPublisher.endpointValid(outputPrefs.getString("kick_server", "").orEmpty()))
+        "Kick RTMPS URL saved on this phone ✓" else "Paste a complete secure RTMPS URL; it saves when valid."
+      setTextColor(getColor(if (RtmpsPublisher.endpointValid(outputPrefs.getString("kick_server", "").orEmpty()))
+        R.color.sweaty_cyan else R.color.sweaty_muted))
+      textSize = 13f
+    }
     val saveKickServer = Button(this).apply {
       id = R.id.save_kick_server
-      text = "Save Kick RTMPS server URL"
+      text = "Confirm / save Kick URL"
     }
     val kickKey = EditText(this).apply {
       id = R.id.kick_stream_key
@@ -332,7 +460,10 @@ class MainActivity : Activity() {
       id = R.id.start_multistream
       text = "GO LIVE TO SELECTED PLATFORMS"
       textSize = 18f
-      setPadding(12, 18, 12, 18)
+      setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
+      setTextColor(getColor(R.color.sweaty_text))
+      setBackgroundResource(R.drawable.sweaty_button_live)
+      setPadding(dp(12), dp(18), dp(12), dp(18))
     }
     val startLan = Button(this).apply {
       id = R.id.start_network_test
@@ -365,6 +496,8 @@ class MainActivity : Activity() {
         "\nTwitch lists 6 Mbps for 1080p60; the shared 8 Mbps profile is above that guide."
         else ""
       outputReadiness.text = "Next public stream · local setup only: $states$twitchNotice"
+      outputReadiness.setPadding(dp(14), dp(12), dp(14), dp(12))
+      outputReadiness.setBackgroundResource(R.drawable.sweaty_info_card)
       val perDestination = quality.videoBitrateMbps + 0.128
       val aggregate = perDestination * selectedCount
       val capacityTarget = aggregate * 2.0
@@ -372,23 +505,35 @@ class MainActivity : Activity() {
       destinations.text = "Overlay budget ($qualityLabel): ${formatMbps(perDestination)} Mbps per selected destination; " +
         "${formatMbps(aggregate)} Mbps aggregate payload for $selectedCount selected. For a conservative 50% upload-utilization ceiling, target more than " +
         "${formatMbps(capacityTarget)} Mbps sustained upload in total. This is a planning estimate, not a speed test."
+      destinations.setPadding(dp(14), dp(12), dp(14), dp(12))
+      destinations.setBackgroundResource(R.drawable.sweaty_info_card)
     }
     refreshOutputSummary()
 
-    listOf(status, phoneIp, ps5Ip, outputReadiness, destinations,
-      enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
-      enableYouTube, openYouTubeDashboard, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
-      enableKick, openKickDashboard, kickServer, saveKickServer, kickKey, saveKick, kickOutputStatus,
-      enableBrandOverlay, overlayQuality, videoModeNote, goLive, reconnectOutputs,
-      metadataTitle, metadataGame, metadataKeywords, copyMetadata,
-      privacy, checkSafety, safetyReading,
-      genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
+    watchRtmpsUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
+      enableYouTube, youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
+    watchRtmpsUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
+      enableKick, kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
+
+    listOf(brandHeader, brandSubtitle, status,
+      sectionHeader("PS5 input"), phoneIp, ps5Ip,
+      sectionHeader("Stream destinations"), outputReadiness, destinations,
+      enableTwitch, twitchStatus, openTwitchDashboard, twitchKey, saveTwitchKey,
+      enableYouTube, openYouTubeDashboard, youtubeServer, youtubeServerStatus, saveYouTubeServer,
+      youtubeKey, saveYouTube, youtubeOutputStatus,
+      enableKick, openKickDashboard, kickServer, kickServerStatus, saveKickServer,
+      kickKey, saveKick, kickOutputStatus,
+      sectionHeader("@saevond overlay and quality"), enableBrandOverlay, overlayQuality, videoModeNote,
+      goLive, reconnectOutputs,
+      sectionHeader("Connection check"), startLan, stopLan,
+      sectionHeader("Stream description and search"), metadataTitle, metadataGame, metadataKeywords, copyMetadata,
+      sectionHeader("Music and audio"), genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
       browseRemotePopTrap, copyStreamCredit, copyTrackCredits, addClub, addDubstep, addPopTrap,
       shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
-      testMusicBridge, bridgeStatus, openTwitchDashboard,
-      startLan, stopLan)
+      testMusicBridge, bridgeStatus,
+      sectionHeader("Device safety"), privacy, checkSafety, safetyReading)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
@@ -505,15 +650,8 @@ class MainActivity : Activity() {
       }
     }
     saveYouTubeServer.setOnClickListener {
-      val server = youtubeServer.text.toString().trim()
-      if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Enter a valid secure YouTube RTMPS server URL from Live Control Room."
-      } else {
-        outputPrefs.edit().putString("youtube_server", server).apply()
-        youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
-        status.text = "YouTube RTMPS server URL saved on this phone. It has not been tested with YouTube."
-        refreshOutputSummary()
-      }
+      saveOutputServerUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
+        enableYouTube, youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
     }
     saveYouTube.setOnClickListener {
       val key = youtubeKey.text.toString().trim()
@@ -532,15 +670,8 @@ class MainActivity : Activity() {
       }
     }
     saveKickServer.setOnClickListener {
-      val server = kickServer.text.toString().trim()
-      if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Enter a valid secure Kick RTMPS server URL from Creator Dashboard."
-      } else {
-        outputPrefs.edit().putString("kick_server", server).apply()
-        kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
-        status.text = "Kick RTMPS server URL saved on this phone. It has not been tested with Kick."
-        refreshOutputSummary()
-      }
+      saveOutputServerUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
+        enableKick, kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
     }
     saveKick.setOnClickListener {
       val key = kickKey.text.toString().trim()
