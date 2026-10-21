@@ -857,6 +857,112 @@ class ReliableRtmpOutputTest {
     }
   }
 
+  @Test fun saturatedCleanupPoolStillAbortsBlockedPublisherAndRetriesAfterCapacityReturns() {
+    val outputCount = 10
+    val connected = CountDownLatch(outputCount)
+    val firstCloseWorkersStarted = CountDownLatch(3)
+    val allowQueuedClosesToFinish = CountDownLatch(1)
+    val blockedPublishEntered = CountDownLatch(1)
+    val releaseBlockedPublish = CountDownLatch(1)
+    val abortRequested = CountDownLatch(1)
+    val targetCloseCalls = AtomicInteger()
+    val targetCloseCompleted = CountDownLatch(1)
+    val replacementConnected = CountDownLatch(1)
+    val replacementPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val attempts = AtomicInteger()
+    val outputs = (0 until outputCount).map { index ->
+      val outputAttempts = AtomicInteger()
+      ReliableRtmpOutput(
+        destination(),
+        publisherFactory = {
+          val session = outputAttempts.incrementAndGet()
+          if (index == outputCount - 1 && session > 1) attempts.incrementAndGet()
+          object : MediaPublisher {
+            override fun connect() {
+              if (session == 1) connected.countDown()
+              else if (index == outputCount - 1) replacementConnected.countDown()
+            }
+            override fun publish(media: RtmpMessage) {
+              if (index == outputCount - 1 && session == 1) {
+                blockedPublishEntered.countDown()
+                check(releaseBlockedPublish.await(5, TimeUnit.SECONDS)) {
+                  "blocked synthetic publisher was not aborted"
+                }
+              } else if (index == outputCount - 1 && session > 1) {
+                replacementPackets += media
+              }
+            }
+            override fun requestAbort() {
+              if (index == outputCount - 1 && session == 1) {
+                abortRequested.countDown()
+                releaseBlockedPublish.countDown()
+              }
+            }
+            override fun close() {
+              if (index == outputCount - 1 && session == 1) {
+                targetCloseCalls.incrementAndGet()
+                targetCloseCompleted.countDown()
+              } else if (index < outputCount - 1 && session == 1) {
+                firstCloseWorkersStarted.countDown()
+                check(allowQueuedClosesToFinish.await(5, TimeUnit.SECONDS)) {
+                  "synthetic queued close was not released"
+                }
+              }
+            }
+          }
+        },
+        retryDelaysMs = longArrayOf(0),
+        waitMs = {}
+      )
+    }
+
+    try {
+      outputs.forEach { output ->
+        output.start()
+        output.offer(avcConfig())
+        output.offer(aacConfig())
+        output.offer(keyframe(0))
+      }
+      assertTrue("all synthetic destinations should connect", connected.await(3, TimeUnit.SECONDS))
+      assertTrue("target publisher should be blocked inside publish",
+        blockedPublishEntered.await(3, TimeUnit.SECONDS))
+
+      // Three closes run and six queue; all nine requests are accepted before the final target.
+      outputs.take(outputCount - 1).forEach { it.reconnectNow() }
+      assertTrue("cleanup workers should be occupied by slow closes",
+        firstCloseWorkersStarted.await(2, TimeUnit.SECONDS))
+
+      val reconnectStartedAt = System.nanoTime()
+      outputs.last().reconnectNow()
+      val reconnectElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconnectStartedAt)
+      assertTrue("manual reconnect must not wait for a full cleanup queue", reconnectElapsedMs < 500)
+      assertTrue("the rejected cleanup request must still abort the in-flight publish",
+        abortRequested.await(1, TimeUnit.SECONDS))
+      assertEquals("target final cleanup waits until pool capacity returns", 0, targetCloseCalls.get())
+
+      // Keep a fresh GOP while final cleanup waits for a bounded executor slot.
+      outputs.last().offer(avcConfig())
+      outputs.last().offer(aacConfig())
+      outputs.last().offer(keyframe(500))
+
+      allowQueuedClosesToFinish.countDown()
+      assertTrue("worker finalizer must retry the rejected cleanup after capacity returns",
+        targetCloseCompleted.await(5, TimeUnit.SECONDS))
+      assertTrue("target output should reconnect after its close is accepted",
+        replacementConnected.await(5, TimeUnit.SECONDS))
+      assertTrue("replacement should receive a complete fresh GOP",
+        pollUntil(3_000) { replacementPackets.size >= 3 })
+      assertEquals(listOf(9, 8, 9), replacementPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), replacementPackets.take(3).map { it.timestamp })
+      assertEquals("the rejected close must run exactly once", 1, targetCloseCalls.get())
+      assertEquals(1, attempts.get())
+    } finally {
+      releaseBlockedPublish.countDown()
+      allowQueuedClosesToFinish.countDown()
+      outputs.forEach { it.close() }
+    }
+  }
+
   @Test fun publisherCleanupUsesABoundedWorkerPoolUnderConcurrentAborts() {
     val outputCount = 12
     val connected = CountDownLatch(outputCount)

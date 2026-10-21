@@ -569,11 +569,17 @@ class RtmpsPublisher internal constructor(
     }
   }
 
-  override fun close() {
+  /** Nonblocking cancellation path used to release connect/publish before async cleanup. */
+  override fun requestAbort() {
     stopped = true
     initialized = false
     output = null
+    // Cancellation closes the underlying plain TCP socket, avoiding TLS-provider close work.
     connectCancellation?.cancel()
+  }
+
+  override fun close() {
+    requestAbort()
     connectCancellation = null
     socket = null
     controlReaderThread = null
@@ -590,6 +596,7 @@ class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
   private val delegate = RtmpsPublisher(TWITCH_SERVER, key)
   fun connect() = delegate.connect()
   fun publish(media: RtmpMessage) = delegate.publish(media)
+  override fun requestAbort() = delegate.requestAbort()
   override fun close() = delegate.close()
 }
 

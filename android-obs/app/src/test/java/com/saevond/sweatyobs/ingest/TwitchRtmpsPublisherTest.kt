@@ -82,7 +82,7 @@ class TwitchRtmpsPublisherTest {
    }
  }
 
- @Test fun closingPublisherCancelsBlockedDnsLookupAndConnectWorker() {
+ @Test fun requestAbortCancelsBlockedDnsLookupAndConnectWorker() {
    val lookupStarted = CountDownLatch(1)
    val cancellationObserved = CountDownLatch(1)
    val failure = AtomicReference<Exception?>(null)
@@ -105,8 +105,8 @@ class TwitchRtmpsPublisherTest {
    try {
      worker.start()
      assertTrue("DNS lookup should begin", lookupStarted.await(2, TimeUnit.SECONDS))
-     publisher.close()
-     assertTrue("close must signal the active DNS lookup", cancellationObserved.await(1, TimeUnit.SECONDS))
+     publisher.requestAbort()
+     assertTrue("requestAbort must signal the active DNS lookup", cancellationObserved.await(1, TimeUnit.SECONDS))
      worker.join(1_000)
      assertFalse("connect worker must finish after DNS cancellation", worker.isAlive)
      assertTrue("connect must report cancellation", failure.get() is InterruptedIOException)

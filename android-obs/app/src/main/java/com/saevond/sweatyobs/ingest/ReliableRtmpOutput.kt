@@ -12,6 +12,14 @@ import kotlin.math.max
 interface MediaPublisher : AutoCloseable {
   fun connect()
   fun publish(media: RtmpMessage)
+
+  /**
+   * Idempotently signal cancellation of in-flight connect/publish work.
+   * Implementations must keep this nonblocking because callers include the LAN ingest path.
+   * Publishers without interruptible I/O may leave the default no-op; final close still runs
+   * on the bounded cleanup pool.
+   */
+  fun requestAbort() {}
 }
 
 data class OutputSnapshot(
@@ -464,6 +472,10 @@ class ReliableRtmpOutput(
    */
   private fun abortPublisherAsync(candidate: MediaPublisher?, waitForCapacity: Boolean = false) {
     if (candidate == null) return
+    // Cancel socket I/O before queuing teardown. If the bounded pool is saturated, this wakes
+    // connect/publish so the output worker reaches its capacity-waiting finalizer instead of
+    // leaving the only abort request stranded behind a blocked network operation.
+    runCatching { candidate.requestAbort() }
     val closeTask = Runnable {
       try {
         runCatching { candidate.close() }
