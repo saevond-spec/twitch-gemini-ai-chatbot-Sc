@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sweaty_background">#070B12</color>
+    <color name="sweaty_background_deep">#03060B</color>
+    <color name="sweaty_surface">#101923</color>
+    <color name="sweaty_surface_raised">#162430</color>
+    <color name="sweaty_cyan">#35DDF2</color>
+    <color name="sweaty_cyan_dim">#1A5360</color>
+    <color name="sweaty_red">#FF365B</color>
+    <color name="sweaty_red_deep">#641729</color>
+    <color name="sweaty_text">#ECF5FA</color>
+    <color name="sweaty_muted">#9BAFBC</color>
+    <color name="sweaty_gold">#FFC857</color>
+    <color name="sweaty_ripple">#5535DDF2</color>
+</resources>

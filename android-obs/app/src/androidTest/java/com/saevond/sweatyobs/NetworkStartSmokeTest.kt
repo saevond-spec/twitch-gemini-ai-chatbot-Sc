@@ -41,6 +41,13 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.open_kick_dashboard)).perform(scrollTo()).check(matches(isDisplayed()))
   }
 
+  @Test fun appUsesBrandedDarkThemeAndShowsTheSaevondHeader() {
+    activityRule.scenario.onActivity { activity ->
+      assertEquals(0xFF070B12.toInt(), activity.getColor(R.color.sweaty_background))
+    }
+    onView(withId(R.id.brand_header)).check(matches(withText("SAEVOND")))
+  }
+
   @Test fun youtubeAndKickKeysSaveSecurelyWithoutAnRtmpsServerUrl() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val youtubeKey = "sandbox-youtube-key-123"
@@ -77,12 +84,33 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
 
-    onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("rtmps://youtube.example.test/live2"), closeSoftKeyboard())
+    onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("RTMPS://youtube.example.test/live2"), closeSoftKeyboard())
+    assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
+    onView(withId(R.id.youtube_server_status)).check(matches(withText(containsString("saved on this phone"))))
     onView(withId(R.id.save_youtube_server)).perform(scrollTo(), click())
     assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
     onView(withId(R.id.kick_server)).perform(scrollTo(), replaceText("rtmps://kick.example.test/app"), closeSoftKeyboard())
+    assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+    onView(withId(R.id.kick_server_status)).check(matches(withText(containsString("saved on this phone"))))
     onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+
+    activityRule.scenario.recreate()
+    onView(withId(R.id.youtube_server)).check(matches(withText("rtmps://youtube.example.test/live2")))
+    onView(withId(R.id.kick_server)).check(matches(withText("rtmps://kick.example.test/app")))
+  }
+
+  @Test fun plaintextOrMalformedIngestUrlsAreNotSavedAsSecureOutputs() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val prefs = context.getSharedPreferences("encoder_outputs", 0)
+    prefs.edit().remove("youtube_server").commit()
+    activityRule.scenario.recreate()
+    onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("rtmp://youtube.example.test/live2"), closeSoftKeyboard())
+    assertNull(prefs.getString("youtube_server", null))
+    onView(withId(R.id.youtube_server_status))
+      .check(matches(withText(containsString("secure RTMPS URL"))))
+    onView(withId(R.id.save_youtube_server)).perform(scrollTo(), click())
+    assertNull(prefs.getString("youtube_server", null))
   }
 
   @Test fun invalidAddressTapReportsVisibleFailure() {

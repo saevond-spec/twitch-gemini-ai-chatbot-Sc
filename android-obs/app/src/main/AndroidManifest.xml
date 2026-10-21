@@ -11,7 +11,7 @@
         android:label="SweatyClanker OBS Lite (Dev)"
         android:icon="@drawable/sweaty_launcher"
         android:roundIcon="@drawable/sweaty_launcher"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:theme="@style/Theme.SweatyObs"
         android:usesCleartextTraffic="false"
         android:allowBackup="false"
         android:supportsRtl="true">

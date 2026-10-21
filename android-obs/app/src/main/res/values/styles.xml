@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SweatyObs" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/sweaty_surface</item>
+        <item name="android:colorPrimaryDark">@color/sweaty_background_deep</item>
+        <item name="android:colorAccent">@color/sweaty_cyan</item>
+        <item name="android:colorBackground">@color/sweaty_background</item>
+        <item name="android:windowBackground">@color/sweaty_background</item>
+        <item name="android:statusBarColor">@color/sweaty_background_deep</item>
+        <item name="android:navigationBarColor">@color/sweaty_background_deep</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:textColorPrimary">@color/sweaty_text</item>
+        <item name="android:textColorSecondary">@color/sweaty_muted</item>
+        <item name="android:textColorHint">@color/sweaty_muted</item>
+        <item name="android:editTextColor">@color/sweaty_text</item>
+        <item name="android:buttonStyle">@style/Widget.SweatyObs.Button</item>
+    </style>
+
+    <style name="Widget.SweatyObs.Button" parent="@android:style/Widget.Material.Button">
+        <item name="android:background">@drawable/sweaty_button</item>
+        <item name="android:textColor">@color/sweaty_cyan</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+    </style>
+</resources>
