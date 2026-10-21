@@ -67,8 +67,8 @@ data class OutputSnapshot(
 class ReliableRtmpOutput(
   private val destination: RtmpDestination,
   private val publisherFactory: (RtmpDestination) -> MediaPublisher = { destination ->
-    RtmpsPublisher(destination.serverUrl, destination.key, socketCloser = { socket ->
-      scheduleSocketClose(destination.id, socket)
+    RtmpsPublisher(destination.serverUrl, destination.key, socketCloser = { socket, onClosed ->
+      scheduleSocketClose(destination.id, socket, onClosed)
     })
   },
   private val retryDelaysMs: LongArray = DEFAULT_RETRY_DELAYS_MS,
@@ -77,7 +77,8 @@ class ReliableRtmpOutput(
   private val maxQueueAgeMs: Long = DEFAULT_QUEUE_AGE_MS,
   private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
   private val waitMs: ((Long) -> Unit)? = null,
-  private val onSnapshot: (OutputSnapshot) -> Unit = {}
+  private val onSnapshot: (OutputSnapshot) -> Unit = {},
+  private val beforePublish: (RtmpMessage) -> Unit = {}
 ) : AutoCloseable {
   companion object {
     const val DEFAULT_QUEUE_LIMIT_BYTES = 2_500_000
@@ -114,10 +115,16 @@ class ReliableRtmpOutput(
      * The active RTMPS socket is closed synchronously by RtmpsPublisher.close() before its lease
      * is released.
      */
-    internal fun scheduleSocketClose(destinationId: String, socket: Socket) {
+    internal fun scheduleSocketClose(
+      destinationId: String,
+      socket: Socket,
+      onClosed: () -> Unit = {}
+    ) {
       val executor = SOCKET_CLOSE_EXECUTORS[destinationId]
         ?: throw IllegalArgumentException("Unsupported RTMP destination: $destinationId")
-      val close = Runnable { runCatching { socket.close() } }
+      val close = Runnable {
+        try { runCatching { socket.close() } } finally { runCatching(onClosed) }
+      }
       try {
         executor.execute(close)
       } catch (_: RejectedExecutionException) {
@@ -374,6 +381,13 @@ class ReliableRtmpOutput(
           if (pending == null) {
             if (!isConnectionCurrent(activeConnectionGeneration)) break
             throw IOException("Output buffer reset")
+          }
+          // Dequeue is not send admission. Reconnect/reset can invalidate this generation
+          // while the worker is between dequeue and publish, so fence immediately before send.
+          beforePublish(pending.message)
+          if (!isConnectionCurrent(activeConnectionGeneration)) {
+            synchronized(lock) { droppedPackets++ }
+            break
           }
           val base = sessionBaseTimestamp ?: pending.message.timestamp.also { sessionBaseTimestamp = it }
           active.publisher.publish(

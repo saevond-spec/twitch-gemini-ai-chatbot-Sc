@@ -467,6 +467,70 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
+  
+  @Test fun reconnectBetweenDequeueAndSendFenceDropsTheStalePacket() {
+    val sendFenceEntered = CountDownLatch(1)
+    val releaseSendFence = CountDownLatch(1)
+    val gateUsed = java.util.concurrent.atomic.AtomicBoolean(false)
+    val firstConnected = CountDownLatch(1)
+    val replacementConnected = CountDownLatch(1)
+    val oldSessionKeyframes = AtomicInteger()
+    val replacementKeyframes = AtomicInteger()
+    val attempts = AtomicInteger()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val attempt = attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {
+            if (attempt == 1) firstConnected.countDown() else replacementConnected.countDown()
+          }
+          override fun publish(media: RtmpMessage) {
+            if (ReliableRtmpOutput.isAvcKeyframe(media)) {
+              if (attempt == 1) oldSessionKeyframes.incrementAndGet()
+              else replacementKeyframes.incrementAndGet()
+            }
+          }
+          override fun close() {}
+        }
+      },
+      retryDelaysMs = longArrayOf(1),
+      waitMs = {},
+      beforePublish = { media ->
+        if (media.timestamp == 0L && ReliableRtmpOutput.isAvcKeyframe(media) &&
+          gateUsed.compareAndSet(false, true)) {
+          sendFenceEntered.countDown()
+          releaseSendFence.await(3, TimeUnit.SECONDS)
+        }
+      }
+    )
+
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("first publisher should connect", firstConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("worker should pause after dequeue and before the final send fence",
+        sendFenceEntered.await(2, TimeUnit.SECONDS))
+
+      output.reconnectNow()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(500))
+      releaseSendFence.countDown()
+
+      assertTrue("replacement publisher should connect", replacementConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("replacement should send the fresh keyframe",
+        pollUntil(2_000) { replacementKeyframes.get() == 1 })
+      assertEquals("the dequeued stale keyframe must not cross the generation fence",
+        0, oldSessionKeyframes.get())
+    } finally {
+      releaseSendFence.countDown()
+      output.close()
+    }
+  }
+
   @Test fun manualReconnectBetweenLiveSnapshotAndDequeueKeepsTheFreshGopIntact() {
     val liveSnapshotEntered = CountDownLatch(1)
     val releaseLiveSnapshot = CountDownLatch(1)

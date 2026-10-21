@@ -150,10 +150,12 @@ class TwitchRtmpsPublisherTest {
      "rtmps://ingest.example.com:443/app",
      "sandbox-key-12345",
      HostAddressResolver { _, _, _ -> arrayOf(InetAddress.getByName("8.8.8.8")) },
-     socketCloser = { candidate ->
+     socketCloser = { candidate, onClosed ->
        dispatchEntered.countDown()
-       releaseDispatch.await(5, TimeUnit.SECONDS)
-       candidate.close()
+       try {
+         releaseDispatch.await(5, TimeUnit.SECONDS)
+         candidate.close()
+       } finally { onClosed() }
      },
      socketFactory = { socket }
    )
@@ -190,6 +192,62 @@ class TwitchRtmpsPublisherTest {
    }
    assertFalse("synthetic connection should stop after cleanup", connector.isAlive)
    assertTrue("connect should observe the deliberate socket close", connectionFailure.get() != null)
+ }
+
+
+ @Test fun failedSetupSocketRemainsTrackedUntilQueuedCloseCompletes() {
+   val asyncCloseStarted = CountDownLatch(1)
+   val releaseAsyncClose = CountDownLatch(1)
+   val cleanupCloseEntered = CountDownLatch(1)
+   val cleanupReturned = CountDownLatch(1)
+   val socket = object : Socket() {
+     override fun setTcpNoDelay(on: Boolean) {}
+     override fun setKeepAlive(on: Boolean) {}
+     override fun connect(endpoint: SocketAddress, timeout: Int) {
+       throw SocketException("synthetic setup failure")
+     }
+     override fun close() {
+       if (Thread.currentThread().name == "synthetic-async-close") {
+         releaseAsyncClose.await(5, TimeUnit.SECONDS)
+       }
+       cleanupCloseEntered.countDown()
+     }
+   }
+   val publisher = RtmpsPublisher(
+     "rtmps://ingest.example.com:443/app",
+     "sandbox-key-12345",
+     HostAddressResolver { _, _, _ -> arrayOf(InetAddress.getByName("8.8.8.8")) },
+     socketCloser = { candidate, onClosed ->
+       Thread({
+         asyncCloseStarted.countDown()
+         try {
+           releaseAsyncClose.await(5, TimeUnit.SECONDS)
+           candidate.close()
+         } finally { onClosed() }
+       }, "synthetic-async-close").apply { isDaemon = true; start() }
+     },
+     socketFactory = { socket }
+   )
+   val connectFailure = AtomicReference<Exception?>(null)
+   try {
+     try { publisher.connect() } catch (error: Exception) { connectFailure.set(error) }
+     assertNotNull("synthetic TCP setup should fail", connectFailure.get())
+     assertTrue("failed setup should dispatch its close asynchronously",
+       asyncCloseStarted.await(1, TimeUnit.SECONDS))
+
+     val cleanup = Thread {
+       try { publisher.close() } finally { cleanupReturned.countDown() }
+     }
+     cleanup.start()
+     assertTrue("publisher cleanup must close the still-tracked failed socket",
+       cleanupCloseEntered.await(2, TimeUnit.SECONDS))
+     assertTrue("cleanup should finish after its direct socket close",
+       cleanupReturned.await(2, TimeUnit.SECONDS))
+     cleanup.join(1_000)
+   } finally {
+     releaseAsyncClose.countDown()
+     publisher.close()
+   }
  }
 
  @Test fun blocksPrivateDnsDestinations() {
