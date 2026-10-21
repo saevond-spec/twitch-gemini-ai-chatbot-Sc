@@ -27,6 +27,38 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
+ * Tracks an asynchronous receiver startup so a second Start cannot launch a stale decoder callback.
+ * Tokens also make callbacks from a cancelled service start harmless.
+ */
+internal class StartupAttemptGate {
+  private var generation = 0L
+  private var pending = false
+
+  @Synchronized fun begin(): Long? {
+    if (pending) return null
+    pending = true
+    return ++generation
+  }
+
+  @Synchronized fun isPending(): Boolean = pending
+
+  @Synchronized fun isCurrent(token: Long): Boolean = pending && generation == token
+
+  @Synchronized fun finish(token: Long): Boolean {
+    if (!isCurrent(token)) return false
+    pending = false
+    return true
+  }
+
+  @Synchronized fun cancel(token: Long? = null): Boolean {
+    if (token != null && (generation != token || !pending)) return false
+    pending = false
+    generation++
+    return true
+  }
+}
+
+/**
  * Android 14-compatible, user-started network-connected foreground service.
  *
  * Authorized LAN diagnostic and opt-in experimental RTMPS multistream with optional licensed music mixing. No recording.
@@ -75,6 +107,7 @@ class Ps5LanService : Service() {
   private var report: String? = null
   private var stopping = false
   private var terminalReason = false
+  private val startupGate = StartupAttemptGate()
   @Volatile private var publicTest = false
   @Volatile private var outputConnected = false
   private val outputPublishers = CopyOnWriteArrayList<ReliableRtmpOutput>()
@@ -233,6 +266,8 @@ class Ps5LanService : Service() {
     if (intent?.action == ACTION_STOP) {
       EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STOP_REQUESTED,
         EncoderDiagnosticResult.REQUESTED, EncoderDiagnosticTarget.NETWORK)
+      stopping = true
+      startupGate.cancel()
       stopSelf()
       return START_NOT_STICKY
     }
@@ -243,11 +278,11 @@ class Ps5LanService : Service() {
       if (publicTest) EncoderDiagnosticEventName.STREAM_START_REQUESTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REQUESTED,
       EncoderDiagnosticResult.REQUESTED,
       if (publicTest) EncoderDiagnosticTarget.MULTIPLE else EncoderDiagnosticTarget.NETWORK)
-    if (receiver != null) {
+    if (receiver != null || startupGate.isPending()) {
       EncoderDiagnostics.record(this,
         if (publicTest) EncoderDiagnosticEventName.STREAM_START_REJECTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
         EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.ILLEGAL_STATE)
-      setNotification("Receiver already active. Stop current test before switching diagnostic/public mode.")
+      setNotification("Receiver is already starting or active. Stop it before switching modes.")
       return START_NOT_STICKY
     }
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
@@ -350,17 +385,22 @@ class Ps5LanService : Service() {
         return START_NOT_STICKY
       }
       wifiAddress = local
+      val startupToken = startupGate.begin()
+      if (startupToken == null) {
+        setNotification("Receiver startup is already in progress.")
+        return START_NOT_STICKY
+      }
       val uriText = if (publicTest && genrePlaylist?.hasTracks() != true)
         getSharedPreferences("ps5_music", MODE_PRIVATE).getString("track_uri", null) else null
       if (uriText.isNullOrBlank()) {
-        beginReceiver(local, ps5Address)
+        beginReceiver(local, ps5Address, startupToken)
       } else {
         setNotification("Loading rights-cleared music file. Receiver is not yet listening.")
         thread(name = "SweatyOBS-music-decode") {
           try {
             val decoded = MusicDecoder(this).decode(Uri.parse(uriText))
             handler.post {
-              if (!stopping) {
+              if (!stopping && startupGate.isCurrent(startupToken)) {
                 try {
                   val loop = musicTrack ?: error("Music control unavailable")
                   // Loading only arms autoplay. No music plays during DNS/receiver
@@ -369,12 +409,14 @@ class Ps5LanService : Service() {
                     .getBoolean("autoplay", true)
                   loop.load(decoded, autoStart = autoStart)
                   audioMixer = LiveAacMusicMixer(loop, liveLevels)
-                  beginReceiver(local, ps5Address)
-                } catch (error: Exception) { startFailed(error) }
+                  beginReceiver(local, ps5Address, startupToken)
+                } catch (error: Exception) { startFailed(error, startupToken) }
               }
             }
           } catch (error: Exception) {
-            handler.post { if (!stopping) startFailed(error) }
+            handler.post {
+              if (!stopping && startupGate.isCurrent(startupToken)) startFailed(error, startupToken)
+            }
           }
         }
       }
@@ -384,7 +426,13 @@ class Ps5LanService : Service() {
     return START_NOT_STICKY
   }
 
-  private fun startFailed(error: Exception) {
+  private fun startFailed(error: Exception, startupToken: Long? = null) {
+    if (startupToken != null) {
+      if (!startupGate.cancel(startupToken)) return
+    } else {
+      startupGate.cancel()
+    }
+    stopping = true
     terminalReason = true
     EncoderDiagnostics.record(this, EncoderDiagnosticEventName.SERVICE_START_FAILED,
       EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.NETWORK,
@@ -393,7 +441,8 @@ class Ps5LanService : Service() {
     stopSelf()
   }
 
-  private fun beginReceiver(local: String, ps5Address: String) {
+  private fun beginReceiver(local: String, ps5Address: String, startupToken: Long) {
+    if (stopping || !startupGate.isCurrent(startupToken)) return
     try {
       if (publicTest && audioMixer == null) {
         // Game volume is independently controllable even with no music selected.
@@ -533,8 +582,14 @@ class Ps5LanService : Service() {
           }.also { it.start() }
         }
       }
+      if (!startupGate.finish(startupToken)) {
+        ingest.stop()
+        receiver = null
+        receiverRunning = false
+        return
+      }
       handler.postDelayed(updateTask, 3000)
-    } catch (error: Exception) { startFailed(error) }
+    } catch (error: Exception) { startFailed(error, startupToken) }
   }
 
   /**
@@ -628,6 +683,7 @@ class Ps5LanService : Service() {
   override fun onDestroy() {
     receiverRunning = false
     stopping = true
+    startupGate.cancel()
     musicDecodeGeneration++
     decodingTrack = false
     genrePlaylist = null

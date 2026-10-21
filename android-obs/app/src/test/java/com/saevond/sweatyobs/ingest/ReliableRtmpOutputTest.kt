@@ -26,6 +26,7 @@ class ReliableRtmpOutputTest {
       "youtube", "YouTube", state, 0, queuedMs, 0, 0, 0, 0, null)
 
     assertEquals("Waiting for keyframe", snapshot("WAITING FOR KEYFRAME").health)
+    assertEquals("Waiting for previous session to close", snapshot("WAITING FOR PREVIOUS SESSION").health)
     assertTrue(snapshot("WAITING FOR KEYFRAME").summary().contains("health Waiting for keyframe"))
     assertEquals("Connecting", snapshot("CONNECTING").health)
     assertEquals("Retrying", snapshot("RETRYING").health)
@@ -89,6 +90,45 @@ class ReliableRtmpOutputTest {
       assertEquals(listOf(9, 8, 9, 8), sent.map { it.type })
     } finally { output.close() }
   }
+  @Test fun queuePacketLimitBoundsTinyMessagesWithRepeatedTimestamps() {
+    val connectEntered = CountDownLatch(1)
+    val connectReturned = CountDownLatch(1)
+    val releaseConnect = CountDownLatch(1)
+    val closeCalls = AtomicInteger()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() {
+          connectEntered.countDown()
+          check(releaseConnect.await(10, TimeUnit.SECONDS)) { "blocked fake connect was not released" }
+          connectReturned.countDown()
+        }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() { closeCalls.incrementAndGet() }
+      }
+    }, clockMs = { 1_000L })
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("destination connect should be in progress", connectEntered.await(2, TimeUnit.SECONDS))
+
+      // Repeated timestamps keep duration and age from masking the packet-count guard.
+      repeat(ReliableRtmpOutput.DEFAULT_QUEUE_LIMIT_PACKETS - 2) {
+        output.offer(RtmpMessage(9, 0, 1, byteArrayOf(0x27, 1, 1)))
+      }
+      assertEquals("tiny packet burst should clear the over-limit queue", 0, output.snapshot().queueBytes)
+      assertTrue("the dropped packet counter should include the burst",
+        output.snapshot().droppedPackets >= ReliableRtmpOutput.DEFAULT_QUEUE_LIMIT_PACKETS)
+      assertEquals("connecting publisher remains untouched by queue pressure", 0, closeCalls.get())
+      assertEquals("CONNECTING", output.snapshot().state)
+    } finally {
+      releaseConnect.countDown()
+      output.close()
+    }
+    assertTrue("fake connect should be released during teardown", connectReturned.await(2, TimeUnit.SECONDS))
+  }
+
   @Test fun queueOverflowDoesNotCancelAnInFlightDestinationConnect() {
     val connectEntered = CountDownLatch(1)
     val connectReturned = CountDownLatch(1)
@@ -990,6 +1030,7 @@ class ReliableRtmpOutputTest {
     val firstCloseEntered = CountDownLatch(1)
     val releaseFirstClose = CountDownLatch(1)
     val replacementConnected = CountDownLatch(1)
+    val replacementWaitingForCleanup = CountDownLatch(1)
     val replacementAttempts = AtomicInteger()
     val first = ReliableRtmpOutput(destination(), publisherFactory = {
       object : MediaPublisher {
@@ -1008,6 +1049,8 @@ class ReliableRtmpOutputTest {
         override fun publish(media: RtmpMessage) {}
         override fun close() {}
       }
+    }, onSnapshot = { snapshot ->
+      if (snapshot.state == "WAITING FOR PREVIOUS SESSION") replacementWaitingForCleanup.countDown()
     })
 
     try {
@@ -1026,6 +1069,8 @@ class ReliableRtmpOutputTest {
       replacement.offer(avcConfig())
       replacement.offer(aacConfig())
       replacement.offer(keyframe(0))
+      assertTrue("replacement worker should reach the destination lease wait",
+        replacementWaitingForCleanup.await(2, TimeUnit.SECONDS))
       assertFalse("a second output object must not overlap the old publisher",
         replacementConnected.await(150, TimeUnit.MILLISECONDS))
       assertEquals(0, replacementAttempts.get())
@@ -1086,7 +1131,9 @@ class ReliableRtmpOutputTest {
         .filter { it.name in destinationIds.map { id -> "SweatyOBS-$id-publisher-close" } }
         .map { it.name }
         .toSet()
-      assertTrue("cleanup must use at most three destination workers", cleanupThreadNames.size <= 3)
+      assertEquals(
+        setOf("SweatyOBS-twitch-publisher-close", "SweatyOBS-youtube-publisher-close", "SweatyOBS-kick-publisher-close"),
+        cleanupThreadNames)
       assertEquals("all three independent lanes should close concurrently", 3, maxActiveCloses.get())
     } finally {
       releaseCloses.countDown()
@@ -1096,6 +1143,70 @@ class ReliableRtmpOutputTest {
       closeFinished.await(2, TimeUnit.SECONDS))
     assertEquals(0, activeCloses.get())
   }
+  @Test fun closeAloneCleansPublisherAndReleasesTheDestinationLease() {
+    val firstConnected = CountDownLatch(1)
+    val firstCloseEntered = CountDownLatch(1)
+    val releaseFirstClose = CountDownLatch(1)
+    val firstCloseFinished = CountDownLatch(1)
+    val replacementConnected = CountDownLatch(1)
+    val replacementWaitingForCleanup = CountDownLatch(1)
+    val replacementAttempts = AtomicInteger()
+    val first = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() { firstConnected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {
+          firstCloseEntered.countDown()
+          try { releaseFirstClose.await() } finally { firstCloseFinished.countDown() }
+        }
+      }
+    })
+    val replacement = ReliableRtmpOutput(destination(), publisherFactory = {
+      replacementAttempts.incrementAndGet()
+      object : MediaPublisher {
+        override fun connect() { replacementConnected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {}
+      }
+    }, onSnapshot = { snapshot ->
+      if (snapshot.state == "WAITING FOR PREVIOUS SESSION") replacementWaitingForCleanup.countDown()
+    })
+
+    try {
+      first.start()
+      first.offer(avcConfig())
+      first.offer(aacConfig())
+      first.offer(keyframe(0))
+      assertTrue("first publisher should become active", firstConnected.await(2, TimeUnit.SECONDS))
+
+      // close() itself is the first cleanup trigger; no reconnect call precedes it.
+      first.close()
+      assertTrue("shutdown should schedule publisher cleanup asynchronously",
+        firstCloseEntered.await(2, TimeUnit.SECONDS))
+
+      replacement.start()
+      replacement.offer(avcConfig())
+      replacement.offer(aacConfig())
+      replacement.offer(keyframe(0))
+      assertTrue("replacement should report waiting for prior cleanup",
+        replacementWaitingForCleanup.await(2, TimeUnit.SECONDS))
+      assertFalse("replacement must not overlap the still-open publisher",
+        replacementConnected.await(150, TimeUnit.MILLISECONDS))
+      assertEquals(0, replacementAttempts.get())
+
+      releaseFirstClose.countDown()
+      assertTrue("the first session should release its lease after close",
+        firstCloseFinished.await(2, TimeUnit.SECONDS))
+      assertTrue("replacement should connect after prior cleanup completes",
+        replacementConnected.await(2, TimeUnit.SECONDS))
+      assertEquals(1, replacementAttempts.get())
+    } finally {
+      releaseFirstClose.countDown()
+      first.close()
+      replacement.close()
+    }
+  }
+
   @Test fun repeatedReconnectAndCloseCoalescePublisherCleanupAndPreventRestart() {
     val connected = CountDownLatch(1)
     val closeEntered = CountDownLatch(1)

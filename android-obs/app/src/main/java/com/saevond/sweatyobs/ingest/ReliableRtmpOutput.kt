@@ -40,6 +40,7 @@ data class OutputSnapshot(
       else -> "Good"
     }
     "WAITING FOR KEYFRAME" -> "Waiting for keyframe"
+    "WAITING FOR PREVIOUS SESSION" -> "Waiting for previous session to close"
     "CONNECTING" -> "Connecting"
     "RETRYING" -> "Retrying"
     "STOPPED" -> "Offline"
@@ -73,6 +74,7 @@ class ReliableRtmpOutput(
 ) : AutoCloseable {
   companion object {
     const val DEFAULT_QUEUE_LIMIT_BYTES = 2_500_000
+    const val DEFAULT_QUEUE_LIMIT_PACKETS = 8_192
     const val DEFAULT_QUEUE_MEDIA_MS = 1_500L
     const val DEFAULT_QUEUE_AGE_MS = 2_000L
     val DEFAULT_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
@@ -297,7 +299,14 @@ class ReliableRtmpOutput(
           continue
         }
         leaseAcquired = true
-        if (!isConnectionCurrent(activeConnectionGeneration)) continue
+        val canConnect = synchronized(lock) {
+          if (running && connectionGeneration == activeConnectionGeneration) {
+            state = "CONNECTING"
+            true
+          } else false
+        }
+        if (!canConnect) continue
+        notifySnapshot()
 
         val candidate = publisherFactory(destination)
         active = PublisherSession(candidate, destinationLease)
@@ -401,7 +410,7 @@ class ReliableRtmpOutput(
   private fun awaitFreshStartAndMarkConnecting(): StartGeneration? = synchronized(lock) {
     while (running) {
       if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
-        state = "CONNECTING"
+        state = "WAITING FOR PREVIOUS SESSION"
         return@synchronized StartGeneration(mediaGeneration, connectionGeneration)
       }
       if (aligned && queue.isNotEmpty()) {
@@ -476,7 +485,8 @@ class ReliableRtmpOutput(
   }
 
   private fun queueExceedsLimitsLocked(): Boolean =
-    queueBytes > queueLimitBytes ||
+    queue.size > DEFAULT_QUEUE_LIMIT_PACKETS ||
+      queueBytes > queueLimitBytes ||
       queueMediaDurationLocked() > maxQueueMediaMs ||
       queue.peekFirst()?.let { clockMs() - it.enqueuedAtMs > maxQueueAgeMs } == true
 
