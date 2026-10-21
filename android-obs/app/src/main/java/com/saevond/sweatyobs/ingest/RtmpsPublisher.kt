@@ -373,14 +373,20 @@ class RtmpsPublisher internal constructor(
         throw InterruptedIOException("RTMPS publisher stopped before socket connect")
       }
       var tls: SSLSocket? = null
-      val closeScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+      val closeDispatchLock = Any()
+      var closeDispatched = false
       fun closePlainOnce() {
-        if (!closeScheduled.compareAndSet(false, true)) return
-        try {
-          socketCloser(plain) { unregisterSetupSocket(plain) }
-        } catch (_: Exception) {
-          runCatching { plain.close() }
-          unregisterSetupSocket(plain)
+        synchronized(closeDispatchLock) {
+          if (closeDispatched) return
+          // Mark and dispatch under one lock so a preempted cancellation callback cannot claim
+          // the close and leave the connect-failure path unable to queue it.
+          closeDispatched = true
+          try {
+            socketCloser(plain) { unregisterSetupSocket(plain) }
+          } catch (_: Exception) {
+            runCatching { plain.close() }
+            unregisterSetupSocket(plain)
+          }
         }
       }
       cancellation.setCancelAction { runCatching { closePlainOnce() } }
@@ -404,6 +410,9 @@ class RtmpsPublisher internal constructor(
       } catch (error: Exception) {
         cancellation.clearCancelAction()
         runCatching { closePlainOnce() }
+        // The TCP/TLS candidate has failed. Its close is now queued (or completed inline), so
+        // it no longer gates cleanup of a later active candidate on this destination.
+        unregisterSetupSocket(plain)
         throw error
       }
     }
@@ -411,7 +420,7 @@ class RtmpsPublisher internal constructor(
 
   private val endpoint = parseEndpoint(serverUrl) ?: throw IllegalArgumentException("Use the RTMPS server URL from the streaming platform")
   private val setupSocketLock = Any()
-  private val setupSockets = LinkedHashSet<Socket>()
+  private var setupSocket: Socket? = null
   @Volatile private var socket: SSLSocket? = null
   @Volatile private var output: OutputStream? = null
   @Volatile private var initialized = false
@@ -423,14 +432,14 @@ class RtmpsPublisher internal constructor(
   /** Register before TCP connect so cleanup can close a socket even if cancellation races setup. */
   private fun registerSetupSocket(candidate: Socket): Boolean = synchronized(setupSocketLock) {
     if (stopped) false else {
-      setupSockets.add(candidate)
+      setupSocket = candidate
       true
     }
   }
 
   private fun unregisterSetupSocket(candidate: Socket) {
     synchronized(setupSocketLock) {
-      setupSockets.remove(candidate)
+      if (setupSocket === candidate) setupSocket = null
     }
   }
   @Volatile private var acknowledgementWindow = 0L
@@ -624,9 +633,11 @@ class RtmpsPublisher internal constructor(
     requestAbort()
     // This runs on the per-destination publisher cleanup lane. Close the currently connecting or
     // live raw socket here, and finish before its destination lease is released.
-    val activeSetupSockets = synchronized(setupSocketLock) { setupSockets.toList() }
-    activeSetupSockets.forEach { candidate -> runCatching { candidate.close() } }
-    synchronized(setupSocketLock) { setupSockets.removeAll(activeSetupSockets.toSet()) }
+    val activeSetupSocket = synchronized(setupSocketLock) { setupSocket }
+    runCatching { activeSetupSocket?.close() }
+    synchronized(setupSocketLock) {
+      if (setupSocket === activeSetupSocket) setupSocket = null
+    }
     connectCancellation = null
     socket = null
     controlReaderThread = null

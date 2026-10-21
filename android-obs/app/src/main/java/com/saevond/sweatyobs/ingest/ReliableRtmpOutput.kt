@@ -384,6 +384,8 @@ class ReliableRtmpOutput(
           }
           // Dequeue is not send admission. Reconnect/reset can invalidate this generation
           // while the worker is between dequeue and publish, so fence immediately before send.
+          // This check is the admission point: a packet admitted before a concurrent reset is
+          // the single in-flight packet and cannot be recalled once its socket write begins.
           beforePublish(pending.message)
           if (!isConnectionCurrent(activeConnectionGeneration)) {
             synchronized(lock) { droppedPackets++ }
