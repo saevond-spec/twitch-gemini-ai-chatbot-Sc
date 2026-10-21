@@ -453,12 +453,14 @@ class Ps5LanService : Service() {
         }
       }, onSourceSessionStart = {
         if (publicTest) {
+          outputPublishers.forEach { it.resetForSourceSession() }
           liveGate?.resetForSourceReconnect()
           audioMixer?.close()
           audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
         }
       }, onSourceSessionEnd = {
         if (publicTest) {
+          outputPublishers.forEach { it.resetForSourceSession() }
           audioMixer?.close()
           audioMixer = null
         }
