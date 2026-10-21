@@ -58,7 +58,8 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
         tls.close()
         "TLS_OK"
       } catch (error: Exception) {
-        val root = generateSequence(error) { it.cause }.last()
+        var root: Throwable = error
+        while (root.cause != null && root.cause !== root) root = root.cause!!
         when (root) {
           is SocketTimeoutException -> "CONNECT_TIMEOUT"
           is SSLException -> "TLS_FAILED"
