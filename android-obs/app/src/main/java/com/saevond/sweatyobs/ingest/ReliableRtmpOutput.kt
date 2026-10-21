@@ -244,9 +244,19 @@ class ReliableRtmpOutput(
         activeMediaGeneration = startGeneration.media
         activeConnectionGeneration = startGeneration.connection
         notifySnapshot()
-        active = publisherFactory(destination)
-        publisher = active
-        active.connect()
+        val candidate = publisherFactory(destination)
+        active = candidate
+        val startIsCurrent = synchronized(lock) {
+          if (running && connectionGeneration == activeConnectionGeneration) {
+            publisher = candidate
+            true
+          } else false
+        }
+        if (!startIsCurrent) {
+          if (!isRunning()) break
+          continue
+        }
+        candidate.connect()
         if (!isRunning()) break
         // A queue overflow during connect may invalidate the original start GOP.
         // Keep the successful publisher open and wait here for a fresh keyframe.
@@ -264,7 +274,11 @@ class ReliableRtmpOutput(
         notifySnapshot()
         var sessionBaseTimestamp: Long? = null
         while (isRunning()) {
-          val pending = takeNext() ?: throw IOException("Output buffer reset")
+          val pending = takeNext(activeConnectionGeneration)
+          if (pending == null) {
+            if (!isConnectionCurrent(activeConnectionGeneration)) break
+            throw IOException("Output buffer reset")
+          }
           val base = sessionBaseTimestamp ?: pending.message.timestamp.also { sessionBaseTimestamp = it }
           active.publish(pending.message.copy(timestamp = (pending.message.timestamp - base).coerceAtLeast(0L)))
           recordSent(pending.message)
@@ -342,9 +356,9 @@ class ReliableRtmpOutput(
     null
   }
 
-  private fun takeNext(): Pending? = synchronized(lock) {
-    while (running && aligned && queue.isEmpty()) lock.wait()
-    if (!running) return@synchronized null
+  private fun takeNext(expectedConnectionGeneration: Long): Pending? = synchronized(lock) {
+    while (running && connectionGeneration == expectedConnectionGeneration && aligned && queue.isEmpty()) lock.wait()
+    if (!running || connectionGeneration != expectedConnectionGeneration) return@synchronized null
     val first = queue.peekFirst() ?: return@synchronized null
     if (clockMs() - first.enqueuedAtMs > maxQueueAgeMs) {
       droppedPackets += queue.size.toLong()
@@ -404,6 +418,10 @@ class ReliableRtmpOutput(
     message.copy(timestamp = timestamp, streamId = 1, data = message.data.copyOf())
 
   private fun isRunning() = synchronized(lock) { running }
+
+  private fun isConnectionCurrent(expected: Long) = synchronized(lock) {
+    running && connectionGeneration == expected
+  }
 
   private fun recordSent(message: RtmpMessage) {
     val now = clockMs()
