@@ -50,7 +50,7 @@ class MainActivity : Activity() {
     private const val PICK_DUBSTEP = 31418
     private const val PICK_POP_TRAP = 31419
     private const val YOUTUBE_DASHBOARD_URL = "https://studio.youtube.com/"
-    private const val KICK_DASHBOARD_URL = "https://dashboard.kick.com/stream"
+    private const val KICK_DASHBOARD_URL = "https://dashboard.kick.com/channel/stream"
   }
 
   private fun formatMbps(value: Double): String = String.format(Locale.US, "%.1f", value)
@@ -155,6 +155,34 @@ class MainActivity : Activity() {
     })
   }
 
+  private fun checkRtmpsEndpoint(platform: String, serverInput: EditText, outputStatus: TextView,
+                                 button: Button) {
+    val server = normalizeRtmpsUrl(serverInput.text)
+    if (!RtmpsPublisher.endpointValid(server)) {
+      outputStatus.text = "$platform needs a valid rtmps:// server URL first. No key or media was sent."
+      return
+    }
+    button.isEnabled = false
+    outputStatus.text = "Checking $platform DNS and TLS only… No key or media is sent."
+    thread(name = "SweatyOBS-$platform-endpoint-check") {
+      val result = RtmpsPublisher.testTlsEndpoint(server)
+      runOnUiThread {
+        if (isFinishing || isDestroyed) return@runOnUiThread
+        button.isEnabled = true
+        outputStatus.text = when (result) {
+          "TLS_OK" -> "$platform RTMPS endpoint reachable over verified TLS ✓ Key and stream were not tested."
+          "INVALID_URL" -> "$platform URL is invalid. Use its secure RTMPS server URL."
+          "DNS_FAILED" -> "$platform server name did not resolve. Check the URL or phone internet."
+          "BLOCKED_ADDRESS" -> "$platform server resolved to a private address and was blocked."
+          "CONNECT_TIMEOUT" -> "$platform secure connection timed out. Check internet, firewall, or try another network."
+          "TLS_FAILED" -> "$platform TLS verification failed. Copy the RTMPS URL from the platform dashboard."
+          "CONNECTION_REFUSED" -> "$platform server refused the connection. Check the RTMPS URL and port 443."
+          else -> "$platform could not be reached. Check the RTMPS URL and phone internet, then retry."
+        }
+      }
+    }
+  }
+
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -209,6 +237,9 @@ class MainActivity : Activity() {
       text = "Upload budget is calculated from the selected quality and platform count. It is a planning estimate, not a speed test."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    if (outputPrefs.getString("kick_server", "").isNullOrBlank()) {
+      outputPrefs.edit().putString("kick_server", RtmpsPublisher.KICK_RTMPS_URL).apply()
+    }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
       isChecked = outputPrefs.getBoolean("twitch_enabled", true)
@@ -220,7 +251,7 @@ class MainActivity : Activity() {
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
-      hint = "Paste YouTube RTMPS URL (rtmps://…) · auto-saves"
+      hint = "YouTube Studio RTMPS URL (tap its lock icon) · auto-saves"
       setSingleLine(true)
       setText(outputPrefs.getString("youtube_server", ""))
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
@@ -236,6 +267,10 @@ class MainActivity : Activity() {
     val saveYouTubeServer = Button(this).apply {
       id = R.id.save_youtube_server
       text = "Confirm / save YouTube URL"
+    }
+    val testYouTubeConnection = Button(this).apply {
+      id = R.id.test_youtube_connection
+      text = "Test YouTube secure connection · no stream"
     }
     val youtubeKey = EditText(this).apply {
       id = R.id.youtube_stream_key
@@ -262,7 +297,7 @@ class MainActivity : Activity() {
     }
     val kickServer = EditText(this).apply {
       id = R.id.kick_server
-      hint = "Paste Kick RTMPS URL (rtmps://…) · auto-saves"
+      hint = "Kick RTMPS URL · prefilled · auto-saves"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
       setSingleLine(true)
       setText(outputPrefs.getString("kick_server", ""))
@@ -278,6 +313,10 @@ class MainActivity : Activity() {
     val saveKickServer = Button(this).apply {
       id = R.id.save_kick_server
       text = "Confirm / save Kick URL"
+    }
+    val testKickConnection = Button(this).apply {
+      id = R.id.test_kick_connection
+      text = "Test Kick secure connection · no stream"
     }
     val kickKey = EditText(this).apply {
       id = R.id.kick_stream_key
@@ -558,9 +597,9 @@ class MainActivity : Activity() {
       sectionHeader("PS5 input"), phoneIp, ps5Ip,
       sectionHeader("Stream destinations"), outputReadiness, destinations,
       enableTwitch, twitchStatus, openTwitchDashboard, twitchKey, saveTwitchKey,
-      enableYouTube, openYouTubeDashboard, youtubeServer, youtubeServerStatus, saveYouTubeServer,
+      enableYouTube, openYouTubeDashboard, youtubeServer, youtubeServerStatus, saveYouTubeServer, testYouTubeConnection,
       youtubeKey, saveYouTube, youtubeOutputStatus,
-      enableKick, openKickDashboard, kickServer, kickServerStatus, saveKickServer,
+      enableKick, openKickDashboard, kickServer, kickServerStatus, saveKickServer, testKickConnection,
       kickKey, saveKick, kickOutputStatus,
       sectionHeader("@saevond overlay and quality"), enableBrandOverlay, overlayQuality, videoModeNote,
       goLive, reconnectOutputs,
@@ -684,10 +723,12 @@ class MainActivity : Activity() {
         "Copy your Twitch stream key into this app and save it securely.")
     }
     openYouTubeDashboard.setOnClickListener {
-      openCreatorDashboard("YouTube", YOUTUBE_DASHBOARD_URL)
+      openCreatorDashboard("YouTube", YOUTUBE_DASHBOARD_URL,
+        "In Live Control Room, copy the RTMPS URL shown after tapping the lock icon. Paste it here; save the stream key separately.")
     }
     openKickDashboard.setOnClickListener {
-      openCreatorDashboard("Kick", KICK_DASHBOARD_URL)
+      openCreatorDashboard("Kick", KICK_DASHBOARD_URL,
+        "The recommended RTMPS server URL is prefilled. Copy only your stream key into the separate Kick key field.")
     }
     enableTwitch.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
@@ -732,6 +773,9 @@ class MainActivity : Activity() {
       saveOutputServerUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
         enableYouTube, youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
     }
+    testYouTubeConnection.setOnClickListener {
+      checkRtmpsEndpoint("YouTube", youtubeServer, youtubeOutputStatus, testYouTubeConnection)
+    }
     saveYouTube.setOnClickListener {
       val key = youtubeKey.text.toString().trim()
       if (!RtmpsPublisher.keyValid(key)) {
@@ -753,6 +797,9 @@ class MainActivity : Activity() {
     saveKickServer.setOnClickListener {
       saveOutputServerUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
         enableKick, kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
+    }
+    testKickConnection.setOnClickListener {
+      checkRtmpsEndpoint("Kick", kickServer, kickOutputStatus, testKickConnection)
     }
     saveKick.setOnClickListener {
       val key = kickKey.text.toString().trim()

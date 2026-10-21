@@ -1,6 +1,7 @@
 package com.saevond.sweatyobs.ingest
 
 import java.io.EOFException
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.ByteArrayOutputStream
@@ -9,6 +10,24 @@ import java.nio.ByteOrder
 import java.security.SecureRandom
 
 data class RtmpMessage(val type: Int, val timestamp: Long, val streamId: Int, val data: ByteArray)
+
+/** Counts inbound RTMP bytes for protocol acknowledgements without retaining media or payloads. */
+internal class CountingInputStream(input: InputStream) : FilterInputStream(input) {
+  @Volatile var bytesRead: Long = 0L
+    private set
+
+  override fun read(): Int {
+    val value = super.read()
+    if (value >= 0) bytesRead++
+    return value
+  }
+
+  override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    val count = super.read(buffer, offset, length)
+    if (count > 0) bytesRead += count
+    return count
+  }
+}
 
 internal fun InputStream.readRequired(length: Int): ByteArray {
   require(length in 0..4_194_304)
