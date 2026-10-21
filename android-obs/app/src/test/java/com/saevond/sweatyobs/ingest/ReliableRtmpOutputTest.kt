@@ -1206,6 +1206,7 @@ class ReliableRtmpOutputTest {
     val retrying = CountDownLatch(1)
     val attempts = AtomicInteger()
     val createdSockets = AtomicInteger()
+    val connectCalls = AtomicInteger()
     val output = ReliableRtmpOutput(
       destination(),
       publisherFactory = {
@@ -1225,6 +1226,7 @@ class ReliableRtmpOutputTest {
               override fun setTcpNoDelay(on: Boolean) {}
               override fun setKeepAlive(on: Boolean) {}
               override fun connect(endpoint: java.net.SocketAddress, timeout: Int) {
+                connectCalls.incrementAndGet()
                 throw java.net.ConnectException("synthetic RTMPS setup failure")
               }
               override fun close() {
@@ -1256,6 +1258,8 @@ class ReliableRtmpOutputTest {
       output.offer(keyframe(500))
       assertTrue("a failed address close must not retain the publisher lease or block retry",
         pollUntil(2_000) { attempts.get() >= 2 })
+      assertTrue("retry should reach a second synthetic TCP connection attempt",
+        pollUntil(2_000) { connectCalls.get() >= 2 })
       assertFalse("the first socket close must still be blocked during retry",
         firstCloseFinished.await(50, TimeUnit.MILLISECONDS))
     } finally {
