@@ -53,6 +53,7 @@ internal class BrandVideoOverlay(
   private val onFailure: (String) -> Unit,
   private val encodingProfile: OverlayEncodingProfile = OverlayEncodingProfile.STABLE_720P
 ) : Closeable {
+  companion object { private const val CHAT_DRAIN_INTERVAL_MS = 50L }
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
   private val handler = Handler(worker.looper)
@@ -121,10 +122,10 @@ internal class BrandVideoOverlay(
     scheduleChatDrain()
   }
 
-  /** Coalesces bursts into one worker callback; queue size stays capped at the visible row count. */
+  /** Coalesces bursts into at most 20 worker callbacks per second; pending rows stay capped at eight. */
   private fun scheduleChatDrain() {
     if (!chatDrainScheduled.compareAndSet(false, true)) return
-    if (!handler.post {
+    if (!handler.postDelayed({
         val batch = synchronized(chatLock) {
           val canvas = overlayCanvas
           if (canvas == null) {
@@ -143,7 +144,7 @@ internal class BrandVideoOverlay(
           pendingChatMessages.isNotEmpty() && overlayCanvas != null && liveChatEnabled && !closed.get()
         }
         if (morePending) scheduleChatDrain()
-      }) {
+      }, CHAT_DRAIN_INTERVAL_MS)) {
       chatDrainScheduled.set(false)
     }
   }
