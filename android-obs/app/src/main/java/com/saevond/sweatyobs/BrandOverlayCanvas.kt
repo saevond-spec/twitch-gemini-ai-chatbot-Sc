@@ -13,6 +13,7 @@ import android.graphics.Typeface
 import android.os.SystemClock
 import java.io.Closeable
 import java.util.ArrayDeque
+import java.util.Locale
 import java.util.Random
 import kotlin.math.cos
 import kotlin.math.sin
@@ -27,6 +28,9 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
       random.nextFloat() * 100f + 20f, PARTICLE_COLORS[random.nextInt(PARTICLE_COLORS.size)], random.nextFloat() * 6f)
   }
   private val chat = ArrayDeque<ChatLine>()
+  private val chatLock = Any()
+  @Volatile private var liveChatMode = false
+  @Volatile private var liveChatStatus = "OFFLINE"
   private var lastRenderAt = 0L
   private var lastStatsAt = 0L
   private var lastChatAt = 0L
@@ -56,6 +60,35 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
 
   private data class Particle(val x: Float, val y: Float, val speed: Float, val color: Int, val phase: Float)
   private data class ChatLine(val user: String, val message: String, val color: Int, val highlighted: Boolean)
+
+  /** Live messages stay in this bounded in-memory overlay queue and are never persisted. */
+  fun setLiveChatEnabled(enabled: Boolean) {
+    synchronized(chatLock) {
+      if (liveChatMode == enabled) return
+      liveChatMode = enabled
+      liveChatStatus = if (enabled) "CONNECTING" else "OFFLINE"
+      chat.clear()
+      if (!enabled) repeat(CHAT_VISIBLE_COUNT) { addDemoChatLine() }
+    }
+  }
+
+  fun setLiveChatStatus(status: String) {
+    liveChatStatus = status.filter { it.isLetterOrDigit() || it == ' ' || it == '/' }.take(16).uppercase(Locale.ROOT)
+      .ifBlank { "OFFLINE" }
+  }
+
+  fun addLiveChatMessage(message: TwitchChatMessage) {
+    if (!liveChatMode) return
+    val user = message.displayName.filterNot(Char::isISOControl).take(25).ifBlank { "viewer" }
+    val text = message.text.filterNot(Char::isISOControl).take(TwitchChatProtocol.MAX_MESSAGE_CHARS).trim()
+    if (text.isEmpty()) return
+    val color = CHAT_COLORS[message.login.hashCode().ushr(1) % CHAT_COLORS.size]
+    synchronized(chatLock) {
+      if (!liveChatMode) return
+      chat.addLast(ChatLine(user, text, color, highlighted = false))
+      while (chat.size > CHAT_VISIBLE_COUNT) chat.removeFirst()
+    }
+  }
 
   fun redrawIfDue(now: Long = SystemClock.elapsedRealtime()): Boolean {
     if (lastRenderAt != 0L && now - lastRenderAt < FRAME_UPDATE_MS) return false
@@ -128,7 +161,12 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
     }
   }
 
-  private fun addChatLine() {
+  private fun addChatLine() = synchronized(chatLock) {
+    if (liveChatMode) return@synchronized
+    addDemoChatLine()
+  }
+
+  private fun addDemoChatLine() {
     val source = CHAT_MESSAGES[chatIndex % CHAT_MESSAGES.size]
     chat.addLast(source)
     chatIndex++
@@ -296,10 +334,20 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
     drawText("SWEATYCLANKER  •  SIMULATED", 1571f, 332f, 13f, MUTED, spacing = .04f)
 
     panel(1550f, 371f, 1890f, 890f, CYAN)
-    drawText("◈  CHAT PREVIEW  //  SIMULATED", 1570f, 408f, 16f, WHITE, bold = true, spacing = .02f)
+    if (liveChatMode) {
+      drawText("◈  TWITCH CHAT  //  LIVE", 1570f, 408f, 16f, WHITE, bold = true, spacing = .02f)
+      val statusColor = if (liveChatStatus == "LIVE") CYAN else RED
+      pill(liveChatStatus, 1776f, 382f, 96f, statusColor)
+    } else {
+      drawText("◈  CHAT PREVIEW  //  SIMULATED", 1570f, 408f, 16f, WHITE, bold = true, spacing = .02f)
+    }
     canvas.drawLine(1570f, 422f, 1870f, 422f,
       paint(Color.argb(145, Color.red(CYAN), Color.green(CYAN), Color.blue(CYAN)), 1f, Paint.Style.STROKE))
-    val rows = chat.toList()
+    val rows = synchronized(chatLock) { chat.toList() }
+    if (rows.isEmpty()) {
+      drawFit(if (liveChatMode) "Waiting for Twitch chat messages…" else "Chat preview is simulated",
+        1585f, 476f, 280f, 14f, MUTED)
+    }
     rows.forEachIndexed { index, row ->
       val y = 450f + index * 53f
       if (row.highlighted) {
@@ -307,7 +355,7 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
           paint(Color.argb(33, Color.red(row.color), Color.green(row.color), Color.blue(row.color)), 1f))
         canvas.drawRoundRect(1568f, y - 18f, 1573f, y + 39f, 2f, 2f, paint(row.color, 1f))
       }
-      drawText(row.user, 1585f, y, 15f, row.color, bold = true)
+      drawFit(row.user, 1585f, y, 280f, 15f, row.color, bold = true)
       drawFit(row.message, 1585f, y + 24f, 281f, 14f, Color.rgb(222, 231, 243))
     }
   }
@@ -352,7 +400,9 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
     drawText("FOCUS  •", 1395f, 1036f, 16f, MUTED, bold = true, spacing = .04f)
     drawText("ADAPT", 1495f, 1036f, 16f, RED, bold = true, spacing = .06f)
     drawText("•  DOMINATE", 1568f, 1036f, 16f, MUTED, bold = true, spacing = .04f)
-    drawText("ALL HUD ACTIVITY IS A SIMULATION", 1395f, 1060f, 11f, Color.argb(190, 197, 209, 227), spacing = .055f)
+    val disclosure = if (liveChatMode) "STATS + EVENTS SIMULATED  •  CHAT $liveChatStatus"
+      else "ALL HUD ACTIVITY IS A SIMULATION"
+    drawFit(disclosure, 1395f, 1060f, 455f, 11f, Color.argb(190, 197, 209, 227), spacing = .055f)
   }
 
   private fun panel(left: Float, top: Float, right: Float, bottom: Float, accent: Int, filled: Int = Color.argb(220, 5, 12, 23)) {
@@ -490,6 +540,7 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
       ChatLine("blade_echo", "huge damage 🏆", WHITE, false),
       ChatLine("nightwatch", "SAEVOND ON TOP 😈", RED, true)
     )
+    private val CHAT_COLORS = intArrayOf(CYAN, RED, PURPLE, WHITE)
     private val AI_MESSAGES = listOf(
       "😈 Pressure is rising. Make them respect the spacing.",
       "🔥 Clean punish. Keep the tempo and take the angle.",
