@@ -184,6 +184,9 @@ class MainActivity : Activity() {
   }
 
   private lateinit var status: TextView
+  private lateinit var encoderContentView: View
+  private var encoderUiVisible = false
+  private var lockOnResume = false
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val text = intent?.getStringExtra(Ps5LanService.EXTRA_STATUS_MESSAGE) ?: return
@@ -197,8 +200,6 @@ class MainActivity : Activity() {
     // keep live status in memory/broadcasts only from this version onward.
     getSharedPreferences(LEGACY_STATUS_PREFS, MODE_PRIVATE).edit().clear().apply()
     EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
-    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.APP_OPENED,
-      EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.APP)
     val layout = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(dp(18), dp(14), dp(18), dp(28))
@@ -602,6 +603,11 @@ class MainActivity : Activity() {
       setTextColor(getColor(R.color.sweaty_muted))
     }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
+    val lockAdmin = Button(this).apply {
+      id = R.id.admin_lock_now
+      text = "LOCK ADMIN CONTROLS"
+      setOnClickListener { showAdminPasswordGate(setup = false) }
+    }
 
     fun refreshOutputSummary() {
       val secretStore = SecretStore(this)
@@ -668,9 +674,10 @@ class MainActivity : Activity() {
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus,
-      sectionHeader("Device safety"), privacy, checkSafety, safetyReading)
+      sectionHeader("Device safety"), privacy, checkSafety, safetyReading, lockAdmin)
       .forEach { layout.addView(it) }
-    setContentView(ScrollView(this).apply { addView(layout) })
+    encoderContentView = ScrollView(this).apply { addView(layout) }
+    showAdminPasswordGate(setup = !AdminPasswordStore(this).isConfigured())
 
     stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -1428,6 +1435,157 @@ class MainActivity : Activity() {
     return manager.getLinkProperties(network)?.linkAddresses
       ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
       ?.address?.hostAddress
+  }
+
+  private fun showAdminPasswordGate(setup: Boolean) {
+    encoderUiVisible = false
+    val root = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(22), dp(34), dp(22), dp(28))
+      setBackgroundColor(getColor(R.color.sweaty_background))
+    }
+    val brand = TextView(this).apply {
+      text = "SAEVOND"
+      textSize = 30f
+      letterSpacing = .16f
+      setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD))
+      setTextColor(getColor(R.color.sweaty_red))
+      setPadding(0, 0, 0, dp(8))
+    }
+    val title = TextView(this).apply {
+      text = if (setup) "SET ADMIN PASSWORD" else "ADMIN ACCESS"
+      textSize = 20f
+      letterSpacing = .08f
+      setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
+      setTextColor(getColor(R.color.sweaty_cyan))
+      setPadding(0, dp(8), 0, dp(8))
+    }
+    val explanation = TextView(this).apply {
+      text = if (setup)
+        "Create a unique device-only password to protect this encoder's controls. Use 8–128 characters and keep it private."
+      else
+        "Enter your device-only admin password to open the encoder controls."
+      textSize = 15f
+      setTextColor(getColor(R.color.sweaty_text))
+      setPadding(0, 0, 0, dp(14))
+    }
+    val password = EditText(this).apply {
+      id = R.id.admin_password
+      hint = if (setup) "Create admin password" else "Admin password"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+      filters = arrayOf(android.text.InputFilter.LengthFilter(AdminPasswordStore.MAX_PASSWORD_LENGTH))
+      importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+    }
+    val confirmation = EditText(this).apply {
+      id = R.id.admin_password_confirm
+      hint = "Confirm admin password"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+      filters = arrayOf(android.text.InputFilter.LengthFilter(AdminPasswordStore.MAX_PASSWORD_LENGTH))
+      visibility = if (setup) View.VISIBLE else View.GONE
+      importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+    }
+    val message = TextView(this).apply {
+      id = R.id.admin_password_status
+      text = "Password stays on this phone; it is not sent to Amaana or Render."
+      textSize = 13f
+      setTextColor(getColor(R.color.sweaty_muted))
+      setPadding(0, dp(10), 0, dp(12))
+    }
+    val submit = Button(this).apply {
+      id = R.id.admin_password_submit
+      text = if (setup) "SET PASSWORD AND OPEN ENCODER" else "UNLOCK ENCODER"
+      setBackgroundResource(R.drawable.sweaty_button_live)
+      setTextColor(getColor(R.color.sweaty_text))
+      setPadding(dp(12), dp(12), dp(12), dp(12))
+    }
+    val recovery = TextView(this).apply {
+      text = "Forgot the password? Clear this app's data in Android Settings to set it again. This also removes saved stream keys and settings."
+      textSize = 12f
+      setTextColor(getColor(R.color.sweaty_muted))
+      setPadding(0, dp(20), 0, 0)
+    }
+    submit.setOnClickListener {
+      val entered = password.text.toString()
+      val confirmed = confirmation.text.toString()
+      if (setup && !AdminPasswordStore.isValidPassword(entered)) {
+        message.text = "Choose a password between 8 and 128 characters."
+        message.setTextColor(getColor(R.color.sweaty_red))
+        return@setOnClickListener
+      }
+      if (setup && entered != confirmed) {
+        message.text = "The passwords do not match."
+        message.setTextColor(getColor(R.color.sweaty_red))
+        return@setOnClickListener
+      }
+      password.text.clear()
+      confirmation.text.clear()
+      (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+        ?.hideSoftInputFromWindow(password.windowToken, 0)
+      password.isEnabled = false
+      confirmation.isEnabled = false
+      submit.isEnabled = false
+      message.text = if (setup) "Saving password securely on this phone…" else "Checking password…"
+      message.setTextColor(getColor(R.color.sweaty_muted))
+      thread(name = "SweatyOBS-admin-password") {
+        val success = runCatching {
+          val store = AdminPasswordStore(this)
+          if (setup) store.setPassword(entered) else store.verify(entered)
+        }.getOrDefault(false)
+        runOnUiThread {
+          if (success) {
+            lockOnResume = false
+            showEncoderControls()
+          } else {
+            password.isEnabled = true
+            confirmation.isEnabled = true
+            submit.isEnabled = true
+            message.text = if (setup) "Could not save the password. Try again." else "Password not accepted. Try again."
+            message.setTextColor(getColor(R.color.sweaty_red))
+            password.requestFocus()
+          }
+        }
+      }
+    }
+    root.addView(brand)
+    root.addView(title)
+    root.addView(explanation)
+    root.addView(password)
+    if (setup) root.addView(confirmation)
+    root.addView(message)
+    root.addView(submit)
+    root.addView(recovery)
+    setContentView(ScrollView(this).apply { addView(root) })
+  }
+
+  private fun showEncoderControls() {
+    encoderUiVisible = true
+    setContentView(encoderContentView)
+    EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
+    EncoderDiagnostics.record(this, EncoderDiagnosticEventName.APP_OPENED,
+      EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.APP)
+  }
+
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    if (encoderUiVisible) lockOnResume = true
+  }
+
+  override fun onPause() {
+    if (lockOnResume && encoderUiVisible) {
+      lockOnResume = false
+      showAdminPasswordGate(setup = false)
+    }
+    super.onPause()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    if (lockOnResume && encoderUiVisible) {
+      lockOnResume = false
+      showAdminPasswordGate(setup = false)
+    }
   }
 
   override fun onStart() {

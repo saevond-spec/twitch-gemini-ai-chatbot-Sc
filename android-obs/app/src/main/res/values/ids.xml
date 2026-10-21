@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <item name="brand_header" type="id"/>
+  <item name="admin_password" type="id"/>
+  <item name="admin_password_confirm" type="id"/>
+  <item name="admin_password_status" type="id"/>
+  <item name="admin_password_submit" type="id"/>
+  <item name="admin_lock_now" type="id"/>
   <item name="connection_status" type="id"/>
   <item name="output_readiness" type="id"/>
   <item name="overlay_quality" type="id"/>
