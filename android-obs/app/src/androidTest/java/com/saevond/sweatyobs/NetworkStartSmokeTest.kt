@@ -140,27 +140,27 @@ class NetworkStartSmokeTest {
   }
 
   @Test fun volumeSlidersAndMusicMuteActuallyUpdateLiveMixer() {
-    val context = InstrumentationRegistry.getInstrumentation().targetContext
     activityRule.scenario.onActivity { activity ->
       val game = activity.findViewById<android.widget.SeekBar>(R.id.game_volume)
       val music = activity.findViewById<android.widget.SeekBar>(R.id.music_volume)
+      val mute = activity.findViewById<android.widget.Button>(R.id.music_mute)
       game.progress = 60
       music.progress = 8
       assertEquals(60, Ps5LanService.liveLevels.gamePercent)
       assertEquals(8, Ps5LanService.liveLevels.musicPercent)
-    }
-    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
-    assertEquals(0, Ps5LanService.liveLevels.musicPercent)
-    assertEquals(60, Ps5LanService.liveLevels.gamePercent)
-    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
-    assertEquals(8, Ps5LanService.liveLevels.musicPercent)
+      mute.performClick()
+      assertEquals(0, Ps5LanService.liveLevels.musicPercent)
+      assertEquals(60, Ps5LanService.liveLevels.gamePercent)
+      mute.performClick()
+      assertEquals(8, Ps5LanService.liveLevels.musicPercent)
 
-    activityRule.scenario.onActivity { activity ->
-      activity.findViewById<android.widget.SeekBar>(R.id.music_volume).progress = 35
+      music.progress = 35
+      assertEquals(35, Ps5LanService.liveLevels.musicPercent)
+      mute.performClick()
+      assertEquals(0, Ps5LanService.liveLevels.musicPercent)
+      mute.performClick()
+      assertEquals(35, Ps5LanService.liveLevels.musicPercent)
     }
-    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
-    onView(withId(R.id.music_mute)).perform(scrollTo(), click())
-    assertEquals(35, Ps5LanService.liveLevels.musicPercent)
   }
 
   @Test fun musicAutoplayDefaultsOnAndTogglePersists() {
