@@ -185,8 +185,8 @@ class TwitchRtmpsPublisherTest {
      releaseDispatch.countDown()
      publisher.close()
      connector.join(1_000)
-     if (canceller.state != Thread.State.NEW) canceller.join(1_000)
-     if (cleanup.state != Thread.State.NEW) cleanup.join(1_000)
+     canceller.join(1_000)
+     cleanup.join(1_000)
    }
    assertFalse("synthetic connection should stop after cleanup", connector.isAlive)
    assertTrue("connect should observe the deliberate socket close", connectionFailure.get() != null)
