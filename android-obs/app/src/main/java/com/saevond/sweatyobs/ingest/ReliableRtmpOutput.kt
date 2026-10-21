@@ -134,10 +134,12 @@ class ReliableRtmpOutput(
       enqueueLocked(copyMessage(message))
       if (queueExceedsLimitsLocked()) {
         val wasLive = state == "LIVE"
+        val wasConnecting = state == "CONNECTING"
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
         aligned = false
-        state = "WAITING FOR KEYFRAME"
+        // Keep the visible state accurate until the in-flight handshake finishes.
+        state = if (wasConnecting) "CONNECTING" else "WAITING FOR KEYFRAME"
         queueReset = true
         if (wasLive) publisherToAbort = publisher
         enqueueStartupGopLocked(message)
@@ -150,6 +152,29 @@ class ReliableRtmpOutput(
     // close only that session so the worker can resume from a clean keyframe.
     publisherToAbort?.close()
     if (queueReset) notifySnapshot()
+  }
+
+  /**
+   * Invalidate queued media and codec headers at a PS5 source-session boundary.
+   * This prevents a keyframe from a previous source session being sent after reconnect.
+   */
+  fun resetForSourceSession() {
+    var publisherToAbort: MediaPublisher? = null
+    synchronized(lock) {
+      if (!running) return
+      droppedPackets += queue.size.toLong()
+      clearQueueLocked()
+      avcConfig = null
+      aacConfig = null
+      aligned = false
+      if (state == "LIVE") publisherToAbort = publisher
+      if (state != "CONNECTING") state = "WAITING FOR KEYFRAME"
+      lock.notifyAll()
+    }
+    // Stop a live publisher for the ended source; a handshake in progress can finish,
+    // then waits for this source session's codec headers and keyframe.
+    publisherToAbort?.close()
+    notifySnapshot()
   }
 
   /** Force a fresh RTMPS session; the sender waits for a clean AVC keyframe. */
