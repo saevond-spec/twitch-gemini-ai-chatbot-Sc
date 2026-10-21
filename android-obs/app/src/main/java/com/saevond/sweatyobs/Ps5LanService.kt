@@ -58,6 +58,22 @@ internal class StartupAttemptGate {
   }
 }
 
+/** Keeps the active service mode unchanged when a second start request is rejected. */
+internal class AcceptedStartMode(initialPublic: Boolean = false) {
+  @Volatile private var publicMode = initialPublic
+  val isPublic: Boolean get() = publicMode
+
+  @Synchronized fun tryAccept(
+    requestedPublic: Boolean,
+    receiverActive: Boolean,
+    startupPending: Boolean
+  ): Boolean {
+    if (receiverActive || startupPending) return false
+    publicMode = requestedPublic
+    return true
+  }
+}
+
 /**
  * Android 14-compatible, user-started network-connected foreground service.
  *
@@ -108,7 +124,8 @@ class Ps5LanService : Service() {
   private var stopping = false
   private var terminalReason = false
   private val startupGate = StartupAttemptGate()
-  @Volatile private var publicTest = false
+  private val acceptedStartMode = AcceptedStartMode()
+  private val publicTest: Boolean get() = acceptedStartMode.isPublic
   @Volatile private var outputConnected = false
   private val outputPublishers = CopyOnWriteArrayList<ReliableRtmpOutput>()
   @Volatile private var outputStatus = "No RTMPS outputs configured"
@@ -272,19 +289,19 @@ class Ps5LanService : Service() {
       return START_NOT_STICKY
     }
     if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
-    publicTest = intent.action == ACTION_START_TWITCH
-    EncoderDiagnostics.setMode(if (publicTest) EncoderDiagnosticMode.PUBLIC else EncoderDiagnosticMode.DIAGNOSTIC)
+    val requestedPublicTest = intent.action == ACTION_START_TWITCH
     EncoderDiagnostics.record(this,
-      if (publicTest) EncoderDiagnosticEventName.STREAM_START_REQUESTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REQUESTED,
+      if (requestedPublicTest) EncoderDiagnosticEventName.STREAM_START_REQUESTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REQUESTED,
       EncoderDiagnosticResult.REQUESTED,
-      if (publicTest) EncoderDiagnosticTarget.MULTIPLE else EncoderDiagnosticTarget.NETWORK)
-    if (receiver != null || startupGate.isPending()) {
+      if (requestedPublicTest) EncoderDiagnosticTarget.MULTIPLE else EncoderDiagnosticTarget.NETWORK)
+    if (!acceptedStartMode.tryAccept(requestedPublicTest, receiver != null, startupGate.isPending())) {
       EncoderDiagnostics.record(this,
-        if (publicTest) EncoderDiagnosticEventName.STREAM_START_REJECTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
+        if (requestedPublicTest) EncoderDiagnosticEventName.STREAM_START_REJECTED else EncoderDiagnosticEventName.DIAGNOSTIC_START_REJECTED,
         EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK, EncoderDiagnosticError.ILLEGAL_STATE)
       setNotification("Receiver is already starting or active. Stop it before switching modes.")
       return START_NOT_STICKY
     }
+    EncoderDiagnostics.setMode(if (requestedPublicTest) EncoderDiagnosticMode.PUBLIC else EncoderDiagnosticMode.DIAGNOSTIC)
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
     if (publicTest) {
       val destinations = selectedDestinations()
@@ -390,10 +407,10 @@ class Ps5LanService : Service() {
         setNotification("Receiver startup is already in progress.")
         return START_NOT_STICKY
       }
-      val uriText = if (publicTest && genrePlaylist?.hasTracks() != true)
+      val uriText = if (requestedPublicTest && genrePlaylist?.hasTracks() != true)
         getSharedPreferences("ps5_music", MODE_PRIVATE).getString("track_uri", null) else null
       if (uriText.isNullOrBlank()) {
-        beginReceiver(local, ps5Address, startupToken)
+        beginReceiver(local, ps5Address, startupToken, requestedPublicTest)
       } else {
         setNotification("Loading rights-cleared music file. Receiver is not yet listening.")
         thread(name = "SweatyOBS-music-decode") {
@@ -409,7 +426,7 @@ class Ps5LanService : Service() {
                     .getBoolean("autoplay", true)
                   loop.load(decoded, autoStart = autoStart)
                   audioMixer = LiveAacMusicMixer(loop, liveLevels)
-                  beginReceiver(local, ps5Address, startupToken)
+                  beginReceiver(local, ps5Address, startupToken, requestedPublicTest)
                 } catch (error: Exception) { startFailed(error, startupToken) }
               }
             }
@@ -441,10 +458,10 @@ class Ps5LanService : Service() {
     stopSelf()
   }
 
-  private fun beginReceiver(local: String, ps5Address: String, startupToken: Long) {
+  private fun beginReceiver(local: String, ps5Address: String, startupToken: Long, isPublic: Boolean) {
     if (stopping || !startupGate.isCurrent(startupToken)) return
     try {
-      if (publicTest && audioMixer == null) {
+      if (isPublic && audioMixer == null) {
         // Game volume is independently controllable even with no music selected.
         audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
       }
@@ -454,7 +471,7 @@ class Ps5LanService : Service() {
         }
       }
       val ingest = LanRtmpIngest(local, ps5Address, onMedia = { packet ->
-        if (publicTest) {
+        if (isPublic) {
           var mediaPhase = "audio_mix"
           try {
             val input = if (packet.type == 8 && audioMixer != null) {
@@ -504,14 +521,14 @@ class Ps5LanService : Service() {
           }
         }
       }, onSourceSessionStart = {
-        if (publicTest) {
+        if (isPublic) {
           outputPublishers.forEach { it.resetForSourceSession() }
           liveGate?.resetForSourceReconnect()
           audioMixer?.close()
           audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
         }
       }, onSourceSessionEnd = {
-        if (publicTest) {
+        if (isPublic) {
           outputPublishers.forEach { it.resetForSourceSession() }
           audioMixer?.close()
           audioMixer = null
@@ -525,19 +542,19 @@ class Ps5LanService : Service() {
       EncoderDiagnostics.record(this, EncoderDiagnosticEventName.RECEIVER_LISTENING,
         EncoderDiagnosticResult.WAITING, EncoderDiagnosticTarget.NETWORK)
       maybeSubmitRemoteDiagnostics(ingest, force = true)
-      if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
+      if (isPublic && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
       val selectedPlatforms = outputPublishers.joinToString(" + ") { it.snapshot().label }
       val overlayStatus = when {
-        !publicTest -> "diagnostic only; no overlay"
+        !isPublic -> "diagnostic only; no overlay"
         !brandOverlayRequested -> "original-video pass-through"
         brandOverlay == null -> "overlay unavailable; original-video pass-through"
         else -> "@saevond overlay starting"
       }
-      setNotification(if (publicTest) "Public stream armed · $selectedPlatforms · $overlayStatus · waiting for PS5 RTMP on $local:1935. Music " +
+      setNotification(if (isPublic) "Public stream armed · $selectedPlatforms · $overlayStatus · waiting for PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "ready after a platform accepts publish" else "not loaded")
         else "Waiting for PS5 at $local:1935 — diagnostic only")
-      if (publicTest) {
+      if (isPublic) {
         val bridgeToken = SecretStore(this).get("bridge_token")
         if (bridgeToken.length >= 32) {
           musicBridge = MusicBridgePoller("https://twitch-gemini-ai-chatbot-sc-2.onrender.com",

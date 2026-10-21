@@ -236,7 +236,8 @@ data class RtmpDestination(val id: String, val label: String, val serverUrl: Str
 class RtmpsPublisher internal constructor(
   serverUrl: String,
   private val key: String,
-  private val addressResolver: HostAddressResolver = AndroidHostAddressResolver
+  private val addressResolver: HostAddressResolver = AndroidHostAddressResolver,
+  private val socketCloser: (Socket) -> Unit = { it.close() }
 ) : MediaPublisher {
   companion object {
     const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
@@ -353,13 +354,14 @@ class RtmpsPublisher internal constructor(
       endpoint: Endpoint,
       address: InetAddress,
       remainingMs: Int,
-      cancellation: ConnectionCancellation
+      cancellation: ConnectionCancellation,
+      socketCloser: (Socket) -> Unit = { it.close() }
     ): SSLSocket {
       val deadline = System.nanoTime() + remainingMs * 1_000_000L
       val plain = Socket()
       var tls: SSLSocket? = null
       cancellation.setCancelAction {
-        runCatching { plain.close() }
+        runCatching { socketCloser(plain) }
       }
       try {
         cancellation.throwIfCancelled()
@@ -372,7 +374,7 @@ class RtmpsPublisher internal constructor(
         tls = (SSLSocketFactory.getDefault() as SSLSocketFactory)
           .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
         cancellation.setCancelAction {
-          runCatching { plain.close() }
+          runCatching { socketCloser(plain) }
         }
         tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
         tls.soTimeout = minOf(8_000, tlsRemaining)
@@ -382,7 +384,7 @@ class RtmpsPublisher internal constructor(
         return tls
       } catch (error: Exception) {
         cancellation.clearCancelAction()
-        runCatching { plain.close() }
+        runCatching { socketCloser(plain) }
         throw error
       }
     }
@@ -421,7 +423,7 @@ class RtmpsPublisher internal constructor(
       val remaining = remainingTimeoutMs(deadline)
       val tls = tryResolvedAddresses(resolved, remaining) { address, remainingMs ->
         cancellation.throwIfCancelled()
-        openTlsSocket(endpoint, address, remainingMs, cancellation)
+        openTlsSocket(endpoint, address, remainingMs, cancellation, socketCloser)
       }
       cancellation.throwIfCancelled()
       socket = tls
@@ -500,7 +502,9 @@ class RtmpsPublisher internal constructor(
       }
       startControlReader(reader, out, countedInput)
     } catch (error: Exception) {
-      close()
+      // socketCloser is destination-lane backed in production, so setup failure can enter
+      // retry/backoff without doing potentially blocking socket close work on this worker.
+      requestAbort()
       if (System.nanoTime() >= deadline && error !is SocketTimeoutException) {
         throw SocketTimeoutException("RTMPS startup deadline exceeded").also { it.initCause(error) }
       }

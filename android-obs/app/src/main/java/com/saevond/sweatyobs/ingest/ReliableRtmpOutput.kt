@@ -1,8 +1,10 @@
 package com.saevond.sweatyobs.ingest
 
 import java.io.IOException
+import java.net.Socket
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Semaphore
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -63,7 +65,11 @@ data class OutputSnapshot(
  */
 class ReliableRtmpOutput(
   private val destination: RtmpDestination,
-  private val publisherFactory: (RtmpDestination) -> MediaPublisher = { RtmpsPublisher(it.serverUrl, it.key) },
+  private val publisherFactory: (RtmpDestination) -> MediaPublisher = { destination ->
+    RtmpsPublisher(destination.serverUrl, destination.key, socketCloser = { socket ->
+      scheduleSocketClose(destination.id, socket)
+    })
+  },
   private val retryDelaysMs: LongArray = DEFAULT_RETRY_DELAYS_MS,
   private val queueLimitBytes: Int = DEFAULT_QUEUE_LIMIT_BYTES,
   private val maxQueueMediaMs: Long = DEFAULT_QUEUE_MEDIA_MS,
@@ -88,12 +94,43 @@ class ReliableRtmpOutput(
     private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick")
       .associateWith { Semaphore(1, true) }
 
+    private val CLOSE_LANE_ID = ThreadLocal<String>()
+
     private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick").associateWith { id ->
       ThreadPoolExecutor(
-        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1),
-        { task -> Thread(task, "SweatyOBS-$id-publisher-close").apply { isDaemon = true } },
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(16),
+        { task ->
+          Thread({
+            CLOSE_LANE_ID.set(id)
+            task.run()
+          }, "SweatyOBS-$id-publisher-close").apply { isDaemon = true }
+        },
         ThreadPoolExecutor.AbortPolicy()
       )
+    }
+
+    /**
+     * Schedule raw socket closure on its destination lane. RTMPS setup can fail on up to
+     * eight resolved addresses; the bounded lane queue leaves room for those closes plus the
+     * final publisher cleanup. A cleanup task running on the same lane closes inline so the
+     * destination lease is not released before its active socket is closed.
+     */
+    internal fun scheduleSocketClose(destinationId: String, socket: Socket) {
+      val executor = CLOSE_EXECUTORS[destinationId]
+        ?: throw IllegalArgumentException("Unsupported RTMP destination: $destinationId")
+      val close = Runnable { runCatching { socket.close() } }
+      if (CLOSE_LANE_ID.get() == destinationId) {
+        close.run()
+      } else {
+        try {
+          executor.execute(close)
+        } catch (_: RejectedExecutionException) {
+          // Capacity is bounded by one publisher and eight address candidates per destination.
+          // Keep the rare overflow close off the output worker while still closing the socket.
+          Thread(close, "SweatyOBS-$destinationId-emergency-socket-close")
+            .apply { isDaemon = true }.start()
+        }
+      }
     }
 
     fun retryDelayMs(failures: Int): Long {
@@ -392,12 +429,24 @@ class ReliableRtmpOutput(
 
   /** Wait for the prior session on this destination to finish closing without blocking ingest. */
   private fun acquireDestinationLease(expectedConnectionGeneration: Long): Boolean {
+    var waitingReported = false
     while (isConnectionCurrent(expectedConnectionGeneration)) {
       try {
         if (destinationLease.tryAcquire(100, TimeUnit.MILLISECONDS)) {
           if (isConnectionCurrent(expectedConnectionGeneration)) return true
           destinationLease.release()
           return false
+        }
+        if (!waitingReported) {
+          val changed = synchronized(lock) {
+            if (running && connectionGeneration == expectedConnectionGeneration &&
+              state != "WAITING FOR PREVIOUS SESSION") {
+              state = "WAITING FOR PREVIOUS SESSION"
+              true
+            } else false
+          }
+          if (changed) notifySnapshot()
+          waitingReported = true
         }
       } catch (_: InterruptedException) {
         Thread.currentThread().interrupt()
@@ -410,7 +459,6 @@ class ReliableRtmpOutput(
   private fun awaitFreshStartAndMarkConnecting(): StartGeneration? = synchronized(lock) {
     while (running) {
       if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
-        state = "WAITING FOR PREVIOUS SESSION"
         return@synchronized StartGeneration(mediaGeneration, connectionGeneration)
       }
       if (aligned && queue.isNotEmpty()) {

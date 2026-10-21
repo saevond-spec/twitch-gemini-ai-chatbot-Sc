@@ -1086,6 +1086,35 @@ class ReliableRtmpOutputTest {
     }
   }
 
+  @Test fun blockedSocketCloseRunsOffCallerAndDoesNotBlockAnotherDestination() {
+    val closeEntered = CountDownLatch(1)
+    val releaseClose = CountDownLatch(1)
+    val otherDestinationClosed = CountDownLatch(1)
+    val blockedSocket = object : Socket() {
+      override fun close() {
+        closeEntered.countDown()
+        try { releaseClose.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+      }
+    }
+    val startNanos = System.nanoTime()
+
+    try {
+      ReliableRtmpOutput.scheduleSocketClose("youtube", blockedSocket)
+      val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+      assertTrue("socket-close dispatch must not block the output worker", elapsedMs < 250)
+      assertTrue("YouTube close should run on its destination lane", closeEntered.await(2, TimeUnit.SECONDS))
+
+      val otherSocket = object : Socket() {
+        override fun close() { otherDestinationClosed.countDown() }
+      }
+      ReliableRtmpOutput.scheduleSocketClose("twitch", otherSocket)
+      assertTrue("a stalled destination close must not block Twitch",
+        otherDestinationClosed.await(2, TimeUnit.SECONDS))
+    } finally {
+      releaseClose.countDown()
+    }
+  }
+
   @Test fun cleanupUsesAtMostOneBoundedWorkerPerDestination() {
     val destinationIds = listOf("twitch", "youtube", "kick")
     val connected = CountDownLatch(destinationIds.size)
@@ -1148,6 +1177,7 @@ class ReliableRtmpOutputTest {
     val firstCloseEntered = CountDownLatch(1)
     val releaseFirstClose = CountDownLatch(1)
     val firstCloseFinished = CountDownLatch(1)
+    val firstCloseCalls = AtomicInteger()
     val replacementConnected = CountDownLatch(1)
     val replacementWaitingForCleanup = CountDownLatch(1)
     val replacementAttempts = AtomicInteger()
@@ -1156,6 +1186,7 @@ class ReliableRtmpOutputTest {
         override fun connect() { firstConnected.countDown() }
         override fun publish(media: RtmpMessage) {}
         override fun close() {
+          firstCloseCalls.incrementAndGet()
           firstCloseEntered.countDown()
           try { releaseFirstClose.await() } finally { firstCloseFinished.countDown() }
         }
@@ -1183,6 +1214,7 @@ class ReliableRtmpOutputTest {
       first.close()
       assertTrue("shutdown should schedule publisher cleanup asynchronously",
         firstCloseEntered.await(2, TimeUnit.SECONDS))
+      assertEquals("shutdown should close the first publisher once", 1, firstCloseCalls.get())
 
       replacement.start()
       replacement.offer(avcConfig())
@@ -1200,6 +1232,8 @@ class ReliableRtmpOutputTest {
       assertTrue("replacement should connect after prior cleanup completes",
         replacementConnected.await(2, TimeUnit.SECONDS))
       assertEquals(1, replacementAttempts.get())
+      assertEquals("first publisher close must remain exactly once after lease release",
+        1, firstCloseCalls.get())
     } finally {
       releaseFirstClose.countDown()
       first.close()
