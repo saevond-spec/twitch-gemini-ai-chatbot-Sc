@@ -121,32 +121,17 @@ class ReliableRtmpOutput(
       if (isAvcConfig(message)) avcConfig = copyMessage(message)
       if (isAacConfig(message)) aacConfig = copyMessage(message)
       if (!aligned) {
-        if (isAvcKeyframe(message) && avcConfig != null && aacConfig != null) {
-          clearQueueLocked()
-          val timestamp = message.timestamp
-          enqueueLocked(copyMessage(avcConfig!!, timestamp))
-          enqueueLocked(copyMessage(aacConfig!!, timestamp))
-          enqueueLocked(copyMessage(message))
-          aligned = true
-          lock.notifyAll()
-        }
+        enqueueStartupGopLocked(message)
         return@synchronized
       }
       enqueueLocked(copyMessage(message))
-      val ageTooLarge = queue.peekFirst()?.let { clockMs() - it.enqueuedAtMs > maxQueueAgeMs } == true
-      val mediaTooLarge = queueMediaDurationLocked() > maxQueueMediaMs
-      if (queueBytes > queueLimitBytes || ageTooLarge || mediaTooLarge) {
+      if (queueExceedsLimitsLocked()) {
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
         aligned = false
         state = "WAITING FOR KEYFRAME"
         shouldAbort = true
-        if (isAvcKeyframe(message) && avcConfig != null && aacConfig != null) {
-          enqueueLocked(copyMessage(avcConfig!!, message.timestamp))
-          enqueueLocked(copyMessage(aacConfig!!, message.timestamp))
-          enqueueLocked(copyMessage(message))
-          aligned = true
-        }
+        enqueueStartupGopLocked(message)
         lock.notifyAll()
       }
     }
@@ -271,6 +256,30 @@ class ReliableRtmpOutput(
     queue.addLast(Pending(message, clockMs()))
     queueBytes += message.data.size
   }
+
+  /** Queue a clean codec-header + keyframe start only when it fits the same limits as live media. */
+  private fun enqueueStartupGopLocked(message: RtmpMessage) {
+    if (!isAvcKeyframe(message) || avcConfig == null || aacConfig == null) return
+    clearQueueLocked()
+    val timestamp = message.timestamp
+    enqueueLocked(copyMessage(avcConfig!!, timestamp))
+    enqueueLocked(copyMessage(aacConfig!!, timestamp))
+    enqueueLocked(copyMessage(message))
+    if (queueExceedsLimitsLocked()) {
+      droppedPackets += queue.size.toLong()
+      clearQueueLocked()
+      aligned = false
+      state = "WAITING FOR KEYFRAME"
+    } else {
+      aligned = true
+    }
+    lock.notifyAll()
+  }
+
+  private fun queueExceedsLimitsLocked(): Boolean =
+    queueBytes > queueLimitBytes ||
+      queueMediaDurationLocked() > maxQueueMediaMs ||
+      queue.peekFirst()?.let { clockMs() - it.enqueuedAtMs > maxQueueAgeMs } == true
 
   private fun queueMediaDurationLocked(): Long {
     if (queue.size < 2) return 0L

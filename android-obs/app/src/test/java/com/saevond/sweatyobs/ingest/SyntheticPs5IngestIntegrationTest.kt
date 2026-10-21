@@ -4,6 +4,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.*
@@ -17,16 +18,38 @@ import org.junit.Test
 class SyntheticPs5IngestIntegrationTest {
   @Test fun receivesRtmpPublishWithAvcAacAndKeyframe() {
     val gate = MediaRelayGate()
+    val outputIds = listOf("twitch", "youtube", "kick")
+    val outputSent = outputIds.associateWith { CopyOnWriteArrayList<RtmpMessage>() }
+    val outputLatch = CountDownLatch(12)
+    val outputs = outputIds.map { id ->
+      ReliableRtmpOutput(
+        RtmpDestination(id, id.replaceFirstChar { it.uppercase() }, "rtmps://$id.example.test/app", "sandbox-key-12345"),
+        publisherFactory = {
+          object : MediaPublisher {
+            override fun connect() {}
+            override fun publish(media: RtmpMessage) {
+              outputSent.getValue(id).add(media)
+              outputLatch.countDown()
+            }
+            override fun close() {}
+          }
+        },
+        retryDelaysMs = longArrayOf(0)
+      )
+    }
     val latch = CountDownLatch(4)
     val sourceStarted = AtomicInteger(0)
     val sourceEnded = CountDownLatch(1)
     val forwarded = mutableListOf<RtmpMessage>()
     val receiver = LanRtmpIngest("10.233.31.1", "10.233.31.2", onMedia = { packet ->
-      synchronized(forwarded) { forwarded.addAll(gate.process(packet)) }
+      val relayPackets = gate.process(packet)
+      synchronized(forwarded) { forwarded.addAll(relayPackets) }
+      relayPackets.forEach { media -> outputs.forEach { it.offer(media) } }
       latch.countDown()
     }, onSourceSessionStart = { sourceStarted.incrementAndGet() }, onSourceSessionEnd = { sourceEnded.countDown() })
-    receiver.start()
     try {
+      outputs.forEach { it.start() }
+      receiver.start()
       val sock = Socket()
       sock.bind(InetSocketAddress("10.233.31.2", 0))
       sock.connect(InetSocketAddress("10.233.31.1", 1935), 3000)
@@ -64,10 +87,20 @@ class SyntheticPs5IngestIntegrationTest {
       assertEquals(1, sourceStarted.get())
       assertEquals(2L, receiver.videoPackets)
       assertEquals(2L, receiver.audioPackets)
+      assertTrue("each fake destination should receive the complete relayed stream", outputLatch.await(2, TimeUnit.SECONDS))
+      outputIds.forEach { id ->
+        assertEquals("synthetic $id output must receive AVC/AAC headers, keyframe, then audio",
+          listOf(9, 8, 9, 8), outputSent.getValue(id).map { it.type })
+        assertEquals("$id output timestamps should restart at zero for this session",
+          listOf(0L, 0L, 0L, 25L), outputSent.getValue(id).map { it.timestamp })
+      }
       synchronized(forwarded) {
         assertEquals(listOf(9,8,9,8), forwarded.map { it.type })
         assertEquals(listOf(0L,0L,0L,25L), forwarded.map { it.timestamp })
       }
-    } finally { receiver.stop() }
+    } finally {
+      receiver.stop()
+      outputs.forEach { it.close() }
+    }
   }
 }

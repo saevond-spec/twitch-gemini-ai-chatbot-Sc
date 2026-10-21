@@ -87,17 +87,30 @@ class MainActivity : Activity() {
       isChecked = outputPrefs.getBoolean("youtube_enabled", false)
     }
     val youtubeServer = EditText(this).apply {
+      id = R.id.youtube_server
       hint = "YouTube RTMPS server URL from Live Control Room"
       setSingleLine(true)
       setText(outputPrefs.getString("youtube_server", ""))
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
     }
+    val saveYouTubeServer = Button(this).apply {
+      id = R.id.save_youtube_server
+      text = "Save YouTube RTMPS server URL"
+    }
     val youtubeKey = EditText(this).apply {
+      id = R.id.youtube_stream_key
       hint = "YouTube stream key (kept in Android Keystore)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
       setSingleLine(true)
     }
-    val saveYouTube = Button(this).apply { text = "Save YouTube RTMPS server and key" }
+    val youtubeOutputStatus = TextView(this).apply {
+      id = R.id.youtube_output_status
+      text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+    }
+    val saveYouTube = Button(this).apply {
+      id = R.id.save_youtube_key
+      text = "Save YouTube key securely"
+    }
     val openYouTubeDashboard = Button(this).apply {
       id = R.id.open_youtube_dashboard
       text = "Open YouTube Studio — Go Live / stream key"
@@ -107,17 +120,30 @@ class MainActivity : Activity() {
       isChecked = outputPrefs.getBoolean("kick_enabled", false)
     }
     val kickServer = EditText(this).apply {
+      id = R.id.kick_server
       hint = "Kick RTMPS server URL from Creator Dashboard"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
       setSingleLine(true)
       setText(outputPrefs.getString("kick_server", ""))
     }
+    val saveKickServer = Button(this).apply {
+      id = R.id.save_kick_server
+      text = "Save Kick RTMPS server URL"
+    }
     val kickKey = EditText(this).apply {
+      id = R.id.kick_stream_key
       hint = "Kick stream key (kept in Android Keystore)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
       setSingleLine(true)
     }
-    val saveKick = Button(this).apply { text = "Save Kick RTMPS server and key" }
+    val kickOutputStatus = TextView(this).apply {
+      id = R.id.kick_output_status
+      text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+    }
+    val saveKick = Button(this).apply {
+      id = R.id.save_kick_key
+      text = "Save Kick key securely"
+    }
     val openKickDashboard = Button(this).apply {
       id = R.id.open_kick_dashboard
       text = "Open Kick Creator Dashboard — Stream URL & key"
@@ -290,8 +316,9 @@ class MainActivity : Activity() {
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
     listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
-      enableYouTube, openYouTubeDashboard, youtubeServer, youtubeKey, saveYouTube,
-      enableKick, openKickDashboard, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
+      enableYouTube, openYouTubeDashboard, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
+      enableKick, openKickDashboard, kickServer, saveKickServer, kickKey, saveKick, kickOutputStatus,
+      enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
       privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
@@ -406,36 +433,50 @@ class MainActivity : Activity() {
     enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
     }
-    saveYouTube.setOnClickListener {
+    saveYouTubeServer.setOnClickListener {
       val server = youtubeServer.text.toString().trim()
-      val key = youtubeKey.text.toString().trim()
       if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Paste the secure RTMPS server URL from YouTube Live Control Room."
-      } else if (!RtmpsPublisher.keyValid(key)) {
+        status.text = "Enter a valid secure YouTube RTMPS server URL from Live Control Room."
+      } else {
+        outputPrefs.edit().putString("youtube_server", server).apply()
+        youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+        status.text = "YouTube RTMPS server URL saved on this phone. It has not been tested with YouTube."
+      }
+    }
+    saveYouTube.setOnClickListener {
+      val key = youtubeKey.text.toString().trim()
+      if (!RtmpsPublisher.keyValid(key)) {
         status.text = "Enter a valid YouTube stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("youtube_key", key)
-        outputPrefs.edit().putString("youtube_server", server).apply()
         youtubeKey.text.clear()
-        status.text = "YouTube server saved and key encrypted on this phone. No stream has started."
+        youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+        status.text = "YouTube key encrypted and saved on this phone. No stream has started."
       } catch (error: Exception) {
-        status.text = "Could not save YouTube output settings (" + error.javaClass.simpleName + ")."
+        status.text = "Could not securely save YouTube key (" + error.javaClass.simpleName + ")."
+      }
+    }
+    saveKickServer.setOnClickListener {
+      val server = kickServer.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Enter a valid secure Kick RTMPS server URL from Creator Dashboard."
+      } else {
+        outputPrefs.edit().putString("kick_server", server).apply()
+        kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+        status.text = "Kick RTMPS server URL saved on this phone. It has not been tested with Kick."
       }
     }
     saveKick.setOnClickListener {
-      val server = kickServer.text.toString().trim()
       val key = kickKey.text.toString().trim()
-      if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Paste the secure RTMPS server URL from the Kick Creator Dashboard."
-      } else if (!RtmpsPublisher.keyValid(key)) {
+      if (!RtmpsPublisher.keyValid(key)) {
         status.text = "Enter a valid Kick stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("kick_key", key)
-        outputPrefs.edit().putString("kick_server", server).apply()
         kickKey.text.clear()
-        status.text = "Kick server saved and key encrypted on this phone. No stream has started."
+        kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+        status.text = "Kick key encrypted and saved on this phone. No stream has started."
       } catch (error: Exception) {
-        status.text = "Could not save Kick output settings (" + error.javaClass.simpleName + ")."
+        status.text = "Could not securely save Kick key (" + error.javaClass.simpleName + ")."
       }
     }
     reconnectOutputs.setOnClickListener {
@@ -754,6 +795,18 @@ class MainActivity : Activity() {
       } catch (error: Exception) {
         status.text = "Cannot access music file (" + error.javaClass.simpleName + "). Select a local audio file instead."
       }
+    }
+  }
+
+  private fun outputCredentialStatus(platform: String, secretName: String, serverPreference: String): String {
+    val keySaved = RtmpsPublisher.keyValid(SecretStore(this).get(secretName))
+    val serverSaved = RtmpsPublisher.endpointValid(
+      getSharedPreferences("encoder_outputs", MODE_PRIVATE).getString(serverPreference, "").orEmpty())
+    return when {
+      keySaved && serverSaved -> "$platform key saved securely; RTMPS server URL saved."
+      keySaved -> "$platform key saved securely; save its RTMPS server URL before streaming."
+      serverSaved -> "$platform server URL saved; save a stream key before streaming."
+      else -> "$platform stream key and RTMPS server URL are not saved yet."
     }
   }
 
