@@ -31,6 +31,44 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.open_kick_dashboard)).perform(scrollTo()).check(matches(isDisplayed()))
   }
 
+  @Test fun youtubeAndKickKeysSaveSecurelyWithoutAnRtmpsServerUrl() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val youtubeKey = "sandbox-youtube-key-123"
+    val kickKey = "sandbox-kick-key-456"
+    val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
+    outputPrefs.edit().remove("youtube_server").remove("kick_server").commit()
+    activityRule.scenario.recreate()
+
+    onView(withId(R.id.youtube_stream_key)).perform(scrollTo(), replaceText(youtubeKey), closeSoftKeyboard())
+    onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+
+    onView(withId(R.id.kick_stream_key)).perform(scrollTo(), replaceText(kickKey), closeSoftKeyboard())
+    onView(withId(R.id.save_kick_key)).perform(scrollTo(), click())
+    onView(withId(R.id.kick_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+
+    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+    assertNotEquals(youtubeKey, encryptedPrefs.getString("youtube_key", null))
+    assertNotEquals(kickKey, encryptedPrefs.getString("kick_key", null))
+    assertEquals(youtubeKey, SecretStore(context).get("youtube_key"))
+    assertEquals(kickKey, SecretStore(context).get("kick_key"))
+
+    activityRule.scenario.recreate()
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
+    onView(withId(R.id.kick_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
+
+    onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("rtmps://youtube.example.test/live2"), closeSoftKeyboard())
+    onView(withId(R.id.save_youtube_server)).perform(scrollTo(), click())
+    assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
+    onView(withId(R.id.kick_server)).perform(scrollTo(), replaceText("rtmps://kick.example.test/app"), closeSoftKeyboard())
+    onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
+    assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+  }
+
   @Test fun invalidAddressTapReportsVisibleFailure() {
     onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())
