@@ -92,7 +92,8 @@ internal object TwitchChatProtocol {
       val separator = payload.indexOf(" :")
       if (separator < 0 || separator > MAX_LINE_BYTES) return null
       tagText = payload.substring(1, separator)
-      payload = payload.substring(separator + 2)
+      // Keep the IRC prefix's leading colon; only the separating space belongs to the tags.
+      payload = payload.substring(separator + 1)
     }
     if (!payload.startsWith(":")) return null
     val commandStart = payload.indexOf(" PRIVMSG ")
