@@ -10,11 +10,11 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** Keeps RTMPS stream keys and bot bridge tokens out of plain-text SharedPreferences. */
+/** Keeps RTMPS keys, bot tokens, and Twitch chat credentials out of plain-text preferences. */
 class SecretStore(context: Context) {
   private val prefs = context.getSharedPreferences("secure_encoder_secrets", Context.MODE_PRIVATE)
   private val alias = "sweatyobs_aes_gcm_v1"
-  private val secretNames = setOf("rtmps", "youtube_key", "kick_key", "bridge_token")
+  private val secretNames = setOf("rtmps", "youtube_key", "kick_key", "bridge_token", "twitch_chat_token")
   private val key: SecretKey
     get() {
       val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

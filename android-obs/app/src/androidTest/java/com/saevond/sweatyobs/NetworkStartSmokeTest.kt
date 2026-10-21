@@ -111,6 +111,40 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
   }
 
+  @Test fun twitchChatTokenIsSavedEncryptedAndLiveChatIsOptIn() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
+    val secrets = SecretStore(context)
+    val fakeToken = "synthetic-twitch-chat-token-12345"
+    secrets.put("twitch_chat_token", "")
+    outputPrefs.edit().putBoolean("twitch_chat_enabled", false)
+      .putString("twitch_chat_login", "saevond")
+      .putString("twitch_chat_channel", "saevond").commit()
+    activityRule.scenario.recreate()
+    try {
+      onView(withText("Show live Twitch chat in the overlay")).perform(scrollTo())
+        .check(matches(isNotChecked())).perform(click())
+      onView(withHint("Twitch login for the token (example: saevond)"))
+        .perform(scrollTo(), replaceText("saevond"), closeSoftKeyboard())
+      onView(withHint("Twitch channel to display (example: saevond)"))
+        .perform(scrollTo(), replaceText("saevond"), closeSoftKeyboard())
+      onView(withHint("Twitch user access token with chat:read (saved to Android Keystore)"))
+        .perform(scrollTo(), replaceText(fakeToken), closeSoftKeyboard())
+      onView(withText("Save Twitch chat settings securely")).perform(scrollTo(), click())
+
+      assertTrue(outputPrefs.getBoolean("twitch_chat_enabled", false))
+      assertEquals("saevond", outputPrefs.getString("twitch_chat_login", null))
+      assertEquals("saevond", outputPrefs.getString("twitch_chat_channel", null))
+      assertEquals(fakeToken, secrets.get("twitch_chat_token"))
+      assertNotEquals(fakeToken, context.getSharedPreferences("secure_encoder_secrets", 0)
+        .getString("twitch_chat_token", null))
+      onView(withId(R.id.connection_status)).check(matches(withText(containsString("Android Keystore"))))
+    } finally {
+      secrets.put("twitch_chat_token", "")
+      outputPrefs.edit().putBoolean("twitch_chat_enabled", false).commit()
+    }
+  }
+
   @Test fun platformTlsChecksAreClearlyNonPublishingAndRequireAValidUrl() {
     activityRule.scenario.onActivity { activity ->
       activity.getSharedPreferences("encoder_outputs", 0).edit().remove("youtube_server").commit()

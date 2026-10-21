@@ -35,6 +35,7 @@ class Ps5LanService : Service() {
   companion object {
     const val ACTION_START = "com.saevond.sweatyobs.START_PS5_INGEST"
     const val ACTION_START_TWITCH = "com.saevond.sweatyobs.START_PUBLIC_TWITCH"
+    const val ACTION_DISABLE_TWITCH_CHAT = "com.saevond.sweatyobs.DISABLE_TWITCH_CHAT"
     const val ACTION_RECONNECT_OUTPUTS = "com.saevond.sweatyobs.RECONNECT_OUTPUTS"
     const val ACTION_MUSIC_PLAY = "com.saevond.sweatyobs.MUSIC_PLAY"
     const val ACTION_MUSIC_PAUSE = "com.saevond.sweatyobs.MUSIC_PAUSE"
@@ -52,6 +53,8 @@ class Ps5LanService : Service() {
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
     val liveLevels = MixLevels(85, 22)
+    @Volatile var twitchChatOverlayActiveOrStarting: Boolean = false
+      private set
     @Volatile var receiverRunning: Boolean = false
       private set
 
@@ -81,6 +84,8 @@ class Ps5LanService : Service() {
   private var liveGate: MediaRelayGate? = null
   @Volatile private var brandOverlay: BrandVideoOverlay? = null
   @Volatile private var brandOverlayRequested = false
+  @Volatile private var twitchChatClient: TwitchChatClient? = null
+  @Volatile private var twitchChatGeneration = 0
   @Volatile private var sourceVideoConfig: RtmpMessage? = null
   @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
@@ -169,6 +174,17 @@ class Ps5LanService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action == ACTION_DISABLE_TWITCH_CHAT) {
+      if (twitchChatOverlayActiveOrStarting) {
+        stopTwitchChatOverlay()
+        brandOverlay?.setLiveChatEnabled(false)
+        setNotification("Twitch overlay chat stopped. Stream outputs remain live.")
+      } else if (!publicTest && !receiverRunning) {
+        // Avoid leaving a short-lived service instance behind after a stop raced with shutdown.
+        stopSelf(startId)
+      }
+      return START_NOT_STICKY
+    }
     if (intent?.action == ACTION_RECONNECT_OUTPUTS) {
       if (!receiverRunning || !publicTest || outputPublishers.isEmpty()) {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.MANUAL_RECONNECT_REJECTED,
@@ -286,6 +302,7 @@ class Ps5LanService : Service() {
           handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
         }.getOrNull()
       } else null
+      startTwitchChatOverlay(outputPrefs)
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
     }
@@ -620,6 +637,7 @@ class Ps5LanService : Service() {
     audioMixer = null
     musicTrack?.clear()
     musicTrack = null
+    stopTwitchChatOverlay()
     brandOverlay?.close()
     brandOverlay = null
     outputPublishers.toList().forEach { it.close() }
@@ -627,6 +645,7 @@ class Ps5LanService : Service() {
     liveGate = null
     outputConnected = false
     receiver = null
+    twitchChatOverlayActiveOrStarting = false
     if (!terminalReason) publishUiStatus("Receiver stopped. No broadcast was sent.")
     super.onDestroy()
   }
@@ -669,11 +688,64 @@ class Ps5LanService : Service() {
 
   private fun disableBrandOverlay(reason: String) {
     brandOverlayRequested = false
+    stopTwitchChatOverlay()
     brandOverlay?.close()
     brandOverlay = null
     outputPublishers.forEach { it.reconnectNow() }
     sourceVideoConfig?.let { config -> outputPublishers.forEach { it.offer(config) } }
     setNotification("$reason · reconnecting with original PS5 video")
+  }
+
+  /** Chat is a separate read-only channel and is started only for public streams with the overlay enabled. */
+  private fun startTwitchChatOverlay(outputPrefs: android.content.SharedPreferences) {
+    stopTwitchChatOverlay()
+    val overlay = brandOverlay
+    val canRunInPublicOverlay = publicTest && brandOverlayRequested && overlay != null
+    if (canRunInPublicOverlay) twitchChatOverlayActiveOrStarting = true
+    val enabled = canRunInPublicOverlay && outputPrefs.getBoolean("twitch_chat_enabled", false)
+    overlay?.setLiveChatEnabled(enabled)
+    if (!enabled) twitchChatOverlayActiveOrStarting = false
+    if (!enabled || overlay == null) return
+
+    val token = SecretStore(this).get("twitch_chat_token")
+    if (token.isBlank()) {
+      overlay.setLiveChatStatus("TOKEN REQUIRED")
+      return
+    }
+    val login = outputPrefs.getString("twitch_chat_login", "saevond").orEmpty()
+    val channel = outputPrefs.getString("twitch_chat_channel", "saevond").orEmpty()
+    val generation = twitchChatGeneration
+    val client = runCatching {
+      TwitchChatClient(
+        loginInput = login,
+        channelInput = channel,
+        tokenInput = token,
+        onState = { state ->
+          if (generation == twitchChatGeneration) {
+            overlay.setLiveChatStatus(state.overlayLabel)
+            handler.post {
+              if (!stopping && generation == twitchChatGeneration)
+                setNotification("Twitch overlay chat ${state.overlayLabel} · $outputStatus")
+            }
+          }
+        },
+        onMessage = { message ->
+          if (generation == twitchChatGeneration) overlay.offerLiveChatMessage(message)
+        }
+      )
+    }.getOrElse {
+      overlay.setLiveChatStatus("SETTINGS ERROR")
+      return
+    }
+    twitchChatClient = client
+    client.start()
+  }
+
+  private fun stopTwitchChatOverlay() {
+    twitchChatOverlayActiveOrStarting = false
+    twitchChatGeneration++
+    twitchChatClient?.close()
+    twitchChatClient = null
   }
 
   private fun maybeSubmitRemoteDiagnostics(ingest: LanRtmpIngest, force: Boolean = false) {

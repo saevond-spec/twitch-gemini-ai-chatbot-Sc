@@ -58,8 +58,14 @@ internal class BrandVideoOverlay(
   private val handler = Handler(worker.looper)
   private val lock = Any()
   private val pending = ArrayDeque<Work>()
+  private val chatLock = Any()
+  private val pendingChatMessages = BoundedLatestQueue<TwitchChatMessage>(TwitchChatProtocol.MAX_CHAT_LINES)
+  private val chatDrainScheduled = AtomicBoolean(false)
   private var pendingBytes = 0
   private val closed = AtomicBoolean(false)
+  @Volatile private var liveChatEnabled = false
+  @Volatile private var liveChatStatus = "OFFLINE"
+  @Volatile private var overlayCanvas: BrandOverlayCanvas? = null
   private var configMessage: RtmpMessage? = null
   private var config: AvcFlvConfig? = null
   private var decoder: MediaCodec? = null
@@ -88,6 +94,60 @@ internal class BrandVideoOverlay(
     schedulePump()
   }
 
+  fun setLiveChatEnabled(enabled: Boolean) {
+    synchronized(chatLock) {
+      liveChatEnabled = enabled
+      liveChatStatus = if (enabled) "CONNECTING" else "OFFLINE"
+      if (!enabled) pendingChatMessages.clear()
+    }
+    handler.post {
+      overlayCanvas?.let { canvas ->
+        canvas.setLiveChatEnabled(liveChatEnabled)
+        canvas.setLiveChatStatus(liveChatStatus)
+      }
+    }
+  }
+
+  fun setLiveChatStatus(status: String) {
+    liveChatStatus = status.take(24)
+    handler.post { overlayCanvas?.setLiveChatStatus(liveChatStatus) }
+  }
+
+  fun offerLiveChatMessage(message: TwitchChatMessage) {
+    synchronized(chatLock) {
+      if (!liveChatEnabled || closed.get()) return
+      pendingChatMessages.offer(message)
+    }
+    scheduleChatDrain()
+  }
+
+  /** Coalesces bursts into at most 20 worker callbacks per second; pending rows stay capped at eight. */
+  private fun scheduleChatDrain() {
+    if (!chatDrainScheduled.compareAndSet(false, true)) return
+    if (!handler.postDelayed({
+        val batch = synchronized(chatLock) {
+          val canvas = overlayCanvas
+          if (canvas == null) {
+            chatDrainScheduled.set(false)
+            null
+          } else {
+            val messages = pendingChatMessages.drain()
+            chatDrainScheduled.set(false)
+            canvas to messages
+          }
+        }
+        batch?.let { (canvas, messages) ->
+          messages.forEach { if (liveChatEnabled && !closed.get()) canvas.addLiveChatMessage(it) }
+        }
+        val morePending = synchronized(chatLock) {
+          !pendingChatMessages.isEmpty() && overlayCanvas != null && liveChatEnabled && !closed.get()
+        }
+        if (morePending) scheduleChatDrain()
+      }, CHAT_DRAIN_INTERVAL_MS)) {
+      chatDrainScheduled.set(false)
+    }
+  }
+
   /** Nonblocking; keyframe-gated queue bounded by frame count and bytes. */
   fun offer(message: RtmpMessage) {
     if (closed.get() || message.type != 9 || message.data.size !in 6..2_097_152) return
@@ -112,6 +172,7 @@ internal class BrandVideoOverlay(
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     synchronized(lock) { pending.clear(); pendingBytes = 0; configMessage = null }
+    synchronized(chatLock) { pendingChatMessages.clear(); overlayCanvas = null }
     handler.post {
       releaseCodecs()
       worker.quitSafely()
@@ -189,6 +250,12 @@ internal class BrandVideoOverlay(
       val encoderSurface = videoEncoder.createInputSurface()
       createdInputSurface = encoderSurface
       val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight)
+      synchronized(chatLock) {
+        overlayCanvas.setLiveChatEnabled(liveChatEnabled)
+        overlayCanvas.setLiveChatStatus(liveChatStatus)
+        pendingChatMessages.drain().forEach(overlayCanvas::addLiveChatMessage)
+        this.overlayCanvas = overlayCanvas
+      }
       val gl = try {
         GlBrandCompositor(
           encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
@@ -197,6 +264,7 @@ internal class BrandVideoOverlay(
           onFailure = { error -> fail("Brand overlay compositor failed (${error.javaClass.simpleName})") }
         )
       } catch (error: Exception) {
+        synchronized(chatLock) { this.overlayCanvas = null }
         overlayCanvas.close()
         throw error
       }
@@ -399,6 +467,7 @@ internal class BrandVideoOverlay(
 
   private fun fail(message: String) {
     if (!closed.compareAndSet(false, true)) return
+    synchronized(chatLock) { pendingChatMessages.clear(); overlayCanvas = null }
     releaseCodecs()
     onFailure(message)
     worker.quitSafely()
@@ -407,12 +476,14 @@ internal class BrandVideoOverlay(
   private fun releaseCodecs() {
     runCatching { decoder?.stop() }; runCatching { decoder?.release() }; decoder = null
     runCatching { compositor?.close() }; compositor = null
+    synchronized(chatLock) { overlayCanvas = null }
     runCatching { encoder?.stop() }; runCatching { encoder?.release() }; encoder = null
     runCatching { encoderInputSurface?.release() }; encoderInputSurface = null
     config = null
   }
 
   companion object {
+    private const val CHAT_DRAIN_INTERVAL_MS = 50L
     private const val MAX_PENDING_FRAMES = 12
     private const val MAX_PENDING_BYTES = 6 * 1024 * 1024
     private const val MAX_FEED_PER_PUMP = 2

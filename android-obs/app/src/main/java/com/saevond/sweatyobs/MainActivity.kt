@@ -36,6 +36,8 @@ import android.widget.Spinner
 import android.widget.ArrayAdapter
 import android.widget.AdapterView
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
 
 /**
@@ -340,6 +342,36 @@ class MainActivity : Activity() {
       text = "Add the @saevond live overlay to the stream"
       isChecked = outputPrefs.getBoolean("brand_overlay", true)
     }
+    val enableLiveTwitchChat = CheckBox(this).apply {
+      text = "Show live Twitch chat in the overlay"
+      isChecked = outputPrefs.getBoolean("twitch_chat_enabled", false)
+    }
+    val twitchChatLogin = EditText(this).apply {
+      hint = "Twitch login for the token (example: saevond)"
+      setSingleLine(true)
+      setText(outputPrefs.getString("twitch_chat_login", "saevond"))
+    }
+    val twitchChatChannel = EditText(this).apply {
+      hint = "Twitch channel to display (example: saevond)"
+      setSingleLine(true)
+      setText(outputPrefs.getString("twitch_chat_channel", "saevond"))
+    }
+    val twitchChatToken = EditText(this).apply {
+      hint = "Twitch user access token with chat:read (saved to Android Keystore)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val twitchChatCredentialStatus = TextView(this).apply {
+      text = if (SecretStore(this@MainActivity).get("twitch_chat_token").isNotBlank())
+        "Twitch chat token saved securely on this phone ✓" else "No Twitch chat token saved. Chat stays off until configured."
+      setTextColor(getColor(if (SecretStore(this@MainActivity).get("twitch_chat_token").isNotBlank())
+        R.color.sweaty_cyan else R.color.sweaty_muted))
+      textSize = 13f
+    }
+    val saveTwitchChatSettings = Button(this).apply { text = "Save Twitch chat settings securely" }
+    val verifyTwitchChat = Button(this).apply { text = "Check Twitch chat connection · no stream" }
+    val removeTwitchChatToken = Button(this).apply { text = "Remove saved Twitch chat token" }
+    val twitchChatGuide = Button(this).apply { text = "Open Twitch token and chat permissions guide" }
     val qualityLabels = listOf("Stable multi-stream · up to 720p · 4.5 Mbps", "High quality · up to 1080p · 8 Mbps")
     val overlayQuality = Spinner(this).apply {
       id = R.id.overlay_quality
@@ -350,7 +382,7 @@ class MainActivity : Activity() {
     }
     val reconnectOutputs = Button(this).apply { text = "Reconnect stream outputs" }
     val videoModeNote = TextView(this).apply {
-      text = "The overlay is burned into public-stream video; the network test never publishes it. Stats, chat, and alerts are simulated. Overlay mode hardware-encodes up to the chosen size; it is not 4K. Pass-through leaves the PS5 bitrate/resolution unchanged. Overlay and quality choices apply next time you start streaming."
+      text = "The overlay is burned into public-stream video; the PS5 connection test never publishes or opens Twitch chat. Stats, AI reactions, and event labels stay simulated. Optional live Twitch IRC chat is read-only and keeps at most 8 recent messages in memory; it sends no chat messages and writes none of the chat text to logs or disk. Overlay mode hardware-encodes up to the chosen size; it is not 4K. Pass-through leaves the PS5 bitrate/resolution unchanged. Choices apply next time you start streaming."
     }
     val metadataTitle = EditText(this).apply {
       hint = "Stream title (example: PS5 live gameplay and ranked matches)"
@@ -602,6 +634,9 @@ class MainActivity : Activity() {
       enableKick, openKickDashboard, kickServer, kickServerStatus, saveKickServer, testKickConnection,
       kickKey, saveKick, kickOutputStatus,
       sectionHeader("@saevond overlay and quality"), enableBrandOverlay, overlayQuality, videoModeNote,
+      sectionHeader("Optional live Twitch chat in overlay"), enableLiveTwitchChat,
+      twitchChatLogin, twitchChatChannel, twitchChatToken, twitchChatCredentialStatus,
+      saveTwitchChatSettings, verifyTwitchChat, removeTwitchChatToken, twitchChatGuide,
       goLive, reconnectOutputs,
       sectionHeader("Connection check"), startLan, remoteDiagnostics, remoteDiagnosticsNote, stopLan,
       sectionHeader("Stream description and search"), metadataTitle, metadataGame, metadataKeywords, copyMetadata,
@@ -757,6 +792,15 @@ class MainActivity : Activity() {
         if (checked) EncoderDiagnosticResult.ENABLED else EncoderDiagnosticResult.DISABLED,
         EncoderDiagnosticTarget.OVERLAY)
     }
+    enableLiveTwitchChat.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("twitch_chat_enabled", checked).apply()
+      val stopRequested = checked || requestLiveTwitchChatStop()
+      status.text = if (checked)
+        "Live Twitch chat is selected for the next public stream. The connection check below does not start a stream."
+      else if (stopRequested)
+        "Live Twitch chat is off. A stop request was sent for any active chat connection; stream outputs continue and the overlay returns to its labeled simulation."
+      else "Live Twitch chat is off, but Android could not stop the active chat connection. Stop the stream service to close it."
+    }
     overlayQuality.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -775,6 +819,105 @@ class MainActivity : Activity() {
     }
     testYouTubeConnection.setOnClickListener {
       checkRtmpsEndpoint("YouTube", youtubeServer, youtubeOutputStatus, testYouTubeConnection)
+    }
+    saveTwitchChatSettings.setOnClickListener {
+      val login = TwitchChatProtocol.normalizeLogin(twitchChatLogin.text.toString())
+      val channel = TwitchChatProtocol.normalizeLogin(twitchChatChannel.text.toString())
+      val enteredToken = twitchChatToken.text.toString()
+      val token = if (enteredToken.isBlank()) "" else TwitchChatProtocol.normalizeAccessToken(enteredToken)
+      if (login == null || channel == null || (enteredToken.isNotBlank() && token == null)) {
+        status.text = "Enter valid Twitch login and channel names plus a valid access token, if changing it."
+        return@setOnClickListener
+      }
+      try {
+        outputPrefs.edit()
+          .putString("twitch_chat_login", login)
+          .putString("twitch_chat_channel", channel)
+          .putBoolean("twitch_chat_enabled", enableLiveTwitchChat.isChecked)
+          .apply()
+        token?.takeIf { it.isNotBlank() }?.let { SecretStore(this).put("twitch_chat_token", it) }
+        twitchChatToken.text.clear()
+        val saved = SecretStore(this).get("twitch_chat_token").isNotBlank()
+        twitchChatCredentialStatus.text = if (saved)
+          "Twitch chat token saved securely on this phone ✓" else "No Twitch chat token saved. Chat stays off until configured."
+        twitchChatCredentialStatus.setTextColor(getColor(if (saved) R.color.sweaty_cyan else R.color.sweaty_muted))
+        val chatStopRequested = enableLiveTwitchChat.isChecked || requestLiveTwitchChatStop()
+        status.text = if (saved)
+          if (chatStopRequested)
+            "Twitch chat settings saved. The token is stored in Android Keystore; chat connects only during a user-started public stream."
+          else "Settings saved, but Android could not stop the active chat connection. Stop the stream service to close it."
+        else "Channel settings saved. Add a Twitch user access token with the chat:read scope to enable live chat."
+      } catch (error: Exception) {
+        status.text = "Could not securely save Twitch chat settings (${error.javaClass.simpleName})."
+      }
+    }
+    verifyTwitchChat.setOnClickListener {
+      val login = TwitchChatProtocol.normalizeLogin(twitchChatLogin.text.toString())
+      val channel = TwitchChatProtocol.normalizeLogin(twitchChatChannel.text.toString())
+      val enteredToken = twitchChatToken.text.toString()
+      val token = if (enteredToken.isBlank()) SecretStore(this).get("twitch_chat_token")
+        else TwitchChatProtocol.normalizeAccessToken(enteredToken).orEmpty()
+      if (login == null || channel == null || token.isBlank()) {
+        status.text = "Enter a valid login and channel, then add or save a Twitch token with chat:read. No stream was started."
+        return@setOnClickListener
+      }
+      verifyTwitchChat.isEnabled = false
+      status.text = "Checking Twitch TLS chat access in read-only mode. This joins the channel to verify access but does not display or store chat messages, and starts no stream."
+      thread(name = "SweatyOBS-twitch-chat-check") {
+        var result: TwitchChatState? = null
+        var client: TwitchChatClient? = null
+        try {
+          val joined = CountDownLatch(1)
+          val connection = TwitchChatClient(login, channel, token, verifyOnly = true,
+            onState = { state ->
+              if (state == TwitchChatState.CONNECTED || state == TwitchChatState.AUTH_FAILED) {
+                result = state
+                joined.countDown()
+              }
+            }, onMessage = {})
+          client = connection
+          connection.start()
+          val completed = joined.await(15, TimeUnit.SECONDS)
+          connection.close()
+          runOnUiThread {
+            verifyTwitchChat.isEnabled = true
+            status.text = when {
+              !completed -> "Twitch chat check timed out. Check phone internet, channel, token, and chat:read permission. No stream was started."
+              result == TwitchChatState.CONNECTED -> "Twitch chat connected securely and joined #$channel in read-only mode. The token was not saved by this check; use Save to retain it."
+              else -> "Twitch rejected chat authentication. Check that the token is valid, has chat:read, and belongs to $login. No stream was started."
+            }
+          }
+        } catch (_: Exception) {
+          client?.close()
+          runOnUiThread {
+            verifyTwitchChat.isEnabled = true
+            status.text = "Could not check Twitch chat. Confirm the login, channel, token format, and network. No stream was started."
+          }
+        }
+      }
+    }
+    removeTwitchChatToken.setOnClickListener {
+      try {
+        SecretStore(this).put("twitch_chat_token", "")
+        enableLiveTwitchChat.isChecked = false
+        val chatStopRequested = requestLiveTwitchChatStop()
+        twitchChatToken.text.clear()
+        twitchChatCredentialStatus.text = "No Twitch chat token saved. Chat stays off until configured."
+        twitchChatCredentialStatus.setTextColor(getColor(R.color.sweaty_muted))
+        status.text = if (chatStopRequested)
+          "Saved Twitch chat token removed from this phone. A stop request was sent for any active chat connection; stream outputs remain live."
+        else "Token removed, but Android could not stop the active chat connection. Stop the stream service to close it."
+      } catch (error: Exception) {
+        status.text = "Could not remove Twitch chat token (${error.javaClass.simpleName})."
+      }
+    }
+    twitchChatGuide.setOnClickListener {
+      try {
+        startActivity(Intent(Intent.ACTION_VIEW,
+          Uri.parse("https://dev.twitch.tv/docs/authentication/getting-tokens-oauth")))
+      } catch (_: ActivityNotFoundException) {
+        status.text = "No browser is available to open Twitch's official token guide."
+      }
     }
     saveYouTube.setOnClickListener {
       val key = youtubeKey.text.toString().trim()
@@ -1077,6 +1220,16 @@ class MainActivity : Activity() {
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 receiver and all streaming outputs stopped."
     }
+  }
+
+  private fun requestLiveTwitchChatStop(): Boolean {
+    if (!Ps5LanService.twitchChatOverlayActiveOrStarting) return true
+    return runCatching {
+      startService(Intent(this, Ps5LanService::class.java).apply {
+        action = Ps5LanService.ACTION_DISABLE_TWITCH_CHAT
+      })
+      true
+    }.getOrDefault(false)
   }
 
   private fun browseRemoteCatalog(genre: String) {
