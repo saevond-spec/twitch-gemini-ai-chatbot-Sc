@@ -94,6 +94,7 @@ class ReliableRtmpOutputTest {
 
   @Test fun queueOverflowDoesNotCancelAnInFlightDestinationConnect() {
     val connectEntered = CountDownLatch(1)
+    val connectReturned = CountDownLatch(1)
     val releaseConnect = CountDownLatch(1)
     val firstBatch = CountDownLatch(3)
     val attempts = AtomicInteger()
@@ -106,7 +107,8 @@ class ReliableRtmpOutputTest {
         object : MediaPublisher {
           override fun connect() {
             connectEntered.countDown()
-            check(releaseConnect.await(2, TimeUnit.SECONDS)) { "blocked fake connect was not released" }
+            check(releaseConnect.await(10, TimeUnit.SECONDS)) { "blocked fake connect was not released" }
+            connectReturned.countDown()
           }
           override fun publish(media: RtmpMessage) {
             sent += media
@@ -132,11 +134,15 @@ class ReliableRtmpOutputTest {
       assertEquals("overflow during connect must not close the publisher", 0, closeCalls.get())
       assertEquals("overflow must still clear stale media", 0, output.snapshot().queueBytes)
 
-      output.offer(keyframe(500))
+      // Let connect finish while the queue is unaligned, matching a handshake
+      // that completes just after a GOP/queue window has expired.
       releaseConnect.countDown()
+      assertTrue("blocked connect should finish", connectReturned.await(3, TimeUnit.SECONDS))
+      assertEquals("successful connection should stay open while waiting for media", 0, closeCalls.get())
 
+      output.offer(keyframe(500))
       assertTrue("fresh headers and keyframe should publish after connect finishes",
-        firstBatch.await(2, TimeUnit.SECONDS))
+        firstBatch.await(3, TimeUnit.SECONDS))
       assertEquals("a single slow connect should be preserved", 1, attempts.get())
       assertEquals(listOf(9, 8, 9), sent.take(3).map { it.type })
       assertEquals(listOf(0L, 0L, 0L), sent.take(3).map { it.timestamp })
