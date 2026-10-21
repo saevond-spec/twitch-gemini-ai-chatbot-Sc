@@ -22,11 +22,17 @@ data class OutputSnapshot(
   val droppedPackets: Long,
   val lastError: String?
 ) {
-  val health: String get() = when {
-    state != "LIVE" -> "Reconnecting"
-    queueMediaMs >= 900 -> "Poor"
-    queueMediaMs >= 300 -> "Fair"
-    else -> "Good"
+  val health: String get() = when (state) {
+    "WAITING FOR KEYFRAME" -> "Waiting"
+    "CONNECTING" -> "Connecting"
+    "RETRYING" -> "Retrying"
+    "STOPPED" -> "Stopped"
+    "LIVE" -> when {
+      queueMediaMs >= 900 -> "Poor"
+      queueMediaMs >= 300 -> "Fair"
+      else -> "Good"
+    }
+    else -> "Unavailable"
   }
 
   fun summary(): String {
