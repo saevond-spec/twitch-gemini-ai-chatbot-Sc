@@ -296,13 +296,9 @@ class ReliableRtmpOutputTest {
 
   @Test fun manualReconnectWaitsForAnotherCleanKeyframeAndCreatesANewSession() {
     val publishers = CopyOnWriteArrayList<TestPublisher>()
-    val retryStarted = CountDownLatch(1)
     val output = ReliableRtmpOutput(destination(), publisherFactory = {
       TestPublisher().also { publishers += it }
-    }, retryDelaysMs = longArrayOf(200), waitMs = { delay ->
-      retryStarted.countDown()
-      Thread.sleep(delay)
-    })
+    }, retryDelaysMs = longArrayOf(10_000))
     try {
       output.start()
       output.offer(avcConfig())
@@ -310,9 +306,9 @@ class ReliableRtmpOutputTest {
       output.offer(keyframe(10))
       assertTrue(pollUntil(2_000) { publishers.size == 1 && publishers[0].sent.size >= 3 })
       output.reconnectNow()
-      assertTrue("the publisher should leave LIVE state and begin retry", retryStarted.await(2, TimeUnit.SECONDS))
       output.offer(keyframe(120))
-      assertTrue(pollUntil(2_000) { publishers.size == 2 && publishers[1].sent.size >= 3 })
+      assertTrue("manual reconnect should bypass retry delay and resume on a clean GOP",
+        pollUntil(2_000) { publishers.size == 2 && publishers[1].sent.size >= 3 })
       assertEquals(1L, output.snapshot().reconnects)
       assertEquals(listOf(9, 8, 9), publishers[1].sent.take(3).map { it.type })
       assertEquals(0L, publishers[1].sent.first().timestamp)
@@ -624,7 +620,6 @@ class ReliableRtmpOutputTest {
     val attempts = AtomicInteger()
     val firstPublishEntered = CountDownLatch(1)
     val releaseFirstPublish = CountDownLatch(1)
-    val retryDelayReached = CountDownLatch(1)
     val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
     val output = ReliableRtmpOutput(
       destination(),
@@ -644,7 +639,6 @@ class ReliableRtmpOutputTest {
       retryDelaysMs = longArrayOf(0),
       maxQueueAgeMs = 100,
       clockMs = { nowMs.get() },
-      waitMs = { retryDelayReached.countDown() }
     )
     try {
       output.start()
@@ -657,7 +651,9 @@ class ReliableRtmpOutputTest {
       output.offer(RtmpMessage(9, 100, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
       assertTrue("stale media should be counted as dropped", output.snapshot().droppedPackets >= 3)
       assertEquals(0, output.snapshot().queueBytes)
-      assertTrue("stale output should enter its retry path", retryDelayReached.await(2, TimeUnit.SECONDS))
+      assertTrue("stale output should retire its old session and wait for a keyframe",
+        pollUntil(2_000) { output.snapshot().state == "WAITING FOR KEYFRAME" })
+      assertEquals("overflow must not open another session before a fresh keyframe", 1, attempts.get())
 
       output.offer(keyframe(500))
       assertTrue("a fresh keyframe should restart publishing", pollUntil(2_000) {
