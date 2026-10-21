@@ -9,12 +9,12 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.SystemClock
 import android.net.Uri
 import kotlin.concurrent.thread
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import com.saevond.sweatyobs.ingest.LanRtmpIngest
 import com.saevond.sweatyobs.ingest.MediaRelayGate
 import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
@@ -22,6 +22,7 @@ import com.saevond.sweatyobs.ingest.RtmpMessage
 import com.saevond.sweatyobs.ingest.RtmpDestination
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
 import java.net.Inet4Address
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -45,8 +46,8 @@ class Ps5LanService : Service() {
     const val EXTRA_PS5_IPV4 = "ps5_ipv4"
     const val ACTION_STATUS = "com.saevond.sweatyobs.DIAGNOSTIC_STATUS"
     const val EXTRA_STATUS_MESSAGE = "diagnostic_status"
-    const val STATUS_PREFS = "diagnostic_status_v1"
-    const val PREF_STATUS_MESSAGE = "latest_message"
+    const val DIAGNOSTICS_PREFS = "encoder_diagnostics"
+    const val PREF_REMOTE_DIAGNOSTICS_ENABLED = "remote_enabled"
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
@@ -84,6 +85,9 @@ class Ps5LanService : Service() {
   @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
   private var musicBridge: MusicBridgePoller? = null
+  private var remoteDiagnosticsReporter: RemoteDiagnosticsReporter? = null
+  private val diagnosticSessionId = UUID.randomUUID().toString()
+  private var nextDiagnosticReportAtMs = 0L
   private var genrePlaylist: GenrePlaylist? = null
   private var musicDecodeGeneration = 0
   private var decodingTrack = false
@@ -129,6 +133,7 @@ class Ps5LanService : Service() {
       else "Waiting for PS5 on ${wifiAddress}:1935 · connections ${ingest.tcpConnections}, video ${ingest.videoPackets}, audio ${ingest.audioPackets}"
       val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
       if (display != report) setNotification(display)
+      maybeSubmitRemoteDiagnostics(ingest)
       handler.postDelayed(this, 3000)
     }
   }
@@ -290,7 +295,6 @@ class Ps5LanService : Service() {
         }
       }
     } catch (error: Exception) {
-      Log.w("SweatyOBS-PS5", "LAN receiver unavailable: ${error.javaClass.simpleName}")
       startFailed(error)
     }
     return START_NOT_STICKY
@@ -315,31 +319,41 @@ class Ps5LanService : Service() {
       }
       val ingest = LanRtmpIngest(local, ps5Address, onMedia = { packet ->
         if (publicTest) {
+          var mediaPhase = "audio_mix"
           try {
             val input = if (packet.type == 8 && audioMixer != null) {
               audioMixer!!.onAudio(packet)
             } else listOf(packet)
             input.forEach { item ->
+              mediaPhase = "relay_gate"
               val frames = liveGate?.process(item).orEmpty()
               if (frames.isNotEmpty()) {
                 frames.forEach { media ->
                   when {
                     ReliableRtmpOutput.isAvcConfig(media) -> {
                       sourceVideoConfig = media.copy(data = media.data.copyOf())
+                      mediaPhase = "overlay_config"
                       brandOverlay?.setConfiguration(media)
+                      mediaPhase = "output_queue"
                       outputPublishers.forEach { it.offer(media) }
                     }
-                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> brandOverlay?.offer(media)
-                    else -> outputPublishers.forEach { it.offer(media) }
+                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> {
+                      mediaPhase = "overlay_frame"
+                      brandOverlay?.offer(media)
+                    }
+                    else -> {
+                      mediaPhase = "output_queue"
+                      outputPublishers.forEach { it.offer(media) }
+                    }
                   }
                 }
               }
             }
           } catch (error: Exception) {
-            Log.w("SweatyOBS-PS5", "Media processing stopped: " + error.javaClass.simpleName)
             terminalReason = true
             handler.post {
               if (!stopping) {
+                submitRemoteFailure(ingest = receiver, phase = mediaPhase, category = safeErrorCategory(error.javaClass.simpleName))
                 setNotification("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
                 stopSelf()
               }
@@ -362,6 +376,7 @@ class Ps5LanService : Service() {
       receiver = ingest
       ingest.start()
       receiverRunning = true
+      maybeSubmitRemoteDiagnostics(ingest, force = true)
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
       val selectedPlatforms = outputPublishers.joinToString(" + ") { it.snapshot().label }
@@ -481,7 +496,6 @@ class Ps5LanService : Service() {
     .build()
 
   private fun publishUiStatus(message: String) {
-    getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit().putString(PREF_STATUS_MESSAGE, message).apply()
     sendBroadcast(Intent(ACTION_STATUS).apply {
       setPackage(packageName)
       putExtra(EXTRA_STATUS_MESSAGE, message)
@@ -505,6 +519,8 @@ class Ps5LanService : Service() {
     receiver?.stop()
     musicBridge?.stop()
     musicBridge = null
+    remoteDiagnosticsReporter?.close()
+    remoteDiagnosticsReporter = null
     audioMixer?.close()
     audioMixer = null
     musicTrack?.clear()
@@ -562,5 +578,93 @@ class Ps5LanService : Service() {
     outputPublishers.forEach { it.reconnectNow() }
     sourceVideoConfig?.let { config -> outputPublishers.forEach { it.offer(config) } }
     setNotification("$reason · reconnecting with original PS5 video")
+  }
+
+  private fun maybeSubmitRemoteDiagnostics(ingest: LanRtmpIngest, force: Boolean = false) {
+    val preferences = getSharedPreferences(DIAGNOSTICS_PREFS, MODE_PRIVATE)
+    if (!preferences.getBoolean(PREF_REMOTE_DIAGNOSTICS_ENABLED, true)) {
+      remoteDiagnosticsReporter?.disable()
+      remoteDiagnosticsReporter = null
+      nextDiagnosticReportAtMs = 0L
+      return
+    }
+    if (remoteDiagnosticsReporter == null) {
+      val bridgeSecret = SecretStore(this).get("bridge_token")
+      if (bridgeSecret.length < 32) return
+      remoteDiagnosticsReporter = RemoteDiagnosticsReporter(bridgeSecret)
+    }
+    val now = SystemClock.elapsedRealtime()
+    if (!force && now < nextDiagnosticReportAtMs) return
+    nextDiagnosticReportAtMs = now + 30_000L
+    remoteDiagnosticsReporter?.submit(createDiagnosticSample(ingest))
+  }
+
+  private fun submitRemoteFailure(ingest: LanRtmpIngest?, phase: String, category: String) {
+    val current = ingest ?: return
+    val preferences = getSharedPreferences(DIAGNOSTICS_PREFS, MODE_PRIVATE)
+    if (!preferences.getBoolean(PREF_REMOTE_DIAGNOSTICS_ENABLED, true)) return
+    if (remoteDiagnosticsReporter == null) {
+      val bridgeSecret = SecretStore(this).get("bridge_token")
+      if (bridgeSecret.length < 32) return
+      remoteDiagnosticsReporter = RemoteDiagnosticsReporter(bridgeSecret)
+    }
+    remoteDiagnosticsReporter?.submit(createDiagnosticSample(current, phase, category))
+  }
+
+  private fun createDiagnosticSample(
+    ingest: LanRtmpIngest,
+    failurePhase: String? = null,
+    failureCategory: String? = null,
+  ): EncoderDiagnosticSample {
+    val connectivity = getSystemService(ConnectivityManager::class.java)
+    val activeNetwork = connectivity.activeNetwork
+    val capabilities = activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
+    val transport = when {
+      capabilities == null -> "none"
+      capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+      capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+      capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+      else -> "other"
+    }
+    val state = when {
+      ingest.lastFailure != null -> "FAILED"
+      !ingest.active -> "STOPPED"
+      !ingest.connected -> "LISTENING"
+      !ingest.rtpmPublished -> "CONNECTED"
+      else -> "PUBLISHING"
+    }
+    val outputs = outputPublishers.map { it.snapshot() }.map { snapshot ->
+      EncoderDestinationSample(
+        id = snapshot.id,
+        state = snapshot.state,
+        queueBytes = snapshot.queueBytes,
+        queueMs = snapshot.queueMediaMs,
+        bytesPerSecond = snapshot.bytesPerSecond,
+        reconnects = snapshot.reconnects,
+        droppedPackets = snapshot.droppedPackets,
+        errorCategory = snapshot.lastError?.let(::safeErrorCategory) ?: "NONE",
+      )
+    }
+    return EncoderDiagnosticSample(
+      sessionId = diagnosticSessionId,
+      appVersion = BuildConfig.VERSION_NAME,
+      mode = if (publicTest) "public" else "diagnostic",
+      ingestState = state,
+      videoPackets = ingest.videoPackets,
+      audioPackets = ingest.audioPackets,
+      tcpConnections = ingest.tcpConnections,
+      internetValidated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
+      transport = transport,
+      destinations = outputs,
+      failurePhase = failurePhase,
+      failureCategory = failureCategory,
+    )
+  }
+
+  private fun safeErrorCategory(value: String): String = when (value) {
+    "IOException", "IllegalStateException", "IllegalArgumentException", "SocketTimeoutException",
+    "UnknownHostException", "SocketException", "SSLException", "MediaCodec" -> value
+    "CodecException" -> "MediaCodec"
+    else -> "OTHER"
   }
 }

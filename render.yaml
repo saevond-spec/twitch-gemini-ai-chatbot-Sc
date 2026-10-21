@@ -36,6 +36,10 @@ services:
         value: "your-pollinations-api-key"
       - key: REDIS_URL
         value: "your-upstash-redis-url"
+      # Optional private Android encoder bridge. Copy the same random 32+
+      # character secret into Android's !play bridge setting.
+      - key: ENCODER_BRIDGE_TOKEN
+        sync: false
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Command Names (customizable triggers)

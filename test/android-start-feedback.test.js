@@ -10,12 +10,14 @@ test('Start click always updates visible UI before service launch', () => {
   const launch = ui.indexOf('startForegroundService(', start);
   assert.ok(start >= 0 && feedback > start && launch > feedback);
 });
-test('service stores failure statuses and sends an app-only broadcast', () => {
-  assert.match(service, /getSharedPreferences\(STATUS_PREFS/);
+test('service broadcasts live status without retaining a local diagnostic history', () => {
+  assert.doesNotMatch(service, /getSharedPreferences\(STATUS_PREFS/);
   assert.match(service, /sendBroadcast\(Intent\(ACTION_STATUS/);
   assert.match(service, /setPackage\(packageName\)/);
   assert.match(ui, /registerReceiver\(statusReceiver/);
-  assert.match(ui, /getSharedPreferences\(Ps5LanService.STATUS_PREFS/);
+  assert.match(ui, /getSharedPreferences\(LEGACY_STATUS_PREFS/);
+  assert.match(ui, /edit\(\)\.clear\(\)\.apply\(\)/);
+  assert.doesNotMatch(ui, /getSharedPreferences\(Ps5LanService.STATUS_PREFS/);
 });
 test('emulator smoke test must be present in Android workflow', () => {
   const workflow = readFileSync(new URL('../.github/workflows/android-obs.yml', import.meta.url),'utf8');
