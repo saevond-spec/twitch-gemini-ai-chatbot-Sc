@@ -370,7 +370,8 @@ test('reliable join welcomes use IRC plus Get Chatters fallback', () => {
   assert.match(app, /onArrival: async \(\{ channel, username, source \}\)/);
   assert.match(watcher, /source: 'helix-chatters'/);
   assert.match(watcher, /baselineReady/);
-  assert.match(watcher, /missing_moderator_read_chatters/);
+  assert.match(watcher, /twitch_unauthorized/);
+  assert.match(watcher, /bot_not_channel_moderator/);
   assert.match(watcher, /rejoinSuppressMs/);
 });
 
@@ -381,6 +382,10 @@ test('OAuth callback resumes chatter watcher in place', () => {
 
   assert.match(app, /resumeAfterAuthorization\(\)/);
   assert.match(app, /Bot already running, refreshing OAuth-dependent features in place/);
+  assert.match(app, /joinWelcomeAuthMessage\(watcherStatus/);
+  assert.match(app, /firstPollPromise/);
+  assert.doesNotMatch(app, /bot authorization successful for/);
   assert.match(watcher, /async resumeAfterAuthorization\(\)/);
+  assert.match(watcher, /getStatus\(\)/);
   assert.match(watcher, /baselineReady = false/);
 });
