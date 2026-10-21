@@ -5,6 +5,7 @@ plugins {
 android {
   namespace = "com.saevond.sweatyobs"
   compileSdk = 36
+  buildFeatures { buildConfig = true }
   defaultConfig {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
