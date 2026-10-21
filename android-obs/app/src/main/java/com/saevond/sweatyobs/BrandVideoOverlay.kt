@@ -140,7 +140,7 @@ internal class BrandVideoOverlay(
           messages.forEach { if (liveChatEnabled && !closed.get()) canvas.addLiveChatMessage(it) }
         }
         val morePending = synchronized(chatLock) {
-          pendingChatMessages.isNotEmpty() && overlayCanvas != null && liveChatEnabled && !closed.get()
+          !pendingChatMessages.isEmpty() && overlayCanvas != null && liveChatEnabled && !closed.get()
         }
         if (morePending) scheduleChatDrain()
       }, CHAT_DRAIN_INTERVAL_MS)) {
