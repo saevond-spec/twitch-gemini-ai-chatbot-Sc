@@ -134,6 +134,8 @@ class ReliableRtmpOutput(
         enqueueStartupGopLocked(message)
         lock.notifyAll()
       }
+      // The sender sleeps on an empty aligned queue; wake it for the next live packet.
+      lock.notifyAll()
     }
     if (shouldAbort) {
       publisher?.close()

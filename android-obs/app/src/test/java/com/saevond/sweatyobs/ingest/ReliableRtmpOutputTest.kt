@@ -46,6 +46,36 @@ class ReliableRtmpOutputTest {
     } finally { output.close() }
   }
 
+  @Test fun senderWakesWhenLiveMediaArrivesAfterItsQueueDrained() {
+    val firstBatch = CountDownLatch(3)
+    val nextPacket = CountDownLatch(1)
+    val sent = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() {}
+        override fun publish(media: RtmpMessage) {
+          sent += media
+          if (sent.size <= 3) firstBatch.countDown() else nextPacket.countDown()
+        }
+        override fun close() {}
+      }
+    })
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue(firstBatch.await(2, TimeUnit.SECONDS))
+      Thread.sleep(50) // allow the sender to block on its now-empty live queue
+
+      output.offer(RtmpMessage(8, 25, 1, byteArrayOf(0xaf.toByte(), 1, 1, 2)))
+
+      assertTrue("new media should wake the sender without waiting for another keyframe",
+        nextPacket.await(2, TimeUnit.SECONDS))
+      assertEquals(listOf(9, 8, 9, 8), sent.map { it.type })
+    } finally { output.close() }
+  }
+
   @Test fun manualReconnectWaitsForAnotherCleanKeyframeAndCreatesANewSession() {
     val publishers = CopyOnWriteArrayList<TestPublisher>()
     val retryStarted = CountDownLatch(1)
@@ -265,6 +295,7 @@ class ReliableRtmpOutputTest {
       assertTrue("fake YouTube publisher should enter its injected failure", blockedPublisher.await(2, TimeUnit.SECONDS))
       assertTrue("Twitch should send while YouTube is blocked", pollUntil(2_000) { sent.getValue("twitch").size >= 3 })
       assertTrue("Kick should send while YouTube is blocked", pollUntil(2_000) { sent.getValue("kick").size >= 3 })
+      Thread.sleep(50) // ensure healthy senders are waiting on empty queues before the next batch
 
       fanOut(RtmpMessage(9, 100, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
       fanOut(RtmpMessage(8, 125, 1, byteArrayOf(0xaf.toByte(), 1, 1, 2)))
