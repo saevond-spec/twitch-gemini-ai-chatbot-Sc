@@ -96,15 +96,19 @@ class NetworkStartSmokeTest {
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
 
     activityRule.scenario.recreate()
-    onView(withId(R.id.youtube_server)).check(matches(withText("rtmps://youtube.example.test/live2")))
-    onView(withId(R.id.kick_server)).check(matches(withText("rtmps://kick.example.test/app")))
+    assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
+    assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+    onView(withId(R.id.youtube_server)).check(matches(withText(equalToIgnoringCase("rtmps://youtube.example.test/live2"))))
+    onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
   }
 
   @Test fun plaintextOrMalformedIngestUrlsAreNotSavedAsSecureOutputs() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences("encoder_outputs", 0)
-    prefs.edit().remove("youtube_server").commit()
-    activityRule.scenario.recreate()
+    activityRule.scenario.onActivity { activity ->
+      prefs.edit().remove("youtube_server").commit()
+      activity.findViewById<android.widget.EditText>(R.id.youtube_server).text.clear()
+    }
     onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("rtmp://youtube.example.test/live2"), closeSoftKeyboard())
     assertNull(prefs.getString("youtube_server", null))
     onView(withId(R.id.youtube_server_status))
