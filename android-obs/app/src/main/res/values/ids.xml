@@ -14,12 +14,14 @@
   <item name="youtube_server" type="id"/>
   <item name="youtube_server_status" type="id"/>
   <item name="save_youtube_server" type="id"/>
+  <item name="test_youtube_connection" type="id"/>
   <item name="youtube_stream_key" type="id"/>
   <item name="save_youtube_key" type="id"/>
   <item name="youtube_output_status" type="id"/>
   <item name="kick_server" type="id"/>
   <item name="kick_server_status" type="id"/>
   <item name="save_kick_server" type="id"/>
+  <item name="test_kick_connection" type="id"/>
   <item name="kick_stream_key" type="id"/>
   <item name="save_kick_key" type="id"/>
   <item name="kick_output_status" type="id"/>

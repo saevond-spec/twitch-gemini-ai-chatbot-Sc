@@ -1,13 +1,21 @@
 package com.saevond.sweatyobs.ingest
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.OutputStream
+import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URI
+import java.net.UnknownHostException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import kotlin.concurrent.thread
 
 /** User-provided secure RTMPS endpoint and private platform stream key. */
 data class RtmpDestination(val id: String, val label: String, val serverUrl: String, val key: String) {
@@ -18,6 +26,10 @@ data class RtmpDestination(val id: String, val label: String, val serverUrl: Str
 /** RTMPS publisher shared by Twitch, YouTube, and Kick. */
 class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublisher {
   companion object {
+    const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+    private const val CONNECT_TIMEOUT_MS = 15_000
+    private const val MAX_ADDRESS_CANDIDATES = 8
+
     fun isPublicDestination(address: InetAddress): Boolean =
       !address.isSiteLocalAddress && !address.isLoopbackAddress &&
         !address.isLinkLocalAddress && !address.isAnyLocalAddress && !address.isMulticastAddress
@@ -26,6 +38,67 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       value.length in 8..256 && value.all { it.isLetterOrDigit() || it == '_' || it == '-' }
 
     fun endpointValid(value: String): Boolean = parseEndpoint(value) != null
+
+    /** TLS-only reachability probe: opens and closes a secure socket without a key or media. */
+    fun testTlsEndpoint(serverUrl: String): String {
+      val endpoint = parseEndpoint(serverUrl) ?: return "INVALID_URL"
+      val addresses = try {
+        InetAddress.getAllByName(endpoint.host)
+      } catch (_: UnknownHostException) {
+        return "DNS_FAILED"
+      } catch (_: Exception) {
+        return "DNS_FAILED"
+      }
+      if (addresses.isEmpty()) return "DNS_FAILED"
+      if (addresses.any { !isPublicDestination(it) }) return "BLOCKED_ADDRESS"
+      return try {
+        val tls = tryResolvedAddresses(addresses) { address, remainingMs ->
+          openTlsSocket(endpoint, address, remainingMs)
+        }
+        tls.close()
+        "TLS_OK"
+      } catch (error: Exception) {
+        var root: Throwable = error
+        while (root.cause != null && root.cause !== root) root = root.cause!!
+        when (root) {
+          is SocketTimeoutException -> "CONNECT_TIMEOUT"
+          is SSLException -> "TLS_FAILED"
+          is ConnectException -> "CONNECTION_REFUSED"
+          else -> "NETWORK_FAILED"
+        }
+      }
+    }
+
+    /** RTMP ping request user-control event 6; respond with event 7 and its timestamp. */
+    internal fun pingResponsePayload(userControlPayload: ByteArray): ByteArray? {
+      if (userControlPayload.size < 6 || (userControlPayload[0].toInt() and 255) != 0 ||
+        (userControlPayload[1].toInt() and 255) != 6) return null
+      return byteArrayOf(0, 7) + userControlPayload.copyOfRange(2, 6)
+    }
+
+    /** Attempt resolved addresses within a bounded total timeout, rather than pinning to DNS order. */
+    internal fun <T> tryResolvedAddresses(
+      addresses: Array<InetAddress>,
+      timeoutMs: Int = CONNECT_TIMEOUT_MS,
+      nowNanos: () -> Long = System::nanoTime,
+      connect: (InetAddress, Int) -> T
+    ): T {
+      require(timeoutMs in 1..60_000)
+      val candidates = addresses.take(MAX_ADDRESS_CANDIDATES)
+      require(candidates.isNotEmpty()) { "No streaming server addresses found" }
+      val deadline = nowNanos() + timeoutMs * 1_000_000L
+      var lastFailure: Exception? = null
+      for (address in candidates) {
+        val remainingMs = ((deadline - nowNanos()) / 1_000_000L).toInt()
+        if (remainingMs <= 0) break
+        try {
+          return connect(address, remainingMs)
+        } catch (error: Exception) {
+          lastFailure = error
+        }
+      }
+      throw IOException("Could not connect to the streaming server", lastFailure)
+    }
 
     private fun parseEndpoint(value: String): Endpoint? {
       return try {
@@ -42,6 +115,30 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     }
 
     private data class Endpoint(val host: String, val port: Int, val path: String, val tcUrl: String)
+
+    private fun openTlsSocket(endpoint: Endpoint, address: InetAddress, remainingMs: Int): SSLSocket {
+      val deadline = System.nanoTime() + remainingMs * 1_000_000L
+      val plain = Socket()
+      var tls: SSLSocket? = null
+      try {
+        plain.tcpNoDelay = true
+        plain.keepAlive = true
+        plain.connect(InetSocketAddress(address, endpoint.port), minOf(5_000, remainingMs))
+        val tlsRemaining = ((deadline - System.nanoTime()) / 1_000_000L).toInt()
+        if (tlsRemaining <= 0) throw SocketTimeoutException("RTMPS connect budget exhausted")
+        tls = (SSLSocketFactory.getDefault() as SSLSocketFactory)
+          .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
+        tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+        tls.soTimeout = minOf(8_000, tlsRemaining)
+        tls.startHandshake()
+        tls.soTimeout = 12_000
+        return tls
+      } catch (error: Exception) {
+        runCatching { tls?.close() }
+        runCatching { plain.close() }
+        throw error
+      }
+    }
   }
 
   private val endpoint = parseEndpoint(serverUrl) ?: throw IllegalArgumentException("Use the RTMPS server URL from the streaming platform")
@@ -49,26 +146,29 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
   @Volatile private var output: OutputStream? = null
   @Volatile private var initialized = false
   @Volatile private var stopped = false
+  @Volatile private var controlReaderThread: Thread? = null
+  private val writeLock = Any()
+  @Volatile private var acknowledgementWindow = 0L
+  @Volatile private var lastAcknowledgementAt = 0L
   private var lastTimestamp = 0L
 
   override fun connect() {
     require(keyValid(key)) { "Invalid stream key format" }
     check(!stopped && !initialized) { "Publisher already used" }
-    val destinations = InetAddress.getAllByName(endpoint.host)
-    check(destinations.isNotEmpty() && destinations.all(::isPublicDestination)) {
+    val resolved = InetAddress.getAllByName(endpoint.host)
+    check(resolved.isNotEmpty() && resolved.all(::isPublicDestination)) {
       "Streaming server DNS points to a private address"
     }
-    val plain = Socket()
+    val tls = tryResolvedAddresses(resolved) { address, remainingMs ->
+      check(!stopped) { "Publisher stopped while connecting" }
+      openTlsSocket(endpoint, address, remainingMs)
+    }
+    socket = tls
+    if (stopped) {
+      close()
+      error("Publisher stopped while connecting")
+    }
     try {
-      plain.tcpNoDelay = true
-      plain.keepAlive = true
-      plain.connect(InetSocketAddress(destinations.first(), endpoint.port), 10000)
-      val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory)
-        .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
-      socket = tls
-      tls.soTimeout = 12000
-      tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
-      tls.startHandshake()
       val input = tls.inputStream
       val out = tls.outputStream
       val c1 = ByteArray(1536)
@@ -81,7 +181,8 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       input.readRequired(1536)
       out.write(s1)
       out.flush()
-      val reader = RtmpChunkReader(input)
+      val countedInput = CountingInputStream(input)
+      val reader = RtmpChunkReader(countedInput)
       val app = endpoint.path.removePrefix("/")
       val connect = amfString("connect") + amfNumber(1.0) +
         amfObject(
@@ -96,15 +197,16 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
           "videoFunction" to amfNumber(1.0)
         )
       rtmpCommand(out, 0, connect)
-      awaitResult(reader, 1.0)
+      awaitResult(reader, 1.0, out, countedInput)
       rtmpCommand(out, 0, amfString("createStream") + amfNumber(2.0) + amfNull())
-      awaitResult(reader, 2.0)
+      awaitResult(reader, 2.0, out, countedInput)
       rtmpCommand(out, 1, amfString("publish") + amfNumber(0.0) + amfNull() +
         amfString(key) + amfString("live"))
       var accepted = false
       var attempts = 0
       while (!accepted && attempts++ < 60) {
         val message = reader.nextMessage()
+        processServerControl(message, out, countedInput)
         if (message.type == 20) {
           val amf = RtmpAmf0Reader(message.data)
           val command = amf.string()
@@ -121,18 +223,24 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
         }
       }
       check(accepted) { "No publish acknowledgement from streaming server" }
+      check(!stopped) { "Publisher stopped while connecting" }
+      // The control reader must stay blocked during quiet periods; socket timeouts
+      // are only for connection setup and RTMP negotiation.
+      tls.soTimeout = 0
       output = out
       initialized = true
+      startControlReader(reader, out, countedInput)
     } catch (error: Exception) {
-      runCatching { plain.close() }
       close()
       throw error
     }
   }
 
-  private fun awaitResult(reader: RtmpChunkReader, id: Double) {
+  private fun awaitResult(reader: RtmpChunkReader, id: Double, out: OutputStream,
+                          countedInput: CountingInputStream) {
     repeat(80) {
       val message = reader.nextMessage()
+      processServerControl(message, out, countedInput)
       if (message.type == 20) {
         val amf = RtmpAmf0Reader(message.data)
         val name = amf.string()
@@ -146,13 +254,45 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     error("Timed out waiting for RTMP reply")
   }
 
-  @Synchronized override fun publish(media: RtmpMessage) {
+  private fun startControlReader(reader: RtmpChunkReader, out: OutputStream, countedInput: CountingInputStream) {
+    controlReaderThread = thread(name = "SweatyOBS-RTMPS-control", isDaemon = true) {
+      try {
+        while (!stopped && initialized) processServerControl(reader.nextMessage(), out, countedInput)
+      } catch (_: Exception) {
+        // The next media write observes the closed socket and enters the output retry path.
+        if (!stopped) runCatching { socket?.close() }
+      }
+    }
+  }
+
+  private fun processServerControl(message: RtmpMessage, out: OutputStream, countedInput: CountingInputStream) {
+    if (message.type == 5 && message.data.size >= 4) {
+      acknowledgementWindow = ByteBuffer.wrap(message.data, 0, 4).order(ByteOrder.BIG_ENDIAN)
+        .int.toLong() and 0xffffffffL
+    }
+    if (message.type == 4) {
+      val response = pingResponsePayload(message.data)
+      if (response != null) synchronized(writeLock) { rtmpControl(out, 4, response) }
+    }
+    val window = acknowledgementWindow
+    val bytesRead = countedInput.bytesRead
+    if (window > 0 && bytesRead - lastAcknowledgementAt >= window) {
+      val payload = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(bytesRead.toInt()).array()
+      synchronized(writeLock) { rtmpControl(out, 3, payload) }
+      lastAcknowledgementAt = bytesRead
+    }
+  }
+
+  override fun publish(media: RtmpMessage) {
     check(initialized && !stopped) { "RTMPS publisher is not ready" }
     require(media.type == 8 || media.type == 9)
     require(media.data.size in 3..2_097_152)
     val out = output ?: error("Output unavailable")
     lastTimestamp = maxOf(lastTimestamp, media.timestamp)
-    sendRtmpMedia(out, media.copy(timestamp = lastTimestamp, streamId = 1))
+    synchronized(writeLock) {
+      check(initialized && !stopped) { "RTMPS publisher is not ready" }
+      sendRtmpMedia(out, media.copy(timestamp = lastTimestamp, streamId = 1))
+    }
   }
 
   override fun close() {
@@ -161,6 +301,7 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     output = null
     runCatching { socket?.close() }
     socket = null
+    controlReaderThread = null
   }
 }
 

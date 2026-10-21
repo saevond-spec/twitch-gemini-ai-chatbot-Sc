@@ -7,6 +7,7 @@ import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.saevond.sweatyobs.ingest.RtmpsPublisher
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -55,7 +56,7 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.brand_header)).check(matches(withText("SAEVOND")))
   }
 
-  @Test fun youtubeAndKickKeysSaveSecurelyWithoutAnRtmpsServerUrl() {
+  @Test fun youtubeAndKickKeysSaveSecurelyAndKickUsesTheDocumentedDefaultServer() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val youtubeKey = "sandbox-youtube-key-123"
     val kickKey = "sandbox-kick-key-456"
@@ -63,6 +64,7 @@ class NetworkStartSmokeTest {
     outputPrefs.edit().remove("youtube_server").remove("kick_server")
       .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
+    assertEquals(RtmpsPublisher.KICK_RTMPS_URL, outputPrefs.getString("kick_server", null))
 
     onView(withId(R.id.youtube_stream_key)).perform(scrollTo(), replaceText(youtubeKey), closeSoftKeyboard())
     onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
@@ -89,7 +91,7 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
-      .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
+      .check(matches(withText(containsString("RTMPS server URL saved"))))
 
     onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("RTMPS://youtube.example.test/live2"), closeSoftKeyboard())
     assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
@@ -107,6 +109,20 @@ class NetworkStartSmokeTest {
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
     onView(withId(R.id.youtube_server)).check(matches(withText(equalToIgnoringCase("rtmps://youtube.example.test/live2"))))
     onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
+  }
+
+  @Test fun platformTlsChecksAreClearlyNonPublishingAndRequireAValidUrl() {
+    activityRule.scenario.onActivity { activity ->
+      activity.getSharedPreferences("encoder_outputs", 0).edit().remove("youtube_server").commit()
+      activity.findViewById<android.widget.EditText>(R.id.youtube_server).text.clear()
+    }
+    onView(withId(R.id.test_youtube_connection)).perform(scrollTo())
+      .check(matches(withText(containsString("no stream"))))
+      .perform(click())
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("No key or media was sent"))))
+    onView(withId(R.id.test_kick_connection)).perform(scrollTo())
+      .check(matches(withText(containsString("no stream"))))
   }
 
   @Test fun plaintextOrMalformedIngestUrlsAreNotSavedAsSecureOutputs() {
