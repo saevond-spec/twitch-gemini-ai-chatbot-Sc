@@ -866,8 +866,8 @@ class ReliableRtmpOutputTest {
     val allowCloseToFinish = CountDownLatch(1)
     val activeCloses = AtomicInteger()
     val maxActiveCloses = AtomicInteger()
-    val outputs = (0 until outputCount).map { index ->
-      ReliableRtmpOutput(sandboxDestination("youtube$index"), publisherFactory = {
+    val outputs = (0 until outputCount).map {
+      ReliableRtmpOutput(destination(), publisherFactory = {
         object : MediaPublisher {
           override fun connect() { connected.countDown() }
           override fun publish(media: RtmpMessage) {}
