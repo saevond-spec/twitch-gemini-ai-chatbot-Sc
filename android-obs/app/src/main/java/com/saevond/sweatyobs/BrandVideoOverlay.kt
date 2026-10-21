@@ -24,6 +24,21 @@ import java.nio.FloatBuffer
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Shared overlay encode profiles; all selected destinations receive this same video stream. */
+internal enum class OverlayEncodingProfile(
+  val maxWidth: Int,
+  val maxHeight: Int,
+  val videoBitrateMbps: Double
+) {
+  STABLE_720P(1280, 720, 4.5),
+  HIGH_1080P(1920, 1080, 8.0);
+
+  companion object {
+    fun fromPreference(value: String?): OverlayEncodingProfile =
+      if (value == "high_1080") HIGH_1080P else STABLE_720P
+  }
+}
+
 /**
  * Optional live H.264 compositor. It decodes the incoming AVC feed, renders a
  * full-screen transparent @saevond esports HUD with GLES, and re-encodes one
@@ -35,7 +50,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class BrandVideoOverlay(
   private val onOutput: (RtmpMessage) -> Unit,
   private val onStatus: (String) -> Unit,
-  private val onFailure: (String) -> Unit
+  private val onFailure: (String) -> Unit,
+  private val encodingProfile: OverlayEncodingProfile = OverlayEncodingProfile.STABLE_720P
 ) : Closeable {
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
@@ -150,15 +166,11 @@ internal class BrandVideoOverlay(
     releaseCodecs()
     val parsed = AvcFlv.parseConfig(message)
     val decoderInfo = findDecoder(parsed.width, parsed.height)
-    val profile = chooseEncoderProfile(parsed.width, parsed.height)
+    val profile = chooseEncoderProfile(parsed.width, parsed.height, encodingProfile)
     outputWidth = profile.first
     outputHeight = profile.second
     outputFps = profile.third
-    val outputBitrate = when {
-      outputWidth >= 1920 && outputHeight >= 1080 -> 8_000_000
-      outputWidth >= 1280 && outputHeight >= 720 -> 6_000_000
-      else -> 4_000_000
-    }
+    val outputBitrate = bitrateFor(outputWidth, outputHeight, encodingProfile)
 
     val encoderInfo = findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
     val videoEncoder = MediaCodec.createByCodecName(encoderInfo.name)
@@ -317,25 +329,26 @@ internal class BrandVideoOverlay(
           .getOrDefault(false)
     } ?: throw IllegalStateException("This phone has no hardware H.264 decoder for ${width}×${height}")
 
-  private fun chooseEncoderProfile(sourceWidth: Int, sourceHeight: Int): Triple<Int, Int, Int> {
-    val scale = minOf(1.0, 1920.0 / sourceWidth, 1080.0 / sourceHeight)
-    var width = maxOf(16, (sourceWidth * scale).toInt() and -2)
-    var height = maxOf(16, (sourceHeight * scale).toInt() and -2)
-    val scale720 = minOf(1.0, 1280.0 / sourceWidth, 720.0 / sourceHeight)
-    val width720 = maxOf(16, (sourceWidth * scale720).toInt() and -2)
-    val height720 = maxOf(16, (sourceHeight * scale720).toInt() and -2)
-    val candidates = listOf(width to height, width720 to height720).distinct()
+  private fun chooseEncoderProfile(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    requested: OverlayEncodingProfile
+  ): Triple<Int, Int, Int> {
+    fun fit(maxWidth: Int, maxHeight: Int): Pair<Int, Int> {
+      val scale = minOf(1.0, maxWidth.toDouble() / sourceWidth, maxHeight.toDouble() / sourceHeight)
+      return maxOf(16, (sourceWidth * scale).toInt() and -2) to
+        maxOf(16, (sourceHeight * scale).toInt() and -2)
+    }
+    val targetSizes = if (requested == OverlayEncodingProfile.HIGH_1080P)
+      listOf(1920 to 1080, 1280 to 720, 854 to 480)
+    else listOf(1280 to 720, 854 to 480)
+    val candidates = targetSizes.map { fit(it.first, it.second) }.distinct()
     val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
       info.isEncoder && !info.isSoftwareOnly && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
     }
     for ((w, h) in candidates) {
-      val bitrate = when {
-        w >= 1920 && h >= 1080 -> 8_000_000
-        w >= 1280 && h >= 720 -> 6_000_000
-        else -> 4_000_000
-      }
+      val bitrate = bitrateFor(w, h, requested)
       for (fps in listOf(60, 30)) {
-        if (w > width || h > height) continue
         if (codecs.any { info -> runCatching {
             val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
             caps.videoCapabilities.areSizeAndRateSupported(w, h, fps.toDouble()) &&
@@ -345,6 +358,13 @@ internal class BrandVideoOverlay(
       }
     }
     throw IllegalStateException("This phone has no supported H.264 hardware encoder profile at or below 1080p")
+  }
+
+  private fun bitrateFor(width: Int, height: Int, requested: OverlayEncodingProfile): Int = when {
+    width >= 1920 && height >= 1080 -> 8_000_000
+    width >= 1280 && height >= 720 && requested == OverlayEncodingProfile.HIGH_1080P -> 6_000_000
+    width >= 1280 && height >= 720 -> 4_500_000
+    else -> 3_000_000
   }
 
   private fun findEncoder(width: Int, height: Int, fps: Int, bitrate: Int): MediaCodecInfo =

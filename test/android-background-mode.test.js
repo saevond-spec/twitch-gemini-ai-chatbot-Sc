@@ -30,12 +30,13 @@ test('Android runtime has no screen capture or recorder code paths', () => {
 });
 
 test('Multistream UI exposes reconnect, the simulated HUD, and honest video limits', () => {
-  assert.match(source, /START MULTISTREAM/);
-  assert.match(source, /independent retry loop/);
+  assert.match(source, /GO LIVE TO SELECTED PLATFORMS/);
+  assert.match(source, /destination reconnects independently/);
   assert.match(source, /ACTION_RECONNECT_OUTPUTS/);
   assert.match(source, /Viewer playback is unverified/);
-  assert.match(source, /simulated stats, chat, and alerts/);
-  assert.match(source, /re-encodes up to 1080p \(not 4K\)/);
+  assert.match(source, /Stats, chat, and alerts are simulated/);
+  assert.match(source, /not 4K/);
+  assert.match(source, /Stable multi-stream/);
   assert.match(source, /brand_overlay/);
   assert.match(source, /RtmpDestination\("youtube"/);
   assert.match(source, /RtmpDestination\("kick"/);

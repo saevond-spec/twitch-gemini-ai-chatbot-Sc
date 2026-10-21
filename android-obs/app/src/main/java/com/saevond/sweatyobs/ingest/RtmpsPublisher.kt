@@ -1,5 +1,6 @@
 package com.saevond.sweatyobs.ingest
 
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -184,21 +185,37 @@ fun sendRtmpMedia(output: OutputStream, media: RtmpMessage) {
   val stamp = media.timestamp.coerceIn(0, 0xffffffffL)
   val extended = stamp >= 0xffffff
   val field = if (extended) 0xffffff else stamp.toInt()
-  output.write(csid)
-  output.write(byteArrayOf((field shr 16).toByte(), (field shr 8).toByte(), field.toByte()))
   val size = media.data.size
-  output.write(byteArrayOf((size shr 16).toByte(), (size shr 8).toByte(), size.toByte()))
-  output.write(media.type)
-  output.write(byteArrayOf(1, 0, 0, 0))
-  if (extended) output.write(byteArrayOf((stamp shr 24).toByte(), (stamp shr 16).toByte(), (stamp shr 8).toByte(), stamp.toByte()))
+  val chunksAfterFirst = (size - 1 + 127) / 128
+  val packet = ByteArrayOutputStream(size + 12 + chunksAfterFirst * (if (extended) 5 else 1) + if (extended) 4 else 0)
+  fun int24(value: Int) {
+    packet.write(value shr 16)
+    packet.write(value shr 8)
+    packet.write(value)
+  }
+  fun int32(value: Long) {
+    packet.write((value shr 24).toInt())
+    packet.write((value shr 16).toInt())
+    packet.write((value shr 8).toInt())
+    packet.write(value.toInt())
+  }
+  packet.write(csid)
+  int24(field)
+  int24(size)
+  packet.write(media.type)
+  packet.write(1); packet.write(0); packet.write(0); packet.write(0)
+  if (extended) int32(stamp)
   var offset = 0
   while (offset < size) {
     if (offset > 0) {
-      output.write(0xc0 or csid)
-      if (extended) output.write(byteArrayOf((stamp shr 24).toByte(), (stamp shr 16).toByte(), (stamp shr 8).toByte(), stamp.toByte()))
+      packet.write(0xc0 or csid)
+      if (extended) int32(stamp)
     }
     val amount = minOf(128, size - offset)
-    output.write(media.data, offset, amount)
+    packet.write(media.data, offset, amount)
     offset += amount
   }
+  // Preserve RTMP's default 128-byte chunk framing while coalescing this whole
+  // media message into one TLS socket write instead of hundreds of tiny writes.
+  packet.writeTo(output)
 }

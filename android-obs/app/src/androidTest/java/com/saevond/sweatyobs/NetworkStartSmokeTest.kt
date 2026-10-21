@@ -19,11 +19,21 @@ class NetworkStartSmokeTest {
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
   @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val prefs = context.getSharedPreferences("encoder_outputs", 0)
+    prefs.edit().putBoolean("twitch_enabled", true).putBoolean("youtube_enabled", false)
+      .putBoolean("kick_enabled", false).putString("overlay_profile", "stable_720").commit()
+    activityRule.scenario.recreate()
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
-      .check(matches(allOf(
-        withText(containsString("16.3 Mbps")),
-        withText(containsString("48.8 Mbps"))
-      )))
+      .check(matches(withText(containsString("9.3 Mbps sustained upload in total"))))
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+    onView(withText("Also stream to YouTube")).perform(scrollTo(), click())
+    onView(withText("Also stream to Kick")).perform(scrollTo(), click())
+    onView(withId(R.id.output_upload_budget)).check(matches(withText(containsString("27.8 Mbps sustained upload in total"))))
+    activityRule.scenario.onActivity { activity ->
+      activity.findViewById<android.widget.Spinner>(R.id.overlay_quality).setSelection(1)
+    }
+    onView(withId(R.id.output_upload_budget)).check(matches(withText(containsString("48.8 Mbps sustained upload in total"))))
   }
 
   @Test fun youtubeAndKickStreamKeyDashboardLinksAreAvailable() {
@@ -36,18 +46,24 @@ class NetworkStartSmokeTest {
     val youtubeKey = "sandbox-youtube-key-123"
     val kickKey = "sandbox-kick-key-456"
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
-    outputPrefs.edit().remove("youtube_server").remove("kick_server").commit()
+    outputPrefs.edit().remove("youtube_server").remove("kick_server")
+      .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
 
     onView(withId(R.id.youtube_stream_key)).perform(scrollTo(), replaceText(youtubeKey), closeSoftKeyboard())
     onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
+    onView(withText("Also stream to YouTube")).check(matches(isChecked()))
+    assertTrue(outputPrefs.getBoolean("youtube_enabled", false))
 
     onView(withId(R.id.kick_stream_key)).perform(scrollTo(), replaceText(kickKey), closeSoftKeyboard())
     onView(withId(R.id.save_kick_key)).perform(scrollTo(), click())
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
+    onView(withText("Also stream to Kick")).check(matches(isChecked()))
+    assertTrue(outputPrefs.getBoolean("kick_enabled", false))
+    onView(withId(R.id.connection_status)).check(matches(withText(containsString("No stream has started"))))
 
     val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
     assertNotEquals(youtubeKey, encryptedPrefs.getString("youtube_key", null))
@@ -73,6 +89,15 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("Enter the PS5"))))
+  }
+
+  @Test fun publicStreamAndDiagnosticActionsAreClearlyDifferent() {
+    onView(withId(R.id.start_multistream)).perform(scrollTo())
+      .check(matches(withText("GO LIVE TO SELECTED PLATFORMS")))
+    onView(withId(R.id.start_network_test)).perform(scrollTo())
+      .check(matches(withText(containsString("no public stream or overlay"))))
+    onView(withId(R.id.output_readiness)).perform(scrollTo())
+      .check(matches(withText(containsString("Next public stream"))))
   }
 
   @Test fun volumeSlidersAndMusicMuteActuallyUpdateLiveMixer() {
