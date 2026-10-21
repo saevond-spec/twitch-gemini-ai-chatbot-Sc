@@ -2,9 +2,10 @@ package com.saevond.sweatyobs.ingest
 
 import java.io.IOException
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.Semaphore
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import kotlin.math.max
@@ -14,10 +15,8 @@ interface MediaPublisher : AutoCloseable {
   fun publish(media: RtmpMessage)
 
   /**
-   * Idempotently signal cancellation of in-flight connect/publish work.
-   * Implementations must keep this nonblocking because callers include the LAN ingest path.
-   * Publishers without interruptible I/O may leave the default no-op; final close still runs
-   * on the bounded cleanup pool.
+   * Optional, idempotent cancellation hook invoked on the destination's cleanup lane
+   * immediately before close. It is never called by the PS5 ingest callback.
    */
   fun requestAbort() {}
 }
@@ -78,12 +77,22 @@ class ReliableRtmpOutput(
     const val DEFAULT_QUEUE_AGE_MS = 2_000L
     val DEFAULT_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
 
-    /** Bounded cleanup pool: slow TLS closes cannot create unbounded threads or retain retries. */
-    private val CLOSE_EXECUTOR = ThreadPoolExecutor(
-      3, 3, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(6),
-      { task -> Thread(task, "SweatyOBS-publisher-close").apply { isDaemon = true } },
-      ThreadPoolExecutor.AbortPolicy()
-    )
+    /**
+     * One permit and one cleanup lane per supported platform. A session keeps its permit until
+     * its close completes, so only one publisher per destination can exist at a time. Cleanup is
+     * coalesced per session; each lane therefore needs at most one pending close and cannot be
+     * filled by another destination's stalled socket.
+     */
+    private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick")
+      .associateWith { Semaphore(1, true) }
+
+    private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick").associateWith { id ->
+      ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1),
+        { task -> Thread(task, "SweatyOBS-$id-publisher-close").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy()
+      )
+    }
 
     fun retryDelayMs(failures: Int): Long {
       val n = failures.coerceAtLeast(1)
@@ -103,12 +112,17 @@ class ReliableRtmpOutput(
 
   private data class Pending(val message: RtmpMessage, val enqueuedAtMs: Long)
   private data class StartGeneration(val media: Long, val connection: Long)
+  private class PublisherSession(val publisher: MediaPublisher, val lease: Semaphore) {
+    private val cleanupScheduled = AtomicBoolean(false)
+    fun markCleanupScheduled(): Boolean = cleanupScheduled.compareAndSet(false, true)
+  }
+
   private val lock = Object()
+  private val destinationLease = DESTINATION_LEASES[destination.id]
+    ?: throw IllegalArgumentException("Unsupported RTMP destination: ${destination.id}")
+  private val closeExecutor = CLOSE_EXECUTORS[destination.id]
+    ?: throw IllegalArgumentException("Unsupported RTMP destination: ${destination.id}")
   private val queue = ArrayDeque<Pending>()
-  /** Prevent repeated UI/source resets from queuing concurrent closes for one session. */
-  private val closingPublishers = java.util.Collections.newSetFromMap(
-    java.util.IdentityHashMap<MediaPublisher, Boolean>()
-  )
   private var queueBytes = 0
   private var avcConfig: RtmpMessage? = null
   private var aacConfig: RtmpMessage? = null
@@ -118,7 +132,9 @@ class ReliableRtmpOutput(
   /** Changes when the current destination connection must be abandoned. */
   private var connectionGeneration = 0L
   private var running = false
-  @Volatile private var publisher: MediaPublisher? = null
+  /** close() is terminal; a stale worker must never be restarted alongside a new one. */
+  private var closed = false
+  @Volatile private var publisher: PublisherSession? = null
   @Volatile private var worker: Thread? = null
   @Volatile private var state = "STOPPED"
   @Volatile private var packetsSent = 0L
@@ -138,7 +154,7 @@ class ReliableRtmpOutput(
 
   fun start() {
     synchronized(lock) {
-      if (running) return
+      if (running || closed) return
       running = true
       state = "WAITING FOR KEYFRAME"
       worker = thread(name = "SweatyOBS-${destination.id}-output") { runWorker() }
@@ -150,7 +166,7 @@ class ReliableRtmpOutput(
   fun offer(message: RtmpMessage) {
     if (message.type !in listOf(8, 9) || message.data.size !in 3..2_097_152) return
     var queueReset = false
-    var publisherToAbort: MediaPublisher? = null
+    var publisherToAbort: PublisherSession? = null
     synchronized(lock) {
       if (!running) return
       if (isAvcConfig(message)) avcConfig = copyMessage(message)
@@ -192,7 +208,7 @@ class ReliableRtmpOutput(
    * This prevents a keyframe from a previous source session being sent after reconnect.
    */
   fun resetForSourceSession() {
-    var publisherToAbort: MediaPublisher? = null
+    var publisherToAbort: PublisherSession? = null
     synchronized(lock) {
       if (!running) return
       mediaGeneration++
@@ -216,7 +232,7 @@ class ReliableRtmpOutput(
 
   /** Force a fresh RTMPS session; the sender waits for a clean AVC keyframe. */
   fun reconnectNow() {
-    var publisherToAbort: MediaPublisher? = null
+    var publisherToAbort: PublisherSession? = null
     synchronized(lock) {
       if (!running) return
       mediaGeneration++
@@ -239,8 +255,10 @@ class ReliableRtmpOutput(
   }
 
   override fun close() {
-    var publisherToAbort: MediaPublisher? = null
-    synchronized(lock) {
+    var publisherToAbort: PublisherSession? = null
+    val workerToJoin = synchronized(lock) {
+      if (closed) return
+      closed = true
       running = false
       mediaGeneration++
       connectionGeneration++
@@ -251,9 +269,10 @@ class ReliableRtmpOutput(
       state = "STOPPED"
       publisherToAbort = publisher
       lock.notifyAll()
+      worker
     }
     abortPublisherAsync(publisherToAbort)
-    worker?.takeIf { it !== Thread.currentThread() }?.let { runCatching { it.join(250) } }
+    workerToJoin?.takeIf { it !== Thread.currentThread() }?.let { runCatching { it.join(250) } }
     publisher = null
     worker = null
     notifySnapshot()
@@ -263,7 +282,8 @@ class ReliableRtmpOutput(
     var failures = 0
     var everConnected = false
     while (isRunning()) {
-      var active: MediaPublisher? = null
+      var active: PublisherSession? = null
+      var leaseAcquired = false
       var activeMediaGeneration = -1L
       var activeConnectionGeneration = -1L
       try {
@@ -271,11 +291,20 @@ class ReliableRtmpOutput(
         activeMediaGeneration = startGeneration.media
         activeConnectionGeneration = startGeneration.connection
         notifySnapshot()
+
+        if (!acquireDestinationLease(activeConnectionGeneration)) {
+          if (!isRunning() || Thread.currentThread().isInterrupted) break
+          continue
+        }
+        leaseAcquired = true
+        if (!isConnectionCurrent(activeConnectionGeneration)) continue
+
         val candidate = publisherFactory(destination)
-        active = candidate
+        active = PublisherSession(candidate, destinationLease)
+        leaseAcquired = false // the session now owns the destination permit
         val startIsCurrent = synchronized(lock) {
           if (running && connectionGeneration == activeConnectionGeneration) {
-            publisher = candidate
+            publisher = active
             true
           } else false
         }
@@ -307,7 +336,9 @@ class ReliableRtmpOutput(
             throw IOException("Output buffer reset")
           }
           val base = sessionBaseTimestamp ?: pending.message.timestamp.also { sessionBaseTimestamp = it }
-          active.publish(pending.message.copy(timestamp = (pending.message.timestamp - base).coerceAtLeast(0L)))
+          active.publisher.publish(
+            pending.message.copy(timestamp = (pending.message.timestamp - base).coerceAtLeast(0L))
+          )
           recordSent(pending.message)
         }
       } catch (error: Exception) {
@@ -339,12 +370,32 @@ class ReliableRtmpOutput(
           }
         } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       } finally {
-        abortPublisherAsync(active, waitForCapacity = true)
-        if (publisher === active) publisher = null
+        if (active != null) {
+          abortPublisherAsync(active)
+          synchronized(lock) { if (publisher === active) publisher = null }
+        }
+        if (leaseAcquired) destinationLease.release()
       }
     }
     synchronized(lock) { if (!running) state = "STOPPED" }
     notifySnapshot()
+  }
+
+  /** Wait for the prior session on this destination to finish closing without blocking ingest. */
+  private fun acquireDestinationLease(expectedConnectionGeneration: Long): Boolean {
+    while (isConnectionCurrent(expectedConnectionGeneration)) {
+      try {
+        if (destinationLease.tryAcquire(100, TimeUnit.MILLISECONDS)) {
+          if (isConnectionCurrent(expectedConnectionGeneration)) return true
+          destinationLease.release()
+          return false
+        }
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return false
+      }
+    }
+    return false
   }
 
   private fun awaitFreshStartAndMarkConnecting(): StartGeneration? = synchronized(lock) {
@@ -466,47 +517,21 @@ class ReliableRtmpOutput(
   }
 
   /**
-   * Socket close can block in the platform TLS provider. Keep it away from the LAN ingest
-   * callback, coalesce repeated aborts, and bound cleanup threads and queued publishers.
-   * Only the output worker may wait for capacity; ingest, UI, and service teardown stay quick.
+   * Retire one publisher on its destination-specific lane. Cancellation and close can block
+   * inside platform socket code, so neither is run by the PS5 ingest callback or another output.
+   * The session's one-shot flag coalesces a reconnect request with the worker's finalizer.
    */
-  private fun abortPublisherAsync(candidate: MediaPublisher?, waitForCapacity: Boolean = false) {
-    if (candidate == null) return
-    // Cancel socket I/O before queuing teardown. If the bounded pool is saturated, this wakes
-    // connect/publish so the output worker reaches its capacity-waiting finalizer instead of
-    // leaving the only abort request stranded behind a blocked network operation.
-    runCatching { candidate.requestAbort() }
-    val closeTask = Runnable {
+  private fun abortPublisherAsync(session: PublisherSession?) {
+    if (session == null || !session.markCleanupScheduled()) return
+    closeExecutor.execute(Runnable {
       try {
-        runCatching { candidate.close() }
+        runCatching { session.publisher.requestAbort() }
+        runCatching { session.publisher.close() }
       } finally {
-        synchronized(lock) { closingPublishers.remove(candidate) }
+        synchronized(lock) { if (publisher === session) publisher = null }
+        session.lease.release()
       }
-    }
-    var waitForQueueCapacity = false
-    // Keep reservation and nonblocking submission under one lock. If submission is
-    // rejected, the output worker's finally block can then safely retry the same close.
-    synchronized(lock) {
-      if (!closingPublishers.add(candidate)) return
-      try {
-        CLOSE_EXECUTOR.execute(closeTask)
-        return
-      } catch (_: RejectedExecutionException) {
-        if (!waitForCapacity) {
-          closingPublishers.remove(candidate)
-          return
-        }
-        waitForQueueCapacity = true
-      }
-    }
-    if (waitForQueueCapacity) {
-      try {
-        CLOSE_EXECUTOR.queue.put(closeTask)
-      } catch (_: InterruptedException) {
-        Thread.currentThread().interrupt()
-        synchronized(lock) { closingPublishers.remove(candidate) }
-      }
-    }
+    })
   }
 
   private fun notifySnapshot() = runCatching { onSnapshot(snapshot()) }

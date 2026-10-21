@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -20,7 +21,6 @@ class ReliableRtmpOutputTest {
 
   private fun sandboxDestination(id: String) = RtmpDestination(
     id, id.replaceFirstChar { it.uppercase() }, "rtmps://$id.example.test/app", "sandbox-key-12345")
-
   @Test fun outputHealthDistinguishesWaitingConnectingRetryingAndQueueQuality() {
     fun snapshot(state: String, queuedMs: Long = 0L) = OutputSnapshot(
       "youtube", "YouTube", state, 0, queuedMs, 0, 0, 0, 0, null)
@@ -36,7 +36,6 @@ class ReliableRtmpOutputTest {
     assertEquals("Fair", snapshot("LIVE", 899).health)
     assertEquals("Poor", snapshot("LIVE", 900).health)
   }
-
   @Test fun outputWaitsForBothCodecHeadersAndAKeyframeThenSendsARebasedStart() {
     val connected = CountDownLatch(1)
     val firstPackets = CountDownLatch(3)
@@ -61,7 +60,6 @@ class ReliableRtmpOutputTest {
       assertEquals(listOf(0L, 0L, 0L), sent.take(3).map { it.timestamp })
     } finally { output.close() }
   }
-
   @Test fun senderWakesWhenLiveMediaArrivesAfterItsQueueDrained() {
     val firstBatch = CountDownLatch(3)
     val nextPacket = CountDownLatch(1)
@@ -91,7 +89,6 @@ class ReliableRtmpOutputTest {
       assertEquals(listOf(9, 8, 9, 8), sent.map { it.type })
     } finally { output.close() }
   }
-
   @Test fun queueOverflowDoesNotCancelAnInFlightDestinationConnect() {
     val connectEntered = CountDownLatch(1)
     val connectReturned = CountDownLatch(1)
@@ -154,7 +151,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun sourceSessionResetInvalidatesOldCodecHeadersAndKeyframe() {
     val connectEntered = CountDownLatch(1)
     val connectReturned = CountDownLatch(1)
@@ -222,7 +218,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun liveSourceResetPreservesTheNewGopWhenTheOldPublisherFails() {
     val firstBatch = CountDownLatch(3)
     val blockedOldPublish = CountDownLatch(1)
@@ -293,7 +288,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun manualReconnectWaitsForAnotherCleanKeyframeAndCreatesANewSession() {
     val publishers = CopyOnWriteArrayList<TestPublisher>()
     val output = ReliableRtmpOutput(destination(), publisherFactory = {
@@ -314,7 +308,6 @@ class ReliableRtmpOutputTest {
       assertEquals(0L, publishers[1].sent.first().timestamp)
     } finally { output.close() }
   }
-
   @Test fun manualReconnectWhileWaitingForKeyframeReplacesPublisherBeforeTheNextGop() {
     val firstConnectEntered = CountDownLatch(1)
     val releaseFirstConnect = CountDownLatch(1)
@@ -377,7 +370,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun manualReconnectDuringPublisherFactorySkipsTheStaleConnect() {
     val factoryEntered = CountDownLatch(1)
     val releaseFactory = CountDownLatch(1)
@@ -434,7 +426,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun manualReconnectBetweenLiveSnapshotAndDequeueKeepsTheFreshGopIntact() {
     val liveSnapshotEntered = CountDownLatch(1)
     val releaseLiveSnapshot = CountDownLatch(1)
@@ -496,7 +487,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun connectFailureWithFreshGopSkipsTheProductionRetryBackoff() {
     val firstConnectEntered = CountDownLatch(1)
     val releaseFirstConnect = CountDownLatch(1)
@@ -551,7 +541,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun slowServerCannotGrowTheQueueWithoutLimitOrBlockLanInput() {
     val enteredPublish = CountDownLatch(1)
     val closeWrite = CountDownLatch(1)
@@ -581,7 +570,6 @@ class ReliableRtmpOutputTest {
       assertTrue("buffer stays below its configured bound", output.snapshot().queueBytes <= ReliableRtmpOutput.DEFAULT_QUEUE_LIMIT_BYTES)
     } finally { output.close() }
   }
-
   @Test fun liveOverflowDoesNotWaitForPublisherClose() {
     val enteredPublish = CountDownLatch(1)
     val closeEntered = CountDownLatch(1)
@@ -620,8 +608,7 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
-  @Test fun blockedPublisherCloseDoesNotPreventItsOutputFromRetrying() {
+  @Test fun blockedPublisherClosePreventsSameDestinationOverlapButDoesNotLoseRetry() {
     val firstFailure = CountDownLatch(1)
     val firstCloseEntered = CountDownLatch(1)
     val releaseFirstClose = CountDownLatch(1)
@@ -637,14 +624,14 @@ class ReliableRtmpOutputTest {
         }
         override fun close() {
           firstCloseEntered.countDown()
-          releaseFirstClose.await(5, TimeUnit.SECONDS)
+          releaseFirstClose.await()
         }
       } else object : MediaPublisher {
         override fun connect() { secondConnected.countDown() }
         override fun publish(media: RtmpMessage) { secondPackets += media }
         override fun close() {}
       }
-    }, retryDelaysMs = longArrayOf(1), waitMs = { Thread.sleep(1) })
+    }, retryDelaysMs = longArrayOf(0), waitMs = {})
     try {
       output.start()
       output.offer(avcConfig())
@@ -653,10 +640,16 @@ class ReliableRtmpOutputTest {
       assertTrue("first publisher should fail synthetically", firstFailure.await(2, TimeUnit.SECONDS))
       assertTrue("first close should enter its blocking section", firstCloseEntered.await(2, TimeUnit.SECONDS))
 
+      // Fresh media can queue, but this destination cannot overlap its old unclosed publisher.
       output.offer(avcConfig())
       output.offer(aacConfig())
       output.offer(keyframe(1_000))
-      assertTrue("the same destination should retry while old close is blocked",
+      assertFalse("replacement must wait for the old publisher to finish closing",
+        secondConnected.await(150, TimeUnit.MILLISECONDS))
+      assertEquals("no overlapping replacement factory call is allowed", 1, attempts.get())
+
+      releaseFirstClose.countDown()
+      assertTrue("the same destination should retry after the old close completes",
         secondConnected.await(2, TimeUnit.SECONDS))
       assertTrue("replacement publisher should receive a clean fresh GOP",
         pollUntil(2_000) { secondPackets.size >= 3 })
@@ -666,13 +659,11 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun retryBackoffIncreasesAndCaps() {
     assertEquals(1_000L, ReliableRtmpOutput.retryDelayMs(1))
     assertEquals(2_000L, ReliableRtmpOutput.retryDelayMs(2))
     assertEquals(30_000L, ReliableRtmpOutput.retryDelayMs(99))
   }
-
   @Test fun initialHeadersAndKeyframeCannotExceedConfiguredQueueLimit() {
     val connected = CountDownLatch(1)
     val output = ReliableRtmpOutput(destination(), publisherFactory = {
@@ -699,7 +690,6 @@ class ReliableRtmpOutputTest {
       assertFalse("oversized startup GOP must not connect", connected.await(100, TimeUnit.MILLISECONDS))
     } finally { output.close() }
   }
-
   @Test fun staleQueuedMediaIsDroppedAndAKeyframeStartsTheNextSession() {
     val nowMs = AtomicLong(0)
     val attempts = AtomicInteger()
@@ -751,7 +741,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun mediaDurationLimitDropsBacklogAndWaitsForAKeyframe() {
     val firstPublishEntered = CountDownLatch(1)
     val releaseFirstPublish = CountDownLatch(1)
@@ -791,7 +780,6 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-
   @Test fun oneFailedDestinationDoesNotStallOtherOutputsAndRetriesFromAKeyframe() {
     val ids = listOf("twitch", "youtube", "kick")
     val sent = ids.associateWith { CopyOnWriteArrayList<RtmpMessage>() }
@@ -856,64 +844,110 @@ class ReliableRtmpOutputTest {
       outputs.forEach { it.close() }
     }
   }
-
-  @Test fun saturatedCleanupPoolStillAbortsBlockedPublisherAndRetriesAfterCapacityReturns() {
-    val outputCount = 10
-    val connected = CountDownLatch(outputCount)
-    val firstCloseWorkersStarted = CountDownLatch(3)
-    val allowQueuedClosesToFinish = CountDownLatch(1)
-    val blockedPublishEntered = CountDownLatch(1)
-    val releaseBlockedPublish = CountDownLatch(1)
+  @Test fun reconnectAbortRunsOffTheIngestWorkerAndResumesFromFreshKeyframe() {
+    val firstPublishEntered = CountDownLatch(1)
     val abortRequested = CountDownLatch(1)
-    val targetCloseCalls = AtomicInteger()
-    val targetCloseCompleted = CountDownLatch(1)
+    val publisherClosed = CountDownLatch(1)
+    val releaseFirstPublish = CountDownLatch(1)
     val replacementConnected = CountDownLatch(1)
     val replacementPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val abortThread = AtomicReference<String?>(null)
     val attempts = AtomicInteger()
-    val outputs = (0 until outputCount).map { index ->
-      val outputAttempts = AtomicInteger()
-      ReliableRtmpOutput(
-        destination(),
-        publisherFactory = {
-          val session = outputAttempts.incrementAndGet()
-          if (index == outputCount - 1 && session > 1) attempts.incrementAndGet()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      val session = attempts.incrementAndGet()
+      object : MediaPublisher {
+        override fun connect() {
+          if (session > 1) replacementConnected.countDown()
+        }
+        override fun publish(media: RtmpMessage) {
+          if (session == 1) {
+            firstPublishEntered.countDown()
+            releaseFirstPublish.await()
+          } else {
+            replacementPackets += media
+          }
+        }
+        override fun requestAbort() {
+          if (session == 1) {
+            abortThread.set(Thread.currentThread().name)
+            abortRequested.countDown()
+            releaseFirstPublish.countDown()
+          }
+        }
+        override fun close() {
+          if (session == 1) publisherClosed.countDown()
+        }
+      }
+    }, retryDelaysMs = longArrayOf(0), waitMs = {})
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("first publisher should enter its blocked send", firstPublishEntered.await(2, TimeUnit.SECONDS))
+
+      val startedAt = System.nanoTime()
+      output.reconnectNow()
+      val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+      assertTrue("manual reconnect must not run socket cancellation inline", elapsedMs < 500)
+      assertTrue("cleanup lane should signal cancellation", abortRequested.await(1, TimeUnit.SECONDS))
+      assertEquals("abort must run on the destination cleanup thread",
+        "SweatyOBS-youtube-publisher-close", abortThread.get())
+      assertTrue("close should follow cancellation", publisherClosed.await(1, TimeUnit.SECONDS))
+      assertEquals("reconnect must wait for a clean keyframe", 1, attempts.get())
+
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(500))
+      assertTrue("fresh session should connect after old cleanup", replacementConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("replacement should send the full fresh GOP",
+        pollUntil(2_000) { replacementPackets.size >= 3 })
+      assertEquals(listOf(9, 8, 9), replacementPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), replacementPackets.take(3).map { it.timestamp })
+    } finally {
+      releaseFirstPublish.countDown()
+      output.close()
+    }
+  }
+  @Test fun blockedCleanupForOneDestinationDoesNotStallOtherOutputs() {
+    val youtubeFailed = CountDownLatch(1)
+    val youtubeCloseEntered = CountDownLatch(1)
+    val releaseYoutubeClose = CountDownLatch(1)
+    val peersConnected = CountDownLatch(2)
+    val youtubeReplacementConnected = CountDownLatch(1)
+    val peerFrames = AtomicInteger()
+    val youtubeAttempts = AtomicInteger()
+    val replacementPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val outputs = listOf("youtube", "twitch", "kick").map { id ->
+      ReliableRtmpOutput(sandboxDestination(id), publisherFactory = {
+        if (id == "youtube") {
+          val session = youtubeAttempts.incrementAndGet()
           object : MediaPublisher {
             override fun connect() {
-              if (session == 1) connected.countDown()
-              else if (index == outputCount - 1) replacementConnected.countDown()
+              if (session > 1) youtubeReplacementConnected.countDown()
             }
             override fun publish(media: RtmpMessage) {
-              if (index == outputCount - 1 && session == 1) {
-                blockedPublishEntered.countDown()
-                check(releaseBlockedPublish.await(5, TimeUnit.SECONDS)) {
-                  "blocked synthetic publisher was not aborted"
-                }
-              } else if (index == outputCount - 1 && session > 1) {
-                replacementPackets += media
+              if (session == 1) {
+                youtubeFailed.countDown()
+                throw IOException("synthetic YouTube failure")
               }
-            }
-            override fun requestAbort() {
-              if (index == outputCount - 1 && session == 1) {
-                abortRequested.countDown()
-                releaseBlockedPublish.countDown()
-              }
+              replacementPackets += media
             }
             override fun close() {
-              if (index == outputCount - 1 && session == 1) {
-                targetCloseCalls.incrementAndGet()
-                targetCloseCompleted.countDown()
-              } else if (index < outputCount - 1 && session == 1) {
-                firstCloseWorkersStarted.countDown()
-                check(allowQueuedClosesToFinish.await(5, TimeUnit.SECONDS)) {
-                  "synthetic queued close was not released"
-                }
+              if (session == 1) {
+                youtubeCloseEntered.countDown()
+                releaseYoutubeClose.await()
               }
             }
           }
-        },
-        retryDelaysMs = longArrayOf(0),
-        waitMs = {}
-      )
+        } else object : MediaPublisher {
+          override fun connect() { peersConnected.countDown() }
+          override fun publish(media: RtmpMessage) {
+            if (media.type == 9 && media.data.firstOrNull()?.toInt() == 0x27) peerFrames.incrementAndGet()
+          }
+          override fun close() {}
+        }
+      }, retryDelaysMs = longArrayOf(0), waitMs = {})
     }
 
     try {
@@ -923,75 +957,118 @@ class ReliableRtmpOutputTest {
         output.offer(aacConfig())
         output.offer(keyframe(0))
       }
-      assertTrue("all synthetic destinations should connect", connected.await(3, TimeUnit.SECONDS))
-      assertTrue("target publisher should be blocked inside publish",
-        blockedPublishEntered.await(3, TimeUnit.SECONDS))
+      assertTrue("YouTube should fail in the synthetic publisher", youtubeFailed.await(2, TimeUnit.SECONDS))
+      assertTrue("YouTube cleanup should enter the blocked close", youtubeCloseEntered.await(2, TimeUnit.SECONDS))
+      assertTrue("Twitch and Kick should connect independently", peersConnected.await(2, TimeUnit.SECONDS))
 
-      // Three closes run and six queue; all nine requests are accepted before the final target.
-      outputs.take(outputCount - 1).forEach { it.reconnectNow() }
-      assertTrue("cleanup workers should be occupied by slow closes",
-        firstCloseWorkersStarted.await(2, TimeUnit.SECONDS))
+      // Queue a fresh YouTube GOP while its prior session is still closing.
+      outputs[0].offer(avcConfig())
+      outputs[0].offer(aacConfig())
+      outputs[0].offer(keyframe(500))
+      repeat(4) { frame ->
+        val media = RtmpMessage(9, 1_000L + frame * 40L, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1))
+        outputs[1].offer(media)
+        outputs[2].offer(media)
+      }
+      assertTrue("Twitch and Kick must keep sending while YouTube close is stalled",
+        pollUntil(2_000) { peerFrames.get() >= 8 })
+      assertEquals("YouTube must not create a overlapping publisher before close finishes", 1, youtubeAttempts.get())
 
-      val reconnectStartedAt = System.nanoTime()
-      outputs.last().reconnectNow()
-      val reconnectElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconnectStartedAt)
-      assertTrue("manual reconnect must not wait for a full cleanup queue", reconnectElapsedMs < 500)
-      assertTrue("the rejected cleanup request must still abort the in-flight publish",
-        abortRequested.await(1, TimeUnit.SECONDS))
-      assertEquals("target final cleanup waits until pool capacity returns", 0, targetCloseCalls.get())
-
-      // Keep a fresh GOP while final cleanup waits for a bounded executor slot.
-      outputs.last().offer(avcConfig())
-      outputs.last().offer(aacConfig())
-      outputs.last().offer(keyframe(500))
-
-      allowQueuedClosesToFinish.countDown()
-      assertTrue("worker finalizer must retry the rejected cleanup after capacity returns",
-        targetCloseCompleted.await(5, TimeUnit.SECONDS))
-      assertTrue("target output should reconnect after its close is accepted",
-        replacementConnected.await(5, TimeUnit.SECONDS))
-      assertTrue("replacement should receive a complete fresh GOP",
-        pollUntil(3_000) { replacementPackets.size >= 3 })
+      releaseYoutubeClose.countDown()
+      assertTrue("YouTube should reconnect after its own close completes",
+        youtubeReplacementConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("replacement should send the complete fresh GOP",
+        pollUntil(2_000) { replacementPackets.size >= 3 })
       assertEquals(listOf(9, 8, 9), replacementPackets.take(3).map { it.type })
-      assertEquals(listOf(0L, 0L, 0L), replacementPackets.take(3).map { it.timestamp })
-      assertEquals("the rejected close must run exactly once", 1, targetCloseCalls.get())
-      assertEquals(1, attempts.get())
     } finally {
-      releaseBlockedPublish.countDown()
-      allowQueuedClosesToFinish.countDown()
+      releaseYoutubeClose.countDown()
       outputs.forEach { it.close() }
     }
   }
+  @Test fun destinationLeasePreventsOverlappingOutputInstances() {
+    val firstConnected = CountDownLatch(1)
+    val firstCloseEntered = CountDownLatch(1)
+    val releaseFirstClose = CountDownLatch(1)
+    val replacementConnected = CountDownLatch(1)
+    val replacementAttempts = AtomicInteger()
+    val first = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() { firstConnected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {
+          firstCloseEntered.countDown()
+          releaseFirstClose.await()
+        }
+      }
+    })
+    val replacement = ReliableRtmpOutput(destination(), publisherFactory = {
+      replacementAttempts.incrementAndGet()
+      object : MediaPublisher {
+        override fun connect() { replacementConnected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {}
+      }
+    })
 
-  @Test fun publisherCleanupUsesABoundedWorkerPoolUnderConcurrentAborts() {
-    val outputCount = 12
-    val connected = CountDownLatch(outputCount)
-    val firstCloseWorkersStarted = CountDownLatch(3)
-    val closeCallsStarted = AtomicInteger()
-    val closed = CountDownLatch(outputCount)
-    val allowCloseToFinish = CountDownLatch(1)
+    try {
+      first.start()
+      first.offer(avcConfig())
+      first.offer(aacConfig())
+      first.offer(keyframe(0))
+      assertTrue("first output should acquire the destination lease",
+        firstConnected.await(2, TimeUnit.SECONDS))
+
+      first.reconnectNow()
+      assertTrue("first output cleanup should hold the lease until close completes",
+        firstCloseEntered.await(2, TimeUnit.SECONDS))
+
+      replacement.start()
+      replacement.offer(avcConfig())
+      replacement.offer(aacConfig())
+      replacement.offer(keyframe(0))
+      assertFalse("a second output object must not overlap the old publisher",
+        replacementConnected.await(150, TimeUnit.MILLISECONDS))
+      assertEquals(0, replacementAttempts.get())
+
+      releaseFirstClose.countDown()
+      assertTrue("replacement output should connect after the lease is released",
+        replacementConnected.await(2, TimeUnit.SECONDS))
+      assertEquals(1, replacementAttempts.get())
+    } finally {
+      releaseFirstClose.countDown()
+      first.close()
+      replacement.close()
+    }
+  }
+
+  @Test fun cleanupUsesAtMostOneBoundedWorkerPerDestination() {
+    val destinationIds = listOf("twitch", "youtube", "kick")
+    val connected = CountDownLatch(destinationIds.size)
+    val closeEntered = CountDownLatch(destinationIds.size)
+    val closeFinished = CountDownLatch(destinationIds.size)
+    val releaseCloses = CountDownLatch(1)
     val activeCloses = AtomicInteger()
     val maxActiveCloses = AtomicInteger()
-    val outputs = (0 until outputCount).map {
-      ReliableRtmpOutput(destination(), publisherFactory = {
+    val outputs = destinationIds.map { id ->
+      ReliableRtmpOutput(sandboxDestination(id), publisherFactory = {
         object : MediaPublisher {
           override fun connect() { connected.countDown() }
           override fun publish(media: RtmpMessage) {}
           override fun close() {
             val active = activeCloses.incrementAndGet()
-            maxActiveCloses.updateAndGet { previous -> maxOf(previous, active) }
-            closeCallsStarted.incrementAndGet()
-            firstCloseWorkersStarted.countDown()
+            maxActiveCloses.updateAndGet { prior -> maxOf(prior, active) }
+            closeEntered.countDown()
             try {
-              check(allowCloseToFinish.await(5, TimeUnit.SECONDS)) { "synthetic close was not released" }
+              releaseCloses.await()
             } finally {
               activeCloses.decrementAndGet()
-              closed.countDown()
+              closeFinished.countDown()
             }
           }
         }
       })
     }
+
     try {
       outputs.forEach { output ->
         output.start()
@@ -999,32 +1076,81 @@ class ReliableRtmpOutputTest {
         output.offer(aacConfig())
         output.offer(keyframe(0))
       }
-      assertTrue("every synthetic output should connect", connected.await(3, TimeUnit.SECONDS))
+      assertTrue("each supported destination should connect independently",
+        connected.await(2, TimeUnit.SECONDS))
       outputs.forEach { it.reconnectNow() }
+      assertTrue("each platform must have its own cleanup lane",
+        closeEntered.await(2, TimeUnit.SECONDS))
 
-      assertTrue("cleanup workers should start closing publishers",
-        firstCloseWorkersStarted.await(2, TimeUnit.SECONDS))
-      Thread.sleep(150)
-      assertEquals("slow closes should be capped at the fixed pool size",
-        3, closeCallsStarted.get())
-      assertTrue("the maximum active close count must remain bounded",
-        maxActiveCloses.get() <= 3)
-      val closeThreads = Thread.getAllStackTraces().keys.count {
-        it.name == "SweatyOBS-publisher-close" || it.name.endsWith("-abort")
-      }
-      assertTrue("publisher cleanup must not create one thread per reconnect", closeThreads <= 3)
+      val cleanupThreadNames = Thread.getAllStackTraces().keys
+        .filter { it.name in destinationIds.map { id -> "SweatyOBS-$id-publisher-close" } }
+        .map { it.name }
+        .toSet()
+      assertTrue("cleanup must use at most three destination workers", cleanupThreadNames.size <= 3)
+      assertEquals("all three independent lanes should close concurrently", 3, maxActiveCloses.get())
     } finally {
-      allowCloseToFinish.countDown()
+      releaseCloses.countDown()
       outputs.forEach { it.close() }
     }
-    assertTrue("all publishers should eventually close after capacity returns",
-      closed.await(5, TimeUnit.SECONDS))
-    assertEquals(0, closed.count)
-    assertTrue("publisher cleanup remains bounded after draining",
-      maxActiveCloses.get() <= 3)
+    assertTrue("all publisher sessions should close after their gates release",
+      closeFinished.await(2, TimeUnit.SECONDS))
+    assertEquals(0, activeCloses.get())
+  }
+  @Test fun repeatedReconnectAndCloseCoalescePublisherCleanupAndPreventRestart() {
+    val connected = CountDownLatch(1)
+    val closeEntered = CountDownLatch(1)
+    val releaseClose = CountDownLatch(1)
+    val closeFinished = CountDownLatch(1)
+    val closeCalls = AtomicInteger()
+    val attempts = AtomicInteger()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      attempts.incrementAndGet()
+      object : MediaPublisher {
+        override fun connect() { connected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {
+          closeCalls.incrementAndGet()
+          closeEntered.countDown()
+          try {
+            releaseClose.await()
+          } finally {
+            closeFinished.countDown()
+          }
+        }
+      }
+    })
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("publisher should connect", connected.await(2, TimeUnit.SECONDS))
+
+      output.reconnectNow()
+      assertTrue("first cleanup should begin", closeEntered.await(2, TimeUnit.SECONDS))
+      output.reconnectNow()
+      val closeStartedAt = System.nanoTime()
+      output.close()
+      val closeElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStartedAt)
+      assertTrue("output shutdown must not wait for a stalled socket close", closeElapsedMs < 500)
+      assertEquals("duplicate reconnect and shutdown must share one close", 1, closeCalls.get())
+
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(500))
+      assertEquals("a closed output is terminal and cannot launch a second worker", 1, attempts.get())
+
+      releaseClose.countDown()
+      assertTrue("the original close should finish once released", closeFinished.await(2, TimeUnit.SECONDS))
+      assertEquals(1, closeCalls.get())
+    } finally {
+      releaseClose.countDown()
+      output.close()
+    }
   }
 
-  private fun pollUntil(timeoutMs: Long, predicate: () -> Boolean): Boolean {
+private fun pollUntil(timeoutMs: Long, predicate: () -> Boolean): Boolean {
     val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
     while (System.nanoTime() < end) {
       if (predicate()) return true

@@ -265,6 +265,9 @@ class Ps5LanService : Service() {
         stopSelf()
         return START_NOT_STICKY
       }
+      // A previous start can fail before the receiver exists. Close its outputs before
+      // dropping references so their destination leases cannot block this new start.
+      outputPublishers.toList().forEach { it.close() }
       outputPublishers.clear()
       outputPublishers += destinations.map { destination ->
         ReliableRtmpOutput(destination, onSnapshot = { onOutputSnapshot() }).also { it.start() }
