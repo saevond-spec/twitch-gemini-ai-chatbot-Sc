@@ -656,13 +656,13 @@ class Ps5LanService : Service() {
     val prefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
     val secrets = SecretStore(this)
     return buildList {
-      if (prefs.getBoolean("twitch_enabled", RtmpsPublisher.keyValid(secrets.get("rtmps")))) {
+      if (prefs.getBoolean("twitch_enabled", false)) {
         add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
       }
-      if (prefs.getBoolean("youtube_enabled", RtmpsPublisher.keyValid(secrets.get("youtube_key")))) {
+      if (prefs.getBoolean("youtube_enabled", false)) {
         add(RtmpDestination("youtube", "YouTube", prefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
       }
-      if (prefs.getBoolean("kick_enabled", RtmpsPublisher.keyValid(secrets.get("kick_key")))) {
+      if (prefs.getBoolean("kick_enabled", false)) {
         add(RtmpDestination("kick", "Kick", prefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
     }

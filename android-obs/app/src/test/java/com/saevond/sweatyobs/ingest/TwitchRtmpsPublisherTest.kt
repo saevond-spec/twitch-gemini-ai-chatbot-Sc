@@ -1,12 +1,13 @@
 package com.saevond.sweatyobs.ingest
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Test
 class TwitchRtmpsPublisherTest {
@@ -46,10 +47,24 @@ class TwitchRtmpsPublisherTest {
    assertEquals(media.type, parsed.type)
    assertArrayEquals(payload, parsed.data)
  }
+ @Test fun startupDeadlineWatchdogCancelsBlockingOperation() {
+   val operationClosed = CountDownLatch(1)
+   val cancellation = ConnectionCancellation()
+   cancellation.setCancelAction { operationClosed.countDown() }
+   val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(50)
+   val watchdog = RtmpsPublisher.scheduleDeadlineCancellation(deadline, cancellation)
+   try {
+     assertTrue("deadline must cancel the active operation", operationClosed.await(2, TimeUnit.SECONDS))
+     assertTrue(cancellation.isCancelled)
+   } finally {
+     watchdog.cancel(false)
+   }
+ }
+
  @Test fun closingPublisherCancelsBlockedDnsLookupAndConnectWorker() {
    val lookupStarted = CountDownLatch(1)
    val cancellationObserved = CountDownLatch(1)
-   val failed = AtomicBoolean(false)
+   val failure = AtomicReference<Exception?>(null)
    val publisher = RtmpsPublisher(
      "rtmps://ingest.example.com:443/app",
      "sandbox-key-12345",
@@ -60,11 +75,11 @@ class TwitchRtmpsPublisherTest {
          throw SocketTimeoutException("test resolver timed out")
        }
        cancellation.throwIfCancelled()
-       arrayOf(InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)))
+       throw AssertionError("Cancelled synthetic resolver must not return an address")
      }
    )
    val worker = Thread {
-     try { publisher.connect() } catch (_: Exception) { failed.set(true) }
+     try { publisher.connect() } catch (error: Exception) { failure.set(error) }
    }
    try {
      worker.start()
@@ -73,7 +88,7 @@ class TwitchRtmpsPublisherTest {
      assertTrue("close must signal the active DNS lookup", cancellationObserved.await(1, TimeUnit.SECONDS))
      worker.join(1_000)
      assertFalse("connect worker must finish after DNS cancellation", worker.isAlive)
-     assertTrue("connect must report cancellation", failed.get())
+     assertTrue("connect must report cancellation", failure.get() is InterruptedIOException)
    } finally {
      publisher.close()
      worker.join(1_000)

@@ -242,17 +242,26 @@ class MainActivity : Activity() {
     if (outputPrefs.getString("kick_server", "").isNullOrBlank()) {
       outputPrefs.edit().putString("kick_server", RtmpsPublisher.KICK_RTMPS_URL).apply()
     }
+    val secretStore = SecretStore(this)
+    val initialTwitchEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("twitch_enabled")) outputPrefs.getBoolean("twitch_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("rtmps"))
+    ) { outputPrefs.edit().putBoolean("twitch_enabled", it).apply() }
+    val initialYouTubeEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("youtube_enabled")) outputPrefs.getBoolean("youtube_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("youtube_key"))
+    ) { outputPrefs.edit().putBoolean("youtube_enabled", it).apply() }
+    val initialKickEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("kick_enabled")) outputPrefs.getBoolean("kick_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("kick_key"))
+    ) { outputPrefs.edit().putBoolean("kick_enabled", it).apply() }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
-      isChecked = outputPrefs.getBoolean(
-        "twitch_enabled",
-        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("rtmps"))
-      )
+      isChecked = initialTwitchEnabled
     }
     val enableYouTube = CheckBox(this).apply {
       text = "Also stream to YouTube"
-      isChecked = outputPrefs.getBoolean("youtube_enabled",
-        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("youtube_key")))
+      isChecked = initialYouTubeEnabled
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
@@ -297,8 +306,7 @@ class MainActivity : Activity() {
     }
     val enableKick = CheckBox(this).apply {
       text = "Also stream to Kick"
-      isChecked = outputPrefs.getBoolean("kick_enabled",
-        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("kick_key")))
+      isChecked = initialKickEnabled
     }
     val kickServer = EditText(this).apply {
       id = R.id.kick_server

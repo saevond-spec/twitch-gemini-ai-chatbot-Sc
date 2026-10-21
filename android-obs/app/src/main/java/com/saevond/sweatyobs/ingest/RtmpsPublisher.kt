@@ -19,6 +19,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
@@ -182,6 +184,19 @@ class RtmpsPublisher internal constructor(
     const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val MAX_ADDRESS_CANDIDATES = 8
+    private val CONNECT_DEADLINE_EXECUTOR = ScheduledThreadPoolExecutor(1) { runnable ->
+      Thread(runnable, "rtmps-connect-deadline").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+
+    internal fun scheduleDeadlineCancellation(
+      deadlineNanos: Long,
+      cancellation: ConnectionCancellation
+    ): ScheduledFuture<*> {
+      val delayNanos = (deadlineNanos - System.nanoTime()).coerceAtLeast(0L)
+      return CONNECT_DEADLINE_EXECUTOR.schedule(
+        { cancellation.cancel() }, delayNanos, TimeUnit.NANOSECONDS
+      )
+    }
 
     fun isPublicDestination(address: InetAddress): Boolean =
       !address.isSiteLocalAddress && !address.isLoopbackAddress &&
@@ -197,32 +212,41 @@ class RtmpsPublisher internal constructor(
       val endpoint = parseEndpoint(serverUrl) ?: return "INVALID_URL"
       val deadline = System.nanoTime() + CONNECT_TIMEOUT_MS * 1_000_000L
       val cancellation = ConnectionCancellation()
-      val addresses = try {
-        AndroidHostAddressResolver.resolve(
-          endpoint.host, remainingTimeoutMs(deadline), cancellation
-        )
-      } catch (error: Exception) {
-        return if (error is SocketTimeoutException) "CONNECT_TIMEOUT" else "DNS_FAILED"
-      }
-      if (addresses.any { !isPublicDestination(it) }) return "BLOCKED_ADDRESS"
-      return try {
-        val remaining = remainingTimeoutMs(deadline)
-        val tls = tryResolvedAddresses(addresses, remaining) { address, remainingMs ->
-          openTlsSocket(endpoint, address, remainingMs, cancellation)
+      val deadlineWatchdog = scheduleDeadlineCancellation(deadline, cancellation)
+      try {
+        val addresses = try {
+          AndroidHostAddressResolver.resolve(
+            endpoint.host, remainingTimeoutMs(deadline), cancellation
+          )
+        } catch (error: Exception) {
+          return if (System.nanoTime() >= deadline || error is SocketTimeoutException)
+            "CONNECT_TIMEOUT" else "DNS_FAILED"
         }
-        cancellation.clearCancelAction()
-        tls.close()
-        "TLS_OK"
-      } catch (error: Exception) {
-        cancellation.cancel()
-        var root: Throwable = error
-        while (root.cause != null && root.cause !== root) root = root.cause!!
-        when (root) {
-          is SocketTimeoutException -> "CONNECT_TIMEOUT"
-          is SSLException -> "TLS_FAILED"
-          is ConnectException -> "CONNECTION_REFUSED"
-          else -> "NETWORK_FAILED"
+        if (addresses.any { !isPublicDestination(it) }) return "BLOCKED_ADDRESS"
+        try {
+          val remaining = remainingTimeoutMs(deadline)
+          val tls = tryResolvedAddresses(addresses, remaining) { address, remainingMs ->
+            cancellation.throwIfCancelled()
+            openTlsSocket(endpoint, address, remainingMs, cancellation)
+          }
+          deadlineWatchdog.cancel(false)
+          cancellation.clearCancelAction()
+          tls.close()
+          "TLS_OK"
+        } catch (error: Exception) {
+          cancellation.cancel()
+          if (System.nanoTime() >= deadline) return "CONNECT_TIMEOUT"
+          var root: Throwable = error
+          while (root.cause != null && root.cause !== root) root = root.cause!!
+          when (root) {
+            is SocketTimeoutException -> "CONNECT_TIMEOUT"
+            is SSLException -> "TLS_FAILED"
+            is ConnectException -> "CONNECTION_REFUSED"
+            else -> "NETWORK_FAILED"
+          }
         }
+      } finally {
+        deadlineWatchdog.cancel(false)
       }
     }
 
@@ -340,6 +364,7 @@ class RtmpsPublisher internal constructor(
     val deadline = System.nanoTime() + CONNECT_TIMEOUT_MS * 1_000_000L
     val cancellation = ConnectionCancellation()
     connectCancellation = cancellation
+    val deadlineWatchdog = scheduleDeadlineCancellation(deadline, cancellation)
     if (stopped) cancellation.cancel()
     try {
       cancellation.throwIfCancelled()
@@ -419,6 +444,8 @@ class RtmpsPublisher internal constructor(
       }
       check(accepted) { "No publish acknowledgement from streaming server" }
       check(!stopped) { "Publisher stopped while connecting" }
+      remainingTimeoutMs(deadline)
+      deadlineWatchdog.cancel(false)
       deadlineInput.disableDeadline()
       // The control reader stays open during quiet streams once startup succeeds.
       tls.soTimeout = 0
@@ -432,7 +459,12 @@ class RtmpsPublisher internal constructor(
       startControlReader(reader, out, countedInput)
     } catch (error: Exception) {
       close()
+      if (System.nanoTime() >= deadline && error !is SocketTimeoutException) {
+        throw SocketTimeoutException("RTMPS startup deadline exceeded").also { it.initCause(error) }
+      }
       throw error
+    } finally {
+      deadlineWatchdog.cancel(false)
     }
   }
 
