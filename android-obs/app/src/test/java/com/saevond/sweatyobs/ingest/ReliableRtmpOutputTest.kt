@@ -319,6 +319,69 @@ class ReliableRtmpOutputTest {
     } finally { output.close() }
   }
 
+  @Test fun manualReconnectWhileWaitingForKeyframeReplacesPublisherBeforeTheNextGop() {
+    val firstConnectEntered = CountDownLatch(1)
+    val releaseFirstConnect = CountDownLatch(1)
+    val firstClosed = CountDownLatch(1)
+    val secondConnected = CountDownLatch(1)
+    val attempts = AtomicInteger()
+    val firstSessionPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val session = attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {
+            if (session == 1) {
+              firstConnectEntered.countDown()
+              check(releaseFirstConnect.await(2, TimeUnit.SECONDS)) { "first fake connect was not released" }
+            } else {
+              secondConnected.countDown()
+            }
+          }
+          override fun publish(media: RtmpMessage) {
+            if (session == 1) firstSessionPackets += media else resumedPackets += media
+          }
+          override fun close() {
+            if (session == 1) firstClosed.countDown()
+          }
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      maxQueueMediaMs = 100,
+      waitMs = { Thread.sleep(1) }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("first destination connect should start", firstConnectEntered.await(2, TimeUnit.SECONDS))
+
+      // Overflow the queued startup GOP while connect is blocked. The handshake
+      // succeeds, but the established publisher must now wait for a fresh keyframe.
+      output.offer(RtmpMessage(9, 101, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
+      releaseFirstConnect.countDown()
+      assertTrue("connected publisher should wait for a fresh keyframe",
+        pollUntil(2_000) { output.snapshot().state == "WAITING FOR KEYFRAME" })
+
+      output.reconnectNow()
+      assertTrue("manual reconnect should close the waiting publisher", firstClosed.await(2, TimeUnit.SECONDS))
+      output.offer(keyframe(202))
+
+      assertTrue("manual reconnect should create a new publisher", secondConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("new publisher should send the first clean GOP", pollUntil(2_000) { resumedPackets.size >= 3 })
+      assertTrue("old waiting publisher must not consume media", firstSessionPackets.isEmpty())
+      assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), resumedPackets.take(3).map { it.timestamp })
+      assertEquals(2, attempts.get())
+    } finally {
+      releaseFirstConnect.countDown()
+      output.close()
+    }
+  }
+
   @Test fun slowServerCannotGrowTheQueueWithoutLimitOrBlockLanInput() {
     val enteredPublish = CountDownLatch(1)
     val closeWrite = CountDownLatch(1)
