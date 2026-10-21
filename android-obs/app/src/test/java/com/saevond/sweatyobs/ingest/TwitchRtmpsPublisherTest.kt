@@ -195,11 +195,12 @@ class TwitchRtmpsPublisherTest {
  }
 
 
- @Test fun failedSetupSocketRemainsTrackedUntilQueuedCloseCompletes() {
+ @Test fun failedSetupSocketCloseDoesNotHoldPublisherCleanup() {
    val asyncCloseStarted = CountDownLatch(1)
    val releaseAsyncClose = CountDownLatch(1)
    val cleanupCloseEntered = CountDownLatch(1)
    val cleanupReturned = CountDownLatch(1)
+   val asyncCloseFinished = CountDownLatch(1)
    val socket = object : Socket() {
      override fun setTcpNoDelay(on: Boolean) {}
      override fun setKeepAlive(on: Boolean) {}
@@ -207,9 +208,6 @@ class TwitchRtmpsPublisherTest {
        throw SocketException("synthetic setup failure")
      }
      override fun close() {
-       if (Thread.currentThread().name == "synthetic-async-close") {
-         releaseAsyncClose.await(5, TimeUnit.SECONDS)
-       }
        cleanupCloseEntered.countDown()
      }
    }
@@ -221,9 +219,11 @@ class TwitchRtmpsPublisherTest {
        Thread({
          asyncCloseStarted.countDown()
          try {
-           releaseAsyncClose.await(5, TimeUnit.SECONDS)
+           releaseAsyncClose.await(10, TimeUnit.SECONDS)
            candidate.close()
-         } finally { onClosed() }
+         } finally {
+           try { onClosed() } finally { asyncCloseFinished.countDown() }
+         }
        }, "synthetic-async-close").apply { isDaemon = true; start() }
      },
      socketFactory = { socket }
@@ -239,16 +239,21 @@ class TwitchRtmpsPublisherTest {
        try { publisher.close() } finally { cleanupReturned.countDown() }
      }
      cleanup.start()
-     assertTrue("publisher cleanup must close the still-tracked failed socket",
-       cleanupCloseEntered.await(2, TimeUnit.SECONDS))
-     assertTrue("cleanup should finish after its direct socket close",
+     assertTrue("publisher cleanup must not wait for a failed-candidate close lane",
        cleanupReturned.await(2, TimeUnit.SECONDS))
+     assertEquals("failed candidate remains open only on its async close lane",
+       1L, cleanupCloseEntered.count)
+     releaseAsyncClose.countDown()
+     assertTrue("the dispatched failed-candidate close should finish after release",
+       asyncCloseFinished.await(2, TimeUnit.SECONDS))
+     assertTrue("the synthetic socket should eventually be closed",
+       cleanupCloseEntered.await(1, TimeUnit.SECONDS))
      cleanup.join(1_000)
    } finally {
      releaseAsyncClose.countDown()
      publisher.close()
    }
- }
+  }
 
  @Test fun blocksPrivateDnsDestinations() {
    val host = java.net.InetAddress.getByName("192.168.1.105")
