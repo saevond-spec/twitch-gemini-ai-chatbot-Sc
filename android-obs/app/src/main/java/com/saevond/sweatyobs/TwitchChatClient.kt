@@ -51,6 +51,7 @@ internal object TwitchChatProtocol {
   const val MAX_MESSAGE_CHARS = 180
   const val MAX_CHAT_LINES = 8
   const val MAX_RETRY_DELAY_MS = 60_000L
+  const val STABLE_SESSION_RESET_MS = 60_000L
   private const val BASE_RETRY_DELAY_MS = 1_000L
 
   fun normalizeLogin(value: String): String? {
@@ -83,6 +84,25 @@ internal object TwitchChatProtocol {
       .takeIf { it.isNotBlank() && it.none(Char::isISOControl) } ?: return null
     return "PONG $payload"
   }
+
+  /** Recognize Twitch's IRC command token without matching text inside a user's message. */
+  fun isServerReconnect(line: String): Boolean {
+    if (!fitsUtf8ByteLimit(line, MAX_LINE_BYTES)) return false
+    val payload = if (line.startsWith("@")) {
+      val separator = line.indexOf(' ')
+      if (separator <= 1) return false
+      line.substring(separator + 1).trimStart()
+    } else line
+    if (!payload.startsWith(":")) return false
+    val prefixEnd = payload.indexOf(' ')
+    if (prefixEnd <= 1) return false
+    val command = payload.substring(prefixEnd + 1).trimStart().substringBefore(' ')
+    return command.equals("RECONNECT", ignoreCase = true)
+  }
+
+  /** Retain exponential backoff across brief sessions; reset only after a stable join. */
+  fun retryAttemptAfterSessionFailure(currentAttempt: Int, joinedForMs: Long?): Int =
+    if (joinedForMs != null && joinedForMs >= STABLE_SESSION_RESET_MS) 0 else currentAttempt
 
   fun parsePrivmsg(line: String, channelInput: String? = null): TwitchChatMessage? {
     if (!fitsUtf8ByteLimit(line, MAX_LINE_BYTES)) return null
@@ -203,7 +223,7 @@ internal class TwitchChatClient(
   @Volatile private var socket: SSLSocket? = null
   @Volatile private var worker: Thread? = null
   @Volatile private var lastState: TwitchChatState? = null
-  private var joinedThisSession = false
+  private var joinedAtMs: Long? = null
 
   fun start() {
     if (closed.get() || !started.compareAndSet(false, true)) return
@@ -228,10 +248,9 @@ internal class TwitchChatClient(
     var attempt = 0
     notifyState(TwitchChatState.CONNECTING)
     while (!closed.get()) {
-      joinedThisSession = false
+      joinedAtMs = null
       try {
         val joined = readSession()
-        if (joined) attempt = 0
         if (joined && verifyOnly) {
           stop(notifyStopped = false)
           return
@@ -245,7 +264,8 @@ internal class TwitchChatClient(
       } catch (_: Exception) {
         closeSocket()
         if (closed.get()) break
-        if (joinedThisSession) attempt = 0
+        val joinedForMs = joinedAtMs?.let { (System.nanoTime() / 1_000_000L - it).coerceAtLeast(0L) }
+        attempt = TwitchChatProtocol.retryAttemptAfterSessionFailure(attempt, joinedForMs)
         notifyState(TwitchChatState.CONNECTION_ERROR)
         val delay = TwitchChatProtocol.retryDelayMillis(attempt++, Math.random())
         try {
@@ -283,12 +303,12 @@ internal class TwitchChatClient(
       val line = readBoundedLine(input) ?: return joined
       if (line.isEmpty()) continue // Ignore an overlong protocol line after consuming it.
       TwitchChatProtocol.pongLine(line)?.let { sendLine(writer, it); continue }
-      if (line.contains(" RECONNECT", ignoreCase = true)) return joined
+      if (TwitchChatProtocol.isServerReconnect(line)) return joined
       if (TwitchChatProtocol.isAuthenticationFailure(line)) throw AuthenticationFailure()
       if (line.contains(" 001 ")) notifyState(TwitchChatState.AUTHENTICATED)
       if (TwitchChatProtocol.isJoinedConfirmation(line, channel, login)) {
         joined = true
-        joinedThisSession = true
+        if (joinedAtMs == null) joinedAtMs = System.nanoTime() / 1_000_000L
         notifyState(TwitchChatState.CONNECTED)
         if (verifyOnly) return true
       }
