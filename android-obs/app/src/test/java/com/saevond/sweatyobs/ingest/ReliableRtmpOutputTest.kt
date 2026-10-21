@@ -21,6 +21,22 @@ class ReliableRtmpOutputTest {
   private fun sandboxDestination(id: String) = RtmpDestination(
     id, id.replaceFirstChar { it.uppercase() }, "rtmps://$id.example.test/app", "sandbox-key-12345")
 
+  @Test fun outputHealthDistinguishesWaitingConnectingRetryingAndQueueQuality() {
+    fun snapshot(state: String, queuedMs: Long = 0L) = OutputSnapshot(
+      "youtube", "YouTube", state, 0, queuedMs, 0, 0, 0, 0, null)
+
+    assertEquals("Waiting for keyframe", snapshot("WAITING FOR KEYFRAME").health)
+    assertTrue(snapshot("WAITING FOR KEYFRAME").summary().contains("health Waiting for keyframe"))
+    assertEquals("Connecting", snapshot("CONNECTING").health)
+    assertEquals("Retrying", snapshot("RETRYING").health)
+    assertEquals("Offline", snapshot("STOPPED").health)
+    assertEquals("Starting", snapshot("UNKNOWN").health)
+    assertEquals("Good", snapshot("LIVE", 299).health)
+    assertEquals("Fair", snapshot("LIVE", 300).health)
+    assertEquals("Fair", snapshot("LIVE", 899).health)
+    assertEquals("Poor", snapshot("LIVE", 900).health)
+  }
+
   @Test fun outputWaitsForBothCodecHeadersAndAKeyframeThenSendsARebasedStart() {
     val connected = CountDownLatch(1)
     val firstPackets = CountDownLatch(3)
@@ -74,6 +90,61 @@ class ReliableRtmpOutputTest {
         nextPacket.await(2, TimeUnit.SECONDS))
       assertEquals(listOf(9, 8, 9, 8), sent.map { it.type })
     } finally { output.close() }
+  }
+
+  @Test fun queueOverflowDoesNotCancelAnInFlightDestinationConnect() {
+    val connectEntered = CountDownLatch(1)
+    val releaseConnect = CountDownLatch(1)
+    val firstBatch = CountDownLatch(3)
+    val attempts = AtomicInteger()
+    val closeCalls = AtomicInteger()
+    val sent = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {
+            connectEntered.countDown()
+            check(releaseConnect.await(2, TimeUnit.SECONDS)) { "blocked fake connect was not released" }
+          }
+          override fun publish(media: RtmpMessage) {
+            sent += media
+            firstBatch.countDown()
+          }
+          override fun close() { closeCalls.incrementAndGet() }
+        }
+      },
+      maxQueueMediaMs = 100,
+      retryDelaysMs = longArrayOf(0),
+      waitMs = { Thread.sleep(1) }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("destination connect should be in progress", connectEntered.await(2, TimeUnit.SECONDS))
+
+      // Force the media-time queue bound while TLS/RTMPS setup is still blocked.
+      output.offer(RtmpMessage(9, 101, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
+      assertEquals("WAITING FOR KEYFRAME", output.snapshot().state)
+      assertEquals("overflow during connect must not close the publisher", 0, closeCalls.get())
+      assertEquals("overflow must still clear stale media", 0, output.snapshot().queueBytes)
+
+      output.offer(keyframe(500))
+      releaseConnect.countDown()
+
+      assertTrue("fresh headers and keyframe should publish after connect finishes",
+        firstBatch.await(2, TimeUnit.SECONDS))
+      assertEquals("a single slow connect should be preserved", 1, attempts.get())
+      assertEquals(listOf(9, 8, 9), sent.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), sent.take(3).map { it.timestamp })
+      assertEquals("LIVE", output.snapshot().state)
+    } finally {
+      releaseConnect.countDown()
+      output.close()
+    }
   }
 
   @Test fun manualReconnectWaitsForAnotherCleanKeyframeAndCreatesANewSession() {
