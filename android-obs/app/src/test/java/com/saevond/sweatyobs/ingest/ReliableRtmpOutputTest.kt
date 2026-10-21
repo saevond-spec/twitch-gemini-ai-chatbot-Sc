@@ -366,7 +366,7 @@ class ReliableRtmpOutputTest {
       assertTrue("manual reconnect should close the waiting publisher", firstClosed.await(2, TimeUnit.SECONDS))
       output.offer(keyframe(202))
 
-      assertTrue("manual reconnect should create a new publisher", secondConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("manual reconnect should create a new publisher", secondConnected.await(1, TimeUnit.SECONDS))
       assertTrue("new publisher should send the first clean GOP", pollUntil(2_000) { resumedPackets.size >= 3 })
       assertTrue("old waiting publisher must not consume media", firstSessionPackets.isEmpty())
       assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
@@ -617,6 +617,52 @@ class ReliableRtmpOutputTest {
     } finally {
       allowCloseToFinish.countDown()
       releasePublish.countDown()
+      output.close()
+    }
+  }
+
+  @Test fun blockedPublisherCloseDoesNotPreventItsOutputFromRetrying() {
+    val firstFailure = CountDownLatch(1)
+    val firstCloseEntered = CountDownLatch(1)
+    val releaseFirstClose = CountDownLatch(1)
+    val secondConnected = CountDownLatch(1)
+    val secondPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val attempts = AtomicInteger()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      if (attempts.getAndIncrement() == 0) object : MediaPublisher {
+        override fun connect() {}
+        override fun publish(media: RtmpMessage) {
+          firstFailure.countDown()
+          throw IOException("synthetic destination failure")
+        }
+        override fun close() {
+          firstCloseEntered.countDown()
+          releaseFirstClose.await(5, TimeUnit.SECONDS)
+        }
+      } else object : MediaPublisher {
+        override fun connect() { secondConnected.countDown() }
+        override fun publish(media: RtmpMessage) { secondPackets += media }
+        override fun close() {}
+      }
+    }, retryDelaysMs = longArrayOf(1), waitMs = { Thread.sleep(1) })
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("first publisher should fail synthetically", firstFailure.await(2, TimeUnit.SECONDS))
+      assertTrue("first close should enter its blocking section", firstCloseEntered.await(2, TimeUnit.SECONDS))
+
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(1_000))
+      assertTrue("the same destination should retry while old close is blocked",
+        secondConnected.await(2, TimeUnit.SECONDS))
+      assertTrue("replacement publisher should receive a clean fresh GOP",
+        pollUntil(2_000) { secondPackets.size >= 3 })
+      assertEquals(listOf(9, 8, 9), secondPackets.take(3).map { it.type })
+    } finally {
+      releaseFirstClose.countDown()
       output.close()
     }
   }

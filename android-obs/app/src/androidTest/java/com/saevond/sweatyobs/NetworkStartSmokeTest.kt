@@ -61,8 +61,12 @@ class NetworkStartSmokeTest {
     val youtubeKey = "sandbox-youtube-key-123"
     val kickKey = "sandbox-kick-key-456"
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
-    outputPrefs.edit().remove("youtube_server").remove("kick_server")
-      .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
+    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+    val preferenceSnapshots = listOf("encoder_outputs", "secure_encoder_secrets", "encoder_diagnostics")
+      .associateWith { context.getSharedPreferences(it, 0).all.toMap() }
+    try {
+      outputPrefs.edit().remove("youtube_server").remove("kick_server")
+        .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
     assertEquals(RtmpsPublisher.KICK_RTMPS_URL, outputPrefs.getString("kick_server", null))
 
@@ -81,7 +85,6 @@ class NetworkStartSmokeTest {
     assertFalse(outputPrefs.getBoolean("kick_enabled", true))
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("No stream has started"))))
 
-    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
     assertNotEquals(youtubeKey, encryptedPrefs.getString("youtube_key", null))
     assertNotEquals(kickKey, encryptedPrefs.getString("kick_key", null))
     assertEquals(youtubeKey, SecretStore(context).get("youtube_key"))
@@ -118,6 +121,23 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
     onView(withText("Also stream to YouTube")).check(matches(isChecked()))
     onView(withText("Also stream to Kick")).check(matches(isChecked()))
+    } finally {
+      preferenceSnapshots.forEach { (name, snapshot) ->
+        val editor = context.getSharedPreferences(name, 0).edit().clear()
+        snapshot.forEach { (key, value) ->
+          when (value) {
+            is Boolean -> editor.putBoolean(key, value)
+            is Int -> editor.putInt(key, value)
+            is Long -> editor.putLong(key, value)
+            is Float -> editor.putFloat(key, value)
+            is String -> editor.putString(key, value)
+            is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+            else -> error("Unsupported preference value type for $key")
+          }
+        }
+        check(editor.commit()) { "Could not restore $name after the UI test" }
+      }
+    }
   }
 
   @Test fun twitchChatTokenIsSavedEncryptedAndLiveChatIsOptIn() {

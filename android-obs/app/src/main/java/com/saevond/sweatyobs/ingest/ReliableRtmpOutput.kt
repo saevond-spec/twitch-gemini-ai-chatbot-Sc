@@ -197,6 +197,7 @@ class ReliableRtmpOutput(
 
   /** Force a fresh RTMPS session; the sender waits for a clean AVC keyframe. */
   fun reconnectNow() {
+    var publisherToAbort: MediaPublisher? = null
     synchronized(lock) {
       if (!running) return
       mediaGeneration++
@@ -205,9 +206,10 @@ class ReliableRtmpOutput(
       clearQueueLocked()
       aligned = false
       state = "WAITING FOR KEYFRAME"
+      publisherToAbort = publisher
       lock.notifyAll()
     }
-    abortPublisherAsync(publisher)
+    abortPublisherAsync(publisherToAbort)
     notifySnapshot()
   }
 
@@ -218,6 +220,7 @@ class ReliableRtmpOutput(
   }
 
   override fun close() {
+    var publisherToAbort: MediaPublisher? = null
     synchronized(lock) {
       running = false
       mediaGeneration++
@@ -227,9 +230,10 @@ class ReliableRtmpOutput(
       aacConfig = null
       aligned = false
       state = "STOPPED"
+      publisherToAbort = publisher
       lock.notifyAll()
     }
-    publisher?.close()
+    abortPublisherAsync(publisherToAbort)
     worker?.takeIf { it !== Thread.currentThread() }?.let { runCatching { it.join(1_000) } }
     publisher = null
     worker = null
@@ -316,7 +320,7 @@ class ReliableRtmpOutput(
           }
         } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       } finally {
-        active?.close()
+        abortPublisherAsync(active)
         if (publisher === active) publisher = null
       }
     }
