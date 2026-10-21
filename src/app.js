@@ -51,6 +51,7 @@ import { detectLanguage, languageInstruction, localizedGenericFallback } from '.
 import { gameLanguageInstruction } from './chat/gameLanguage.js';
 import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './music/player.js';
 import { createEncoderEventBridge } from './music/encoderBridge.js';
+import { createEncoderDiagnostics } from './music/encoderDiagnostics.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -179,7 +180,12 @@ async function consumeOAuthState(state) {
 }
 
 app.use(helmet());
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: false });
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  validate: false,
+  skip: req => req.path.startsWith('/api/encoder/'),
+});
 app.use(limiter);
 const allowedOrigins = config.server.allowedOrigins || [];
 app.use((req, res, next) => {
@@ -190,14 +196,30 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '10mb' }));
-app.use('/public', express.static('public'));
-
 const encoderBridge = createEncoderEventBridge({ token: process.env.ENCODER_BRIDGE_TOKEN || '', getState: getMusicState });
-app.get('/api/encoder/commands', (req, res) => {
+const encoderDiagnostics = createEncoderDiagnostics({
+  bridgeToken: process.env.ENCODER_BRIDGE_TOKEN || '',
+  logEvent: record => console.info('[encoder-telemetry] ' + JSON.stringify(record)),
+});
+const encoderPollLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, validate: false });
+const diagnosticsSessionLimiter = rateLimit({ windowMs: 60 * 1000, max: 4, validate: false });
+const diagnosticsUploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, validate: false });
+
+app.post('/api/encoder/diagnostics/session', diagnosticsSessionLimiter, express.json({ limit: '1kb' }), (req, res) => {
+  const result = encoderDiagnostics.issueSession(req.get('authorization'));
+  res.status(result.status).json(result.body);
+});
+app.post('/api/encoder/diagnostics', diagnosticsUploadLimiter, express.json({ limit: '8kb' }), (req, res) => {
+  const result = encoderDiagnostics.ingest(req.get('authorization'), req.body);
+  res.status(result.status).json(result.body);
+});
+app.get('/api/encoder/commands', encoderPollLimiter, (req, res) => {
   const result = encoderBridge.poll(req.get('authorization'), req.query.cursor);
   res.status(result.status).json(result.body);
 });
+
+app.use(express.json({ limit: '10mb' }));
+app.use('/public', express.static('public'));
 
 app.ws('/ws', (ws) => {
   wsClients.add(ws);

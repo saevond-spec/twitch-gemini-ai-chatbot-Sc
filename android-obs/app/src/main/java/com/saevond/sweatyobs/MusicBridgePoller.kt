@@ -1,6 +1,5 @@
 package com.saevond.sweatyobs
 
-import android.util.Log
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -125,7 +124,6 @@ class MusicBridgePoller(
             mixer.command("pause", null, null)
             status("Remote music bridge disconnected; licensed music paused until reconnection.")
           }
-          Log.w("SweatyClankerOBS", "Chat controls unavailable; retrying")
         }
         val delay = if (failures >= 3) (1500L * (1L shl (failures - 3).coerceIn(0, 5))).coerceAtMost(60_000L) else 1500L
         if (active) try { Thread.sleep(delay) } catch (_: InterruptedException) { break }

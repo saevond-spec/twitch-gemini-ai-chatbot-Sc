@@ -44,6 +44,7 @@ import com.saevond.sweatyobs.ingest.RtmpsPublisher
  */
 class MainActivity : Activity() {
   companion object {
+    private const val LEGACY_STATUS_PREFS = "diagnostic_status_v1"
     private const val PICK_MUSIC = 31416
     private const val PICK_CLUB = 31417
     private const val PICK_DUBSTEP = 31418
@@ -155,6 +156,9 @@ class MainActivity : Activity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // Older builds cached one diagnostic status line on-device. Remove it and
+    // keep live status in memory/broadcasts only from this version onward.
+    getSharedPreferences(LEGACY_STATUS_PREFS, MODE_PRIVATE).edit().clear().apply()
     val layout = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(dp(18), dp(14), dp(18), dp(28))
@@ -469,6 +473,22 @@ class MainActivity : Activity() {
       id = R.id.start_network_test
       text = "PS5 ingest test only — no public stream or overlay"
     }
+    val remoteDiagnostics = CheckBox(this).apply {
+      text = "Send privacy-safe connection diagnostics to Render"
+      isChecked = getSharedPreferences(Ps5LanService.DIAGNOSTICS_PREFS, MODE_PRIVATE)
+        .getBoolean(Ps5LanService.PREF_REMOTE_DIAGNOSTICS_ENABLED, true)
+      setOnCheckedChangeListener { _, checked ->
+        getSharedPreferences(Ps5LanService.DIAGNOSTICS_PREFS, MODE_PRIVATE).edit()
+          .putBoolean(Ps5LanService.PREF_REMOTE_DIAGNOSTICS_ENABLED, checked).apply()
+        status.text = if (checked) "Remote connection summaries are enabled for the active or next session."
+          else "Remote connection summaries are disabled."
+      }
+    }
+    val remoteDiagnosticsNote = TextView(this).apply {
+      text = "Every 30 seconds, sends network type and Android internet validation, PS5 packet counts, each output's send rate, queue, retries, dropped packets, and a limited error category. No stream keys, RTMPS URLs, IP/SSID, chat, viewer data, music, or media. Reports stay in memory on the phone and go to Render runtime logs (up to 7 days in the current workspace); delivery is best effort while the free service sleeps. Set the same ENCODER_BRIDGE_TOKEN on Render and under the !play bridge setting below. Real viewer counts need separate platform authorization."
+      textSize = 13f
+      setTextColor(getColor(R.color.sweaty_muted))
+    }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
     fun refreshOutputSummary() {
@@ -525,7 +545,7 @@ class MainActivity : Activity() {
       kickKey, saveKick, kickOutputStatus,
       sectionHeader("@saevond overlay and quality"), enableBrandOverlay, overlayQuality, videoModeNote,
       goLive, reconnectOutputs,
-      sectionHeader("Connection check"), startLan, stopLan,
+      sectionHeader("Connection check"), startLan, remoteDiagnostics, remoteDiagnosticsNote, stopLan,
       sectionHeader("Stream description and search"), metadataTitle, metadataGame, metadataKeywords, copyMetadata,
       sectionHeader("Music and audio"), genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
       browseRemotePopTrap, copyStreamCredit, copyTrackCredits, addClub, addDubstep, addPopTrap,
@@ -590,7 +610,9 @@ class MainActivity : Activity() {
       } else status.text = "Start a public stream before skipping music."
     }
 
-    var previousMusic = musicVolume.progress.coerceAtLeast(22)
+    // Preserve quiet user-selected levels when toggling mute. Use the default
+    // mix only when music is currently muted and there is no prior level.
+    var previousMusic = musicVolume.progress.takeIf { it > 0 } ?: 22
     val volumeChange = object : SeekBar.OnSeekBarChangeListener {
       override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
         gameLabel.text = "Game volume: ${gameVolume.progress}%"
@@ -619,7 +641,8 @@ class MainActivity : Activity() {
       savedLevels.edit().putInt("game",85).putInt("music",22).apply()
     }
     openTwitchDashboard.setOnClickListener {
-      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
+      openCreatorDashboard("Twitch", "https://dashboard.twitch.tv/settings/stream",
+        "Copy your Twitch stream key into this app and save it securely.")
     }
     openYouTubeDashboard.setOnClickListener {
       openCreatorDashboard("YouTube", YOUTUBE_DASHBOARD_URL)
@@ -747,7 +770,11 @@ class MainActivity : Activity() {
         type = "audio/*"
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
       }
-      startActivityForResult(intent, PICK_MUSIC)
+      try {
+        startActivityForResult(intent, PICK_MUSIC)
+      } catch (_: ActivityNotFoundException) {
+        status.text = "No audio file picker is available on this phone."
+      }
     }
     playMusic.setOnClickListener {
       if (!Ps5LanService.receiverRunning) {
@@ -949,7 +976,11 @@ class MainActivity : Activity() {
       putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
       addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
     }
-    startActivityForResult(picker, requestCode)
+    try {
+      startActivityForResult(picker, requestCode)
+    } catch (_: ActivityNotFoundException) {
+      status.text = "No file picker is available for adding local music on this phone."
+    }
   }
 
   private fun refreshGenreService() {
@@ -1022,10 +1053,14 @@ class MainActivity : Activity() {
     }
   }
 
-  private fun openCreatorDashboard(platform: String, url: String) {
+  private fun openCreatorDashboard(
+    platform: String,
+    url: String,
+    nextStep: String = "Copy its RTMPS server URL and stream key into this app, then save them securely."
+  ) {
     try {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-      status.text = "Opened $platform. Copy its RTMPS server URL and stream key into this app, then save them securely."
+      status.text = "Opened $platform. $nextStep"
     } catch (_: ActivityNotFoundException) {
       status.text = "No browser is available to open the $platform dashboard."
     }
@@ -1053,9 +1088,6 @@ class MainActivity : Activity() {
     findViewById<SeekBar>(R.id.music_volume)?.let {
       if (it.progress != remoteMusic) it.progress = remoteMusic
     }
-    val saved = getSharedPreferences(Ps5LanService.STATUS_PREFS, MODE_PRIVATE)
-      .getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
-    if (!saved.isNullOrBlank()) status.text = saved
   }
 
   override fun onStop() {
