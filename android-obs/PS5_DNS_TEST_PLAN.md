@@ -27,17 +27,17 @@ On PS5: Settings → Network → Settings → Set Up Internet Connection → sel
 
 ## Wi-Fi bandwidth model (illustrative, not a measured benchmark)
 
-Let R denote total incoming H264+AAC stream bitrate in **Mbps**, U denote **measured steady upload** of the home internet, and h denote a conservative traffic/airtime inefficiency fraction between 0 and 1.
+Let `Rin` denote the PS5-to-phone input bitrate in Mbps, `Rout` the app's output bitrate per destination including audio, `N` the selected output count, `U` the measured steady WAN upload, and `h` the estimated radio airtime lost to contention/retransmits (0 to 1).
 
-With PS5 → Wi-Fi AP → Android phone → Wi-Fi AP → internet, the same media traverses approximately **three Wi-Fi radio transmissions** on a conventional single-AP network, so a rough necessary radio-delivery budget is
+On a conventional single-AP Wi-Fi path, input media crosses two radio hops (PS5→AP→phone), and each independently published copy crosses one more hop (phone→AP). A rough screening estimate is therefore
 
-  G >= 3R / (1-h) Mbps equivalent of available Wi-Fi air-time goodput
+  `G >= (2 × Rin + N × Rout) / (1 - h)`
 
-while WAN upload should have a margin
+for available Wi-Fi airtime-equivalent goodput, while a conservative WAN planning target at 50% payload utilization is
 
-  U >= 1.3R Mbps.
+  `U >= 2 × N × Rout`.
 
-Illustrations: R=4.5 Mbps and h=0.20 suggests G >=16.875 Mbps airtime-equivalent and WAN >=5.85 Mbps. R=6 Mbps gives G >=22.5 Mbps airtime-equivalent and WAN >=7.8 Mbps. This is a **screening model**, not a throughput/latency guarantee; actual airtime depends heavily on link PHY rates, retransmits, frequency band, Wi-Fi contention and router AP isolation. If PS5 and phone are on 2.4 GHz congested Wi-Fi, prefer an uncongested 5 GHz network where supported. Select PS5 720p60 first if supported; the Android relay does **not** transcode and cannot lower an already-encoded incoming bitrate.
+For example, with `Rin=6 Mbps`, Stable output `Rout=4.628 Mbps`, three destinations, and `h=0.20`, the radio screening estimate is `G >= 32.4 Mbps` equivalent goodput, and the WAN target is `U >= 27.8 Mbps`. With High output `Rout=8.128 Mbps`, those become `G >= 45.5 Mbps` and `U >= 48.8 Mbps`. These estimates are **not** measured PHY capacity or throughput guarantees; actual airtime depends on link rates, retransmits, band, contention, and AP isolation. Prefer an uncongested 5 GHz network where supported. Overlay mode can scale/down-encode the output; H.264 pass-through cannot reduce the original PS5 bitrate or resolution.
 
 ## Fail-closed limits
 

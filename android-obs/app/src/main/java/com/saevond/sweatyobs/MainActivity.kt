@@ -48,6 +48,9 @@ class MainActivity : Activity() {
     private const val YOUTUBE_DASHBOARD_URL = "https://studio.youtube.com/"
     private const val KICK_DASHBOARD_URL = "https://dashboard.kick.com/stream"
   }
+
+  private fun formatMbps(value: Double): String = String.format(Locale.US, "%.1f", value)
+
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -64,7 +67,7 @@ class MainActivity : Activity() {
     }
     status = TextView(this).apply {
       id = R.id.connection_status
-      text = "Ready for test — no broadcast is sent."
+      text = "Ready. The PS5 network test is diagnostic only; GO LIVE is required to publish or burn in the overlay."
       textSize = 18f
       setPadding(12, 16, 12, 24)
       accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -75,7 +78,7 @@ class MainActivity : Activity() {
     }
     val destinations = TextView(this).apply {
       id = R.id.output_upload_budget
-      text = "Each RTMPS output has an independent retry loop. At 1080p, this encoder sends 8 Mbps video + 128 kbps AAC to each destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule. Check measured upload and output health; lower bitrate or destinations if needed."
+      text = "Upload budget is calculated from the selected quality and platform count. It is a planning estimate, not a speed test."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
     val enableTwitch = CheckBox(this).apply {
@@ -84,7 +87,8 @@ class MainActivity : Activity() {
     }
     val enableYouTube = CheckBox(this).apply {
       text = "Also stream to YouTube"
-      isChecked = outputPrefs.getBoolean("youtube_enabled", false)
+      isChecked = outputPrefs.getBoolean("youtube_enabled",
+        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("youtube_key")))
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
@@ -117,7 +121,8 @@ class MainActivity : Activity() {
     }
     val enableKick = CheckBox(this).apply {
       text = "Also stream to Kick"
-      isChecked = outputPrefs.getBoolean("kick_enabled", false)
+      isChecked = outputPrefs.getBoolean("kick_enabled",
+        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("kick_key")))
     }
     val kickServer = EditText(this).apply {
       id = R.id.kick_server
@@ -152,9 +157,17 @@ class MainActivity : Activity() {
       text = "Add the @saevond live overlay to the stream"
       isChecked = outputPrefs.getBoolean("brand_overlay", true)
     }
+    val qualityLabels = listOf("Stable multi-stream · up to 720p · 4.5 Mbps", "High quality · up to 1080p · 8 Mbps")
+    val overlayQuality = Spinner(this).apply {
+      id = R.id.overlay_quality
+      adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, qualityLabels).also {
+        it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+      }
+      setSelection(if (outputPrefs.getString("overlay_profile", "stable_720") == "high_1080") 1 else 0)
+    }
     val reconnectOutputs = Button(this).apply { text = "Reconnect stream outputs" }
     val videoModeNote = TextView(this).apply {
-      text = "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
+      text = "The overlay is burned into public-stream video; the network test never publishes it. Stats, chat, and alerts are simulated. Overlay mode hardware-encodes up to the chosen size; it is not 4K. Pass-through leaves the PS5 bitrate/resolution unchanged. Overlay and quality choices apply next time you start streaming."
     }
     val metadataTitle = EditText(this).apply {
       hint = "Stream title (example: PS5 live gameplay and ranked matches)"
@@ -311,23 +324,71 @@ class MainActivity : Activity() {
       setSingleLine(true)
     }
     val saveTwitchKey = Button(this).apply { text = "Save Twitch key securely" }
-    val goLive = Button(this).apply { text = "START MULTISTREAM (public broadcast)" }
-    val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
+    val outputReadiness = TextView(this).apply {
+      id = R.id.output_readiness
+      accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+    }
+    val goLive = Button(this).apply {
+      id = R.id.start_multistream
+      text = "GO LIVE TO SELECTED PLATFORMS"
+      textSize = 18f
+      setPadding(12, 18, 12, 18)
+    }
+    val startLan = Button(this).apply {
+      id = R.id.start_network_test
+      text = "PS5 ingest test only — no public stream or overlay"
+    }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
-    listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
+    fun refreshOutputSummary() {
+      val secretStore = SecretStore(this)
+      val selected = listOf(
+        Triple("Twitch", enableTwitch.isChecked, RtmpsPublisher.keyValid(secretStore.get("rtmps"))),
+        Triple("YouTube", enableYouTube.isChecked,
+          RtmpsPublisher.keyValid(secretStore.get("youtube_key")) &&
+            RtmpsPublisher.endpointValid(outputPrefs.getString("youtube_server", "").orEmpty())),
+        Triple("Kick", enableKick.isChecked,
+          RtmpsPublisher.keyValid(secretStore.get("kick_key")) &&
+            RtmpsPublisher.endpointValid(outputPrefs.getString("kick_server", "").orEmpty()))
+      )
+      val selectedCount = selected.count { it.second }
+      val states = selected.joinToString("   ·   ") { (label, enabled, ready) ->
+        when {
+          !enabled -> "$label off"
+          ready -> "$label configured · platform not tested yet"
+          else -> "$label selected · missing key or RTMPS URL"
+        }
+      }
+      val quality = if (overlayQuality.selectedItemPosition == 1) OverlayEncodingProfile.HIGH_1080P
+        else OverlayEncodingProfile.STABLE_720P
+      val twitchNotice = if (quality == OverlayEncodingProfile.HIGH_1080P && enableTwitch.isChecked)
+        "\nTwitch lists 6 Mbps for 1080p60; the shared 8 Mbps profile is above that guide."
+        else ""
+      outputReadiness.text = "Next public stream · local setup only: $states$twitchNotice"
+      val perDestination = quality.videoBitrateMbps + 0.128
+      val aggregate = perDestination * selectedCount
+      val capacityTarget = aggregate * 2.0
+      val qualityLabel = if (quality == OverlayEncodingProfile.HIGH_1080P) "1080p / 8 Mbps" else "720p / 4.5 Mbps"
+      destinations.text = "Overlay budget ($qualityLabel): ${formatMbps(perDestination)} Mbps per selected destination; " +
+        "${formatMbps(aggregate)} Mbps aggregate payload for $selectedCount selected. For a conservative 50% upload-utilization ceiling, target more than " +
+        "${formatMbps(capacityTarget)} Mbps sustained upload in total. This is a planning estimate, not a speed test."
+    }
+    refreshOutputSummary()
+
+    listOf(status, phoneIp, ps5Ip, outputReadiness, destinations,
+      enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, openYouTubeDashboard, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
       enableKick, openKickDashboard, kickServer, saveKickServer, kickKey, saveKick, kickOutputStatus,
-      enableBrandOverlay, reconnectOutputs, videoModeNote,
+      enableBrandOverlay, overlayQuality, videoModeNote, goLive, reconnectOutputs,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
-      privacy, checkSafety, safetyReading, ps5Ip,
+      privacy, checkSafety, safetyReading,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
       browseRemotePopTrap, copyStreamCredit, copyTrackCredits, addClub, addDubstep, addPopTrap,
       shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard,
-      startLan, goLive, stopLan, status)
+      startLan, stopLan)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
 
@@ -423,15 +484,25 @@ class MainActivity : Activity() {
     }
     enableTwitch.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
+      refreshOutputSummary()
     }
     enableYouTube.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("youtube_enabled", checked).apply()
+      refreshOutputSummary()
     }
     enableKick.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
+      refreshOutputSummary()
     }
     enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
+    }
+    overlayQuality.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+      override fun onNothingSelected(parent: AdapterView<*>?) {}
+      override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+        outputPrefs.edit().putString("overlay_profile", if (position == 1) "high_1080" else "stable_720").apply()
+        refreshOutputSummary()
+      }
     }
     saveYouTubeServer.setOnClickListener {
       val server = youtubeServer.text.toString().trim()
@@ -441,6 +512,7 @@ class MainActivity : Activity() {
         outputPrefs.edit().putString("youtube_server", server).apply()
         youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
         status.text = "YouTube RTMPS server URL saved on this phone. It has not been tested with YouTube."
+        refreshOutputSummary()
       }
     }
     saveYouTube.setOnClickListener {
@@ -450,8 +522,11 @@ class MainActivity : Activity() {
       } else try {
         SecretStore(this).put("youtube_key", key)
         youtubeKey.text.clear()
+        outputPrefs.edit().putBoolean("youtube_enabled", true).apply()
+        enableYouTube.isChecked = true
         youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
-        status.text = "YouTube key encrypted and saved on this phone. No stream has started."
+        status.text = "YouTube key saved securely and YouTube selected for the next public stream. No stream has started."
+        refreshOutputSummary()
       } catch (error: Exception) {
         status.text = "Could not securely save YouTube key (" + error.javaClass.simpleName + ")."
       }
@@ -464,6 +539,7 @@ class MainActivity : Activity() {
         outputPrefs.edit().putString("kick_server", server).apply()
         kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
         status.text = "Kick RTMPS server URL saved on this phone. It has not been tested with Kick."
+        refreshOutputSummary()
       }
     }
     saveKick.setOnClickListener {
@@ -473,8 +549,11 @@ class MainActivity : Activity() {
       } else try {
         SecretStore(this).put("kick_key", key)
         kickKey.text.clear()
+        outputPrefs.edit().putBoolean("kick_enabled", true).apply()
+        enableKick.isChecked = true
         kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
-        status.text = "Kick key encrypted and saved on this phone. No stream has started."
+        status.text = "Kick key saved securely and Kick selected for the next public stream. No stream has started."
+        refreshOutputSummary()
       } catch (error: Exception) {
         status.text = "Could not securely save Kick key (" + error.javaClass.simpleName + ")."
       }
@@ -614,13 +693,14 @@ class MainActivity : Activity() {
         twitchKey.text.clear()
         status.text = "Twitch key stored with Android Keystore. Nothing is broadcasting."
         twitchStatus.text = "Twitch key saved locally; Twitch will check it when a stream starts."
+        refreshOutputSummary()
       } catch (error: Exception) {
         status.text = "Could not securely save Twitch key (" + error.javaClass.simpleName + ")."
       }
     }
 
     goLive.setOnClickListener {
-      status.text = "Public multistream requested. Checking selected platforms, phone, and PS5 address…"
+      status.text = "Checking selected public destinations and PS5 source…"
       val ip = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(ip)) {
         status.text = "Enter the PS5 local IPv4 address first."
@@ -644,20 +724,21 @@ class MainActivity : Activity() {
         status.text = "Save a valid ${missing.label} RTMPS server URL and stream key before going live."
         return@setOnClickListener
       }
+      val overlayLabel = if (enableBrandOverlay.isChecked) "@saevond overlay enabled" else "original PS5 video pass-through"
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
       try {
         startForegroundService(Intent(this, Ps5LanService::class.java).apply {
           action = Ps5LanService.ACTION_START_TWITCH
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
-        status.text = "Waiting for PS5 H.264/AAC RTMP feed. Selected outputs publish independently and retry if a connection drops."
+        status.text = "Armed for ${destinations.joinToString(" + ") { it.label }} · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media; each destination reconnects independently."
       } catch (error: RuntimeException) {
         status.text = "Android could not start public test: " + error.javaClass.simpleName
       }
     }
 
     startLan.setOnClickListener {
-      status.text = "Start button tapped — checking PS5 address…"
+      status.text = "Checking the diagnostic-only PS5 ingest. No platform stream or overlay will start."
       val address = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(address)) {
         status.text = "Enter the PS5's private IPv4 address."

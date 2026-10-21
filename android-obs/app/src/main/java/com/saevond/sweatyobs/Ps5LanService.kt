@@ -209,15 +209,17 @@ class Ps5LanService : Service() {
       outputStatus = outputPublishers.joinToString(" | ") { it.snapshot().summary() }
       liveGate = MediaRelayGate()
       sourceVideoConfig = null
-      brandOverlayRequested = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
-        .getBoolean("brand_overlay", true)
+      val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+      brandOverlayRequested = outputPrefs.getBoolean("brand_overlay", true)
+      val overlayProfile = OverlayEncodingProfile.fromPreference(outputPrefs.getString("overlay_profile", "stable_720"))
       brandOverlay?.close()
       brandOverlay = if (brandOverlayRequested) {
         runCatching {
           BrandVideoOverlay(
             onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
             onStatus = { message -> handler.post { if (!stopping) setNotification(message) } },
-            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } })
+            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } },
+            encodingProfile = overlayProfile)
         }.onFailure { error ->
           brandOverlayRequested = false
           handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
@@ -362,8 +364,15 @@ class Ps5LanService : Service() {
       receiverRunning = true
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
-      setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
-        (if (trackReady) "ready to auto-start on Twitch publish" else "not loaded")
+      val selectedPlatforms = outputPublishers.joinToString(" + ") { it.snapshot().label }
+      val overlayStatus = when {
+        !publicTest -> "diagnostic only; no overlay"
+        !brandOverlayRequested -> "original-video pass-through"
+        brandOverlay == null -> "overlay unavailable; original-video pass-through"
+        else -> "@saevond overlay starting"
+      }
+      setNotification(if (publicTest) "Public stream armed · $selectedPlatforms · $overlayStatus · waiting for PS5 RTMP on $local:1935. Music " +
+        (if (trackReady) "ready after a platform accepts publish" else "not loaded")
         else "Waiting for PS5 at $local:1935 — diagnostic only")
       if (publicTest) {
         val bridgeToken = SecretStore(this).get("bridge_token")
@@ -466,7 +475,7 @@ class Ps5LanService : Service() {
 
   private fun notification(message: String) = Notification.Builder(this, CHANNEL)
     .setSmallIcon(android.R.drawable.stat_sys_upload)
-    .setContentTitle("SweatyClanker PS5 ingest test")
+    .setContentTitle(if (publicTest) "SweatyClanker multistream" else "SweatyClanker PS5 ingest diagnostic")
     .setContentText(message)
     .setOngoing(true)
     .build()
@@ -518,10 +527,10 @@ class Ps5LanService : Service() {
       if (prefs.getBoolean("twitch_enabled", true)) {
         add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
       }
-      if (prefs.getBoolean("youtube_enabled", false)) {
+      if (prefs.getBoolean("youtube_enabled", RtmpsPublisher.keyValid(secrets.get("youtube_key")))) {
         add(RtmpDestination("youtube", "YouTube", prefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
       }
-      if (prefs.getBoolean("kick_enabled", false)) {
+      if (prefs.getBoolean("kick_enabled", RtmpsPublisher.keyValid(secrets.get("kick_key")))) {
         add(RtmpDestination("kick", "Kick", prefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
     }

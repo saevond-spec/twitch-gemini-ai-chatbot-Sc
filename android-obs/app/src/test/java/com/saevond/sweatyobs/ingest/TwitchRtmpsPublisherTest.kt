@@ -1,6 +1,7 @@
 package com.saevond.sweatyobs.ingest
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import org.junit.Assert.*
 import org.junit.Test
 class TwitchRtmpsPublisherTest {
@@ -29,6 +30,17 @@ class TwitchRtmpsPublisherTest {
      assertArrayEquals(bytes,parsed.data)
    }
  }
+ @Test fun largeFrameUsesOneSocketWriteAndRetainsDefaultChunkFraming() {
+   val payload = ByteArray(24 * 1024) { (it * 31).toByte() }
+   val media = RtmpMessage(9, 30000, 1, payload)
+   val output = CountingOutputStream()
+   sendRtmpMedia(output, media)
+   assertEquals("One coalesced write per RTMP media message", 1, output.writeCalls)
+   val parsed = RtmpChunkReader(ByteArrayInputStream(output.bytes.toByteArray())).nextMessage()
+   assertEquals(media.timestamp, parsed.timestamp)
+   assertEquals(media.type, parsed.type)
+   assertArrayEquals(payload, parsed.data)
+ }
  @Test fun blocksPrivateDnsDestinations() {
    val host = java.net.InetAddress.getByName("192.168.1.105")
    val loop = java.net.InetAddress.getByName("127.0.0.1")
@@ -43,5 +55,18 @@ class TwitchRtmpsPublisherTest {
    val parsed=RtmpChunkReader(ByteArrayInputStream(out.toByteArray())).nextMessage()
    assertEquals(msg.timestamp,parsed.timestamp)
    assertArrayEquals(msg.data,parsed.data)
+ }
+
+ private class CountingOutputStream : OutputStream() {
+   val bytes = ByteArrayOutputStream()
+   var writeCalls = 0
+   override fun write(value: Int) {
+     writeCalls++
+     bytes.write(value)
+   }
+   override fun write(data: ByteArray, offset: Int, length: Int) {
+     writeCalls++
+     bytes.write(data, offset, length)
+   }
  }
 }
