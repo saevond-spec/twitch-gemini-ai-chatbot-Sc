@@ -835,7 +835,7 @@ class MainActivity : Activity() {
           .putString("twitch_chat_channel", channel)
           .putBoolean("twitch_chat_enabled", enableLiveTwitchChat.isChecked)
           .apply()
-        if (token.isNotBlank()) SecretStore(this).put("twitch_chat_token", token)
+        token?.takeIf { it.isNotBlank() }?.let { SecretStore(this).put("twitch_chat_token", it) }
         twitchChatToken.text.clear()
         val saved = SecretStore(this).get("twitch_chat_token").isNotBlank()
         twitchChatCredentialStatus.text = if (saved)
