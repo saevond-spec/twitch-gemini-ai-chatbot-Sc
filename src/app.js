@@ -320,8 +320,15 @@ app.get('/auth/callback', async (req, res) => {
   try {
     const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
     await exchangeCodeForToken(code, redirectUri);
-    if (!botInitialized) await initializeBot();
-    else log.info('Bot already running, skipping re‑initialization');
+    if (!botInitialized) {
+      await initializeBot();
+    } else {
+      log.info('Bot already running, refreshing OAuth-dependent features in place');
+      if (chatterWatcher) {
+        const resumed = await chatterWatcher.resumeAfterAuthorization();
+        log.info(`Chatter watcher OAuth refresh result: resumed=${resumed}`);
+      }
+    }
     res.send(`SweatyClanker bot authorization successful for ${configuredBotLogin()}. You may close this window.`);
   } catch (err) {
     log.error('Auth callback failed', err);

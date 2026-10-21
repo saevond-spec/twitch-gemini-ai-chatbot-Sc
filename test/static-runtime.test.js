@@ -373,3 +373,14 @@ test('reliable join welcomes use IRC plus Get Chatters fallback', () => {
   assert.match(watcher, /missing_moderator_read_chatters/);
   assert.match(watcher, /rejoinSuppressMs/);
 });
+
+
+test('OAuth callback resumes chatter watcher in place', () => {
+  const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
+  const watcher = fs.readFileSync(path.join(root, 'src/twitch/chatterWatcher.js'), 'utf8');
+
+  assert.match(app, /resumeAfterAuthorization\(\)/);
+  assert.match(app, /Bot already running, refreshing OAuth-dependent features in place/);
+  assert.match(watcher, /async resumeAfterAuthorization\(\)/);
+  assert.match(watcher, /baselineReady = false/);
+});

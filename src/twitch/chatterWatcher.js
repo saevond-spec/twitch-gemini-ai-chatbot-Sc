@@ -148,6 +148,19 @@ export class ChatterWatcher {
     log.info(`Chatter watcher started (poll=${Math.round(this.pollMs / 1000)}s)`);
   }
 
+  async resumeAfterAuthorization() {
+    if (!this.running) return false;
+    this.disabledReason = null;
+    for (const state of this.state.values()) {
+      state.baselineReady = false;
+      state.current.clear();
+      state.seenAt.clear();
+    }
+    log.info('Chatter watcher authorization refreshed; rebuilding baseline');
+    await this.tick();
+    return !this.disabledReason;
+  }
+
   stop() {
     this.running = false;
     if (this.timer) clearInterval(this.timer);
