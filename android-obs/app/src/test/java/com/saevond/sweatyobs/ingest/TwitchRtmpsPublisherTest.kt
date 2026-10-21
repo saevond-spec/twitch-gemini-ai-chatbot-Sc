@@ -47,17 +47,38 @@ class TwitchRtmpsPublisherTest {
    assertEquals(media.type, parsed.type)
    assertArrayEquals(payload, parsed.data)
  }
- @Test fun startupDeadlineWatchdogCancelsBlockingOperation() {
+ @Test fun successfulSetupWinsAgainstItsPendingDeadline() {
    val operationClosed = CountDownLatch(1)
    val cancellation = ConnectionCancellation()
    cancellation.setCancelAction { operationClosed.countDown() }
-   val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(50)
-   val watchdog = RtmpsPublisher.scheduleDeadlineCancellation(deadline, cancellation)
+   val deadline = StartupDeadline(
+     System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500), cancellation
+   )
    try {
-     assertTrue("deadline must cancel the active operation", operationClosed.await(2, TimeUnit.SECONDS))
+     assertFalse("watchdog must not expire early", operationClosed.await(40, TimeUnit.MILLISECONDS))
+     assertTrue("setup should complete before the deadline", deadline.complete())
+     deadline.expire() // Models a watchdog task that started before cancel(false) could stop it.
+     assertFalse("completed setup must not be closed by a late timer",
+       operationClosed.await(600, TimeUnit.MILLISECONDS))
+     assertFalse(cancellation.isCancelled)
+   } finally {
+     deadline.cancel()
+   }
+ }
+
+ @Test fun expiredSetupDeadlineCancelsAndCannotBeCompleted() {
+   val operationClosed = CountDownLatch(1)
+   val cancellation = ConnectionCancellation()
+   cancellation.setCancelAction { operationClosed.countDown() }
+   val deadline = StartupDeadline(
+     System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(30), cancellation
+   )
+   try {
+     assertTrue("deadline must close the active operation", operationClosed.await(2, TimeUnit.SECONDS))
+     assertFalse("expired startup cannot transition to success", deadline.complete())
      assertTrue(cancellation.isCancelled)
    } finally {
-     watchdog.cancel(false)
+     deadline.cancel()
    }
  }
 

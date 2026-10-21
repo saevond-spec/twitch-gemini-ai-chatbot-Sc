@@ -86,6 +86,10 @@ class ReliableRtmpOutput(
   private data class StartGeneration(val media: Long, val connection: Long)
   private val lock = Object()
   private val queue = ArrayDeque<Pending>()
+  /** Prevent repeated UI/source resets from queuing concurrent closes for one session. */
+  private val closingPublishers = java.util.Collections.newSetFromMap(
+    java.util.IdentityHashMap<MediaPublisher, Boolean>()
+  )
   private var queueBytes = 0
   private var avcConfig: RtmpMessage? = null
   private var aacConfig: RtmpMessage? = null
@@ -159,8 +163,8 @@ class ReliableRtmpOutput(
       lock.notifyAll()
     }
     // Overflow while CONNECTING must not cancel RTMPS/TLS setup. Once LIVE,
-    // close only that session so the worker can resume from a clean keyframe.
-    publisherToAbort?.close()
+    // abort that session off the PS5 ingest callback so a slow socket close cannot delay other outputs.
+    abortPublisherAsync(publisherToAbort)
     if (queueReset) notifySnapshot()
   }
 
@@ -185,9 +189,9 @@ class ReliableRtmpOutput(
       if (state != "CONNECTING") state = "WAITING FOR KEYFRAME"
       lock.notifyAll()
     }
-    // Stop a live publisher for the ended source; a handshake in progress can finish,
+    // Stop the live publisher off the ingest callback; a handshake in progress can finish,
     // then waits for this source session's codec headers and keyframe.
-    publisherToAbort?.close()
+    abortPublisherAsync(publisherToAbort)
     notifySnapshot()
   }
 
@@ -203,7 +207,7 @@ class ReliableRtmpOutput(
       state = "WAITING FOR KEYFRAME"
       lock.notifyAll()
     }
-    publisher?.close()
+    abortPublisherAsync(publisher)
     notifySnapshot()
   }
 
@@ -434,6 +438,23 @@ class ReliableRtmpOutput(
         bytesPerSecond = rateWindowBytes * 1000 / max(1L, elapsed)
         rateWindowAt = now
         rateWindowBytes = 0
+      }
+    }
+  }
+
+  /**
+   * Socket close can block in the platform TLS provider. Keep it away from the LAN ingest
+   * callback, and coalesce repeated abort requests for the same publisher instance.
+   */
+  private fun abortPublisherAsync(candidate: MediaPublisher?) {
+    if (candidate == null) return
+    val shouldClose = synchronized(lock) { closingPublishers.add(candidate) }
+    if (!shouldClose) return
+    thread(name = "SweatyOBS-${destination.id}-abort", isDaemon = true) {
+      try {
+        runCatching { candidate.close() }
+      } finally {
+        synchronized(lock) { closingPublishers.remove(candidate) }
       }
     }
   }

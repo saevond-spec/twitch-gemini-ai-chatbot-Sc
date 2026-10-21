@@ -70,15 +70,15 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
-    onView(withText("Also stream to YouTube")).check(matches(isChecked()))
-    assertTrue(outputPrefs.getBoolean("youtube_enabled", false))
+    onView(withText("Also stream to YouTube")).check(matches(isNotChecked()))
+    assertFalse(outputPrefs.getBoolean("youtube_enabled", true))
 
     onView(withId(R.id.kick_stream_key)).perform(scrollTo(), replaceText(kickKey), closeSoftKeyboard())
     onView(withId(R.id.save_kick_key)).perform(scrollTo(), click())
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
-    onView(withText("Also stream to Kick")).check(matches(isChecked()))
-    assertTrue(outputPrefs.getBoolean("kick_enabled", false))
+    onView(withText("Also stream to Kick")).check(matches(isNotChecked()))
+    assertFalse(outputPrefs.getBoolean("kick_enabled", true))
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("No stream has started"))))
 
     val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
@@ -103,12 +103,21 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_server_status)).check(matches(withText(containsString("saved on this phone"))))
     onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+    onView(withText("Also stream to YouTube")).check(matches(isNotChecked()))
+    onView(withText("Also stream to Kick")).check(matches(isNotChecked()))
+
+    onView(withText("Also stream to YouTube")).perform(scrollTo(), click())
+    onView(withText("Also stream to Kick")).perform(scrollTo(), click())
+    assertTrue(outputPrefs.getBoolean("youtube_enabled", false))
+    assertTrue(outputPrefs.getBoolean("kick_enabled", false))
 
     activityRule.scenario.recreate()
     assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
     onView(withId(R.id.youtube_server)).check(matches(withText(equalToIgnoringCase("rtmps://youtube.example.test/live2"))))
     onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
+    onView(withText("Also stream to YouTube")).check(matches(isChecked()))
+    onView(withText("Also stream to Kick")).check(matches(isChecked()))
   }
 
   @Test fun twitchChatTokenIsSavedEncryptedAndLiveChatIsOptIn() {

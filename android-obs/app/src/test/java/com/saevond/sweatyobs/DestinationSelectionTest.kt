@@ -27,8 +27,9 @@ class DestinationSelectionTest {
     assertTrue(initial)
     assertEquals(true, persisted)
 
-    val explicitOff = initializeDestinationSelection(false, configuredDefault = true) { persisted = it }
+    persisted = false
+    val explicitOff = initializeDestinationSelection(persisted, configuredDefault = true) { persisted = it }
     assertFalse(explicitOff)
-    assertEquals(true, persisted)
+    assertEquals(false, persisted)
   }
 }

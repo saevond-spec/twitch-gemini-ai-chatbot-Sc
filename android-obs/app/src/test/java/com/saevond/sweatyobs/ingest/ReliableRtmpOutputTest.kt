@@ -582,6 +582,45 @@ class ReliableRtmpOutputTest {
     } finally { output.close() }
   }
 
+  @Test fun liveOverflowDoesNotWaitForPublisherClose() {
+    val enteredPublish = CountDownLatch(1)
+    val closeEntered = CountDownLatch(1)
+    val allowCloseToFinish = CountDownLatch(1)
+    val releasePublish = CountDownLatch(1)
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() {}
+        override fun publish(media: RtmpMessage) {
+          enteredPublish.countDown()
+          releasePublish.await(2, TimeUnit.SECONDS)
+        }
+        override fun close() {
+          closeEntered.countDown()
+          allowCloseToFinish.await(2, TimeUnit.SECONDS)
+          releasePublish.countDown()
+        }
+      }
+    }, retryDelaysMs = longArrayOf(1), waitMs = { Thread.sleep(1) })
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("publisher should enter live send", enteredPublish.await(2, TimeUnit.SECONDS))
+      val started = System.nanoTime()
+      repeat(40) { i ->
+        output.offer(RtmpMessage(9, i * 100L + 100L, 1, ByteArray(80_000) { 1 }))
+      }
+      val elapsedMs = (System.nanoTime() - started) / 1_000_000
+      assertTrue("overflow handling must not wait for a slow socket close", elapsedMs < 500)
+      assertTrue("the destination close should run asynchronously", closeEntered.await(1, TimeUnit.SECONDS))
+    } finally {
+      allowCloseToFinish.countDown()
+      releasePublish.countDown()
+      output.close()
+    }
+  }
+
   @Test fun retryBackoffIncreasesAndCaps() {
     assertEquals(1_000L, ReliableRtmpOutput.retryDelayMs(1))
     assertEquals(2_000L, ReliableRtmpOutput.retryDelayMs(2))
