@@ -2,6 +2,11 @@ package com.saevond.sweatyobs.ingest
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.*
 import org.junit.Test
 class TwitchRtmpsPublisherTest {
@@ -41,6 +46,40 @@ class TwitchRtmpsPublisherTest {
    assertEquals(media.type, parsed.type)
    assertArrayEquals(payload, parsed.data)
  }
+ @Test fun closingPublisherCancelsBlockedDnsLookupAndConnectWorker() {
+   val lookupStarted = CountDownLatch(1)
+   val cancellationObserved = CountDownLatch(1)
+   val failed = AtomicBoolean(false)
+   val publisher = RtmpsPublisher(
+     "rtmps://ingest.example.com:443/app",
+     "sandbox-key-12345",
+     HostAddressResolver { _, timeoutMs, cancellation ->
+       lookupStarted.countDown()
+       cancellation.setCancelAction { cancellationObserved.countDown() }
+       if (!cancellationObserved.await(timeoutMs.toLong(), TimeUnit.MILLISECONDS)) {
+         throw SocketTimeoutException("test resolver timed out")
+       }
+       cancellation.throwIfCancelled()
+       arrayOf(InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)))
+     }
+   )
+   val worker = Thread {
+     try { publisher.connect() } catch (_: Exception) { failed.set(true) }
+   }
+   try {
+     worker.start()
+     assertTrue("DNS lookup should begin", lookupStarted.await(2, TimeUnit.SECONDS))
+     publisher.close()
+     assertTrue("close must signal the active DNS lookup", cancellationObserved.await(1, TimeUnit.SECONDS))
+     worker.join(1_000)
+     assertFalse("connect worker must finish after DNS cancellation", worker.isAlive)
+     assertTrue("connect must report cancellation", failed.get())
+   } finally {
+     publisher.close()
+     worker.join(1_000)
+   }
+ }
+
  @Test fun blocksPrivateDnsDestinations() {
    val host = java.net.InetAddress.getByName("192.168.1.105")
    val loop = java.net.InetAddress.getByName("127.0.0.1")

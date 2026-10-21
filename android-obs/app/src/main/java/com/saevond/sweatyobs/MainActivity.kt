@@ -244,7 +244,10 @@ class MainActivity : Activity() {
     }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
-      isChecked = outputPrefs.getBoolean("twitch_enabled", true)
+      isChecked = outputPrefs.getBoolean(
+        "twitch_enabled",
+        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("rtmps"))
+      )
     }
     val enableYouTube = CheckBox(this).apply {
       text = "Also stream to YouTube"

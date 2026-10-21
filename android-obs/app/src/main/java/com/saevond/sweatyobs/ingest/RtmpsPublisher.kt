@@ -1,7 +1,12 @@
 package com.saevond.sweatyobs.ingest
 
+import android.net.DnsResolver
+import android.os.CancellationSignal
 import java.io.ByteArrayOutputStream
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.ConnectException
 import java.net.InetAddress
@@ -12,10 +17,154 @@ import java.net.URI
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import kotlin.concurrent.thread
+
+/** Cancellation shared by DNS, TCP connect, TLS, and RTMP negotiation. */
+internal class ConnectionCancellation {
+  private val lock = Any()
+  private var cancelled = false
+  private var cancelAction: (() -> Unit)? = null
+
+  val isCancelled: Boolean get() = synchronized(lock) { cancelled }
+
+  fun setCancelAction(action: () -> Unit) {
+    val cancelNow = synchronized(lock) {
+      if (cancelled) true else {
+        cancelAction = action
+        false
+      }
+    }
+    if (cancelNow) runCatching(action)
+  }
+
+  fun clearCancelAction() {
+    synchronized(lock) { cancelAction = null }
+  }
+
+  fun cancel() {
+    val action = synchronized(lock) {
+      if (cancelled) null else {
+        cancelled = true
+        cancelAction.also { cancelAction = null }
+      }
+    }
+    runCatching { action?.invoke() }
+  }
+
+  fun throwIfCancelled() {
+    if (isCancelled) throw InterruptedIOException("RTMPS connection cancelled")
+  }
+}
+
+internal fun interface HostAddressResolver {
+  fun resolve(host: String, timeoutMs: Int, cancellation: ConnectionCancellation): Array<InetAddress>
+}
+
+/** Uses Android's cancellable system DNS resolver instead of blocking getAllByName(). */
+internal object AndroidHostAddressResolver : HostAddressResolver {
+  private val directExecutor = Executor { command -> command.run() }
+
+  override fun resolve(
+    host: String,
+    timeoutMs: Int,
+    cancellation: ConnectionCancellation
+  ): Array<InetAddress> {
+    require(timeoutMs > 0)
+    cancellation.throwIfCancelled()
+    val signal = CancellationSignal()
+    val completed = CountDownLatch(1)
+    var addresses: Array<InetAddress>? = null
+    var failure: IOException? = null
+    cancellation.setCancelAction {
+      signal.cancel()
+      completed.countDown()
+    }
+    try {
+      cancellation.throwIfCancelled()
+      DnsResolver.getInstance().query(
+        null,
+        host,
+        DnsResolver.FLAG_EMPTY,
+        directExecutor,
+        signal,
+        object : DnsResolver.Callback<List<InetAddress>> {
+          override fun onAnswer(answer: List<InetAddress>, rcode: Int) {
+            if (rcode == 0) addresses = answer.toTypedArray()
+            else failure = UnknownHostException("DNS returned response code $rcode")
+            completed.countDown()
+          }
+
+          override fun onError(error: DnsResolver.DnsException) {
+            failure = IOException("DNS resolution failed", error)
+            completed.countDown()
+          }
+        }
+      )
+    } catch (error: Exception) {
+      failure = IOException("DNS resolution failed", error)
+      completed.countDown()
+    }
+
+    val finished = try {
+      completed.await(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+    } catch (error: InterruptedException) {
+      Thread.currentThread().interrupt()
+      cancellation.clearCancelAction()
+      signal.cancel()
+      throw InterruptedIOException("DNS resolution interrupted").also { it.initCause(error) }
+    }
+    if (!finished) {
+      cancellation.clearCancelAction()
+      signal.cancel()
+      throw SocketTimeoutException("DNS resolution timed out")
+    }
+    cancellation.clearCancelAction()
+    cancellation.throwIfCancelled()
+    failure?.let { throw it }
+    return addresses?.takeIf { it.isNotEmpty() } ?: throw UnknownHostException("DNS returned no addresses")
+  }
+}
+
+/** Adds one deadline to all reads in the RTMP handshake and publish negotiation. */
+private class DeadlineInputStream(
+  input: InputStream,
+  private val socket: SSLSocket,
+  deadline: Long
+) : FilterInputStream(input) {
+  @Volatile private var deadlineNanos: Long = deadline
+
+  fun disableDeadline() {
+    deadlineNanos = 0L
+  }
+
+  private fun applyReadDeadline() {
+    val deadline = deadlineNanos
+    if (deadline == 0L) {
+      socket.soTimeout = 0
+      return
+    }
+    val remainingNanos = deadline - System.nanoTime()
+    if (remainingNanos <= 0) throw SocketTimeoutException("RTMPS startup deadline exceeded")
+    socket.soTimeout = ((remainingNanos + 999_999L) / 1_000_000L)
+      .coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+  }
+
+  override fun read(): Int {
+    applyReadDeadline()
+    return super.read()
+  }
+
+  override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+    applyReadDeadline()
+    return super.read(buffer, offset, length)
+  }
+}
 
 /** User-provided secure RTMPS endpoint and private platform stream key. */
 data class RtmpDestination(val id: String, val label: String, val serverUrl: String, val key: String) {
@@ -24,7 +173,11 @@ data class RtmpDestination(val id: String, val label: String, val serverUrl: Str
 }
 
 /** RTMPS publisher shared by Twitch, YouTube, and Kick. */
-class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublisher {
+class RtmpsPublisher internal constructor(
+  serverUrl: String,
+  private val key: String,
+  private val addressResolver: HostAddressResolver = AndroidHostAddressResolver
+) : MediaPublisher {
   companion object {
     const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
     private const val CONNECT_TIMEOUT_MS = 15_000
@@ -42,22 +195,26 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     /** TLS-only reachability probe: opens and closes a secure socket without a key or media. */
     fun testTlsEndpoint(serverUrl: String): String {
       val endpoint = parseEndpoint(serverUrl) ?: return "INVALID_URL"
+      val deadline = System.nanoTime() + CONNECT_TIMEOUT_MS * 1_000_000L
+      val cancellation = ConnectionCancellation()
       val addresses = try {
-        InetAddress.getAllByName(endpoint.host)
-      } catch (_: UnknownHostException) {
-        return "DNS_FAILED"
-      } catch (_: Exception) {
-        return "DNS_FAILED"
+        AndroidHostAddressResolver.resolve(
+          endpoint.host, remainingTimeoutMs(deadline), cancellation
+        )
+      } catch (error: Exception) {
+        return if (error is SocketTimeoutException) "CONNECT_TIMEOUT" else "DNS_FAILED"
       }
-      if (addresses.isEmpty()) return "DNS_FAILED"
       if (addresses.any { !isPublicDestination(it) }) return "BLOCKED_ADDRESS"
       return try {
-        val tls = tryResolvedAddresses(addresses) { address, remainingMs ->
-          openTlsSocket(endpoint, address, remainingMs)
+        val remaining = remainingTimeoutMs(deadline)
+        val tls = tryResolvedAddresses(addresses, remaining) { address, remainingMs ->
+          openTlsSocket(endpoint, address, remainingMs, cancellation)
         }
+        cancellation.clearCancelAction()
         tls.close()
         "TLS_OK"
       } catch (error: Exception) {
+        cancellation.cancel()
         var root: Throwable = error
         while (root.cause != null && root.cause !== root) root = root.cause!!
         when (root) {
@@ -100,6 +257,13 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       throw IOException("Could not connect to the streaming server", lastFailure)
     }
 
+    private fun remainingTimeoutMs(deadlineNanos: Long): Int {
+      val remaining = deadlineNanos - System.nanoTime()
+      if (remaining <= 0L) throw SocketTimeoutException("RTMPS startup deadline exceeded")
+      return ((remaining + 999_999L) / 1_000_000L)
+        .coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
     private fun parseEndpoint(value: String): Endpoint? {
       return try {
         val uri = URI(value.trim())
@@ -116,24 +280,41 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
 
     private data class Endpoint(val host: String, val port: Int, val path: String, val tcUrl: String)
 
-    private fun openTlsSocket(endpoint: Endpoint, address: InetAddress, remainingMs: Int): SSLSocket {
+    private fun openTlsSocket(
+      endpoint: Endpoint,
+      address: InetAddress,
+      remainingMs: Int,
+      cancellation: ConnectionCancellation
+    ): SSLSocket {
       val deadline = System.nanoTime() + remainingMs * 1_000_000L
       val plain = Socket()
       var tls: SSLSocket? = null
+      cancellation.setCancelAction {
+        runCatching { tls?.close() }
+        runCatching { plain.close() }
+      }
       try {
+        cancellation.throwIfCancelled()
         plain.tcpNoDelay = true
         plain.keepAlive = true
         plain.connect(InetSocketAddress(address, endpoint.port), minOf(5_000, remainingMs))
+        cancellation.throwIfCancelled()
         val tlsRemaining = ((deadline - System.nanoTime()) / 1_000_000L).toInt()
         if (tlsRemaining <= 0) throw SocketTimeoutException("RTMPS connect budget exhausted")
         tls = (SSLSocketFactory.getDefault() as SSLSocketFactory)
           .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
+        cancellation.setCancelAction {
+          runCatching { tls?.close() }
+          runCatching { plain.close() }
+        }
         tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
         tls.soTimeout = minOf(8_000, tlsRemaining)
         tls.startHandshake()
+        cancellation.throwIfCancelled()
         tls.soTimeout = 12_000
         return tls
       } catch (error: Exception) {
+        cancellation.clearCancelAction()
         runCatching { tls?.close() }
         runCatching { plain.close() }
         throw error
@@ -147,6 +328,7 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
   @Volatile private var initialized = false
   @Volatile private var stopped = false
   @Volatile private var controlReaderThread: Thread? = null
+  @Volatile private var connectCancellation: ConnectionCancellation? = null
   private val writeLock = Any()
   @Volatile private var acknowledgementWindow = 0L
   @Volatile private var lastAcknowledgementAt = 0L
@@ -155,21 +337,33 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
   override fun connect() {
     require(keyValid(key)) { "Invalid stream key format" }
     check(!stopped && !initialized) { "Publisher already used" }
-    val resolved = InetAddress.getAllByName(endpoint.host)
-    check(resolved.isNotEmpty() && resolved.all(::isPublicDestination)) {
-      "Streaming server DNS points to a private address"
-    }
-    val tls = tryResolvedAddresses(resolved) { address, remainingMs ->
-      check(!stopped) { "Publisher stopped while connecting" }
-      openTlsSocket(endpoint, address, remainingMs)
-    }
-    socket = tls
-    if (stopped) {
-      close()
-      error("Publisher stopped while connecting")
-    }
+    val deadline = System.nanoTime() + CONNECT_TIMEOUT_MS * 1_000_000L
+    val cancellation = ConnectionCancellation()
+    connectCancellation = cancellation
+    if (stopped) cancellation.cancel()
     try {
-      val input = tls.inputStream
+      cancellation.throwIfCancelled()
+      val resolved = addressResolver.resolve(
+        endpoint.host, remainingTimeoutMs(deadline), cancellation
+      )
+      cancellation.clearCancelAction()
+      cancellation.throwIfCancelled()
+      check(resolved.isNotEmpty() && resolved.all(::isPublicDestination)) {
+        "Streaming server DNS points to a private address"
+      }
+      val remaining = remainingTimeoutMs(deadline)
+      val tls = tryResolvedAddresses(resolved, remaining) { address, remainingMs ->
+        cancellation.throwIfCancelled()
+        openTlsSocket(endpoint, address, remainingMs, cancellation)
+      }
+      cancellation.throwIfCancelled()
+      socket = tls
+      if (stopped) {
+        close()
+        throw InterruptedIOException("Publisher stopped while connecting")
+      }
+      val deadlineInput = DeadlineInputStream(tls.inputStream, tls, deadline)
+      val input = deadlineInput
       val out = tls.outputStream
       val c1 = ByteArray(1536)
       java.security.SecureRandom().nextBytes(c1)
@@ -205,6 +399,7 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       var accepted = false
       var attempts = 0
       while (!accepted && attempts++ < 60) {
+        cancellation.throwIfCancelled()
         val message = reader.nextMessage()
         processServerControl(message, out, countedInput)
         if (message.type == 20) {
@@ -224,11 +419,16 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       }
       check(accepted) { "No publish acknowledgement from streaming server" }
       check(!stopped) { "Publisher stopped while connecting" }
-      // The control reader must stay blocked during quiet periods; socket timeouts
-      // are only for connection setup and RTMP negotiation.
+      deadlineInput.disableDeadline()
+      // The control reader stays open during quiet streams once startup succeeds.
       tls.soTimeout = 0
+      cancellation.clearCancelAction()
       output = out
       initialized = true
+      if (stopped) {
+        close()
+        throw InterruptedIOException("Publisher stopped while connecting")
+      }
       startControlReader(reader, out, countedInput)
     } catch (error: Exception) {
       close()
@@ -299,6 +499,8 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     stopped = true
     initialized = false
     output = null
+    connectCancellation?.cancel()
+    connectCancellation = null
     runCatching { socket?.close() }
     socket = null
     controlReaderThread = null
