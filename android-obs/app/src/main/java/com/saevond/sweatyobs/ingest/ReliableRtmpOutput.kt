@@ -89,6 +89,8 @@ class ReliableRtmpOutput(
   private var avcConfig: RtmpMessage? = null
   private var aacConfig: RtmpMessage? = null
   private var aligned = false
+  /** Changes whenever a reset makes a previous sender failure stale. */
+  private var mediaGeneration = 0L
   private var running = false
   @Volatile private var publisher: MediaPublisher? = null
   @Volatile private var worker: Thread? = null
@@ -138,11 +140,13 @@ class ReliableRtmpOutput(
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
         aligned = false
+        mediaGeneration++
         // Keep the visible state accurate until the in-flight handshake finishes.
         state = if (wasConnecting) "CONNECTING" else "WAITING FOR KEYFRAME"
         queueReset = true
         if (wasLive) publisherToAbort = publisher
         enqueueStartupGopLocked(message)
+        if (wasConnecting) state = "CONNECTING"
         lock.notifyAll()
       }
       // The sender sleeps on an empty aligned queue; wake it for the next live packet.
@@ -162,6 +166,7 @@ class ReliableRtmpOutput(
     var publisherToAbort: MediaPublisher? = null
     synchronized(lock) {
       if (!running) return
+      mediaGeneration++
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
       avcConfig = null
@@ -181,6 +186,7 @@ class ReliableRtmpOutput(
   fun reconnectNow() {
     synchronized(lock) {
       if (!running) return
+      mediaGeneration++
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
       aligned = false
@@ -200,7 +206,10 @@ class ReliableRtmpOutput(
   override fun close() {
     synchronized(lock) {
       running = false
+      mediaGeneration++
       clearQueueLocked()
+      avcConfig = null
+      aacConfig = null
       aligned = false
       state = "STOPPED"
       lock.notifyAll()
@@ -217,10 +226,9 @@ class ReliableRtmpOutput(
     var everConnected = false
     while (isRunning()) {
       var active: MediaPublisher? = null
+      var activeMediaGeneration = -1L
       try {
-        if (!waitUntilAligned()) break
-        if (!isRunning()) break
-        state = "CONNECTING"
+        activeMediaGeneration = awaitFreshStartAndMarkConnecting() ?: break
         notifySnapshot()
         active = publisherFactory(destination)
         publisher = active
@@ -228,7 +236,7 @@ class ReliableRtmpOutput(
         if (!isRunning()) break
         // A queue overflow during connect may invalidate the original start GOP.
         // Keep the successful publisher open and wait here for a fresh keyframe.
-        if (!awaitFreshStartAndMarkLive()) break
+        activeMediaGeneration = awaitFreshStartAndMarkLive() ?: break
         if (everConnected) reconnects++
         everConnected = true
         failures = 0
@@ -245,9 +253,14 @@ class ReliableRtmpOutput(
         lastError = error.javaClass.simpleName
         failures++
         synchronized(lock) {
-          droppedPackets += queue.size.toLong()
-          clearQueueLocked()
-          aligned = false
+          // A reset may have queued a clean GOP for a newer source/session while
+          // this publisher was failing. Discard only the generation that failed.
+          if (activeMediaGeneration == mediaGeneration) {
+            droppedPackets += queue.size.toLong()
+            clearQueueLocked()
+            aligned = false
+            mediaGeneration++
+          }
           state = "RETRYING"
           lock.notifyAll()
         }
@@ -267,29 +280,40 @@ class ReliableRtmpOutput(
     notifySnapshot()
   }
 
-  private fun awaitFreshStartAndMarkLive(): Boolean = synchronized(lock) {
+  private fun awaitFreshStartAndMarkConnecting(): Long? = synchronized(lock) {
     while (running) {
       if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
-        state = "LIVE"
-        return@synchronized true
+        state = "CONNECTING"
+        return@synchronized mediaGeneration
       }
       if (aligned && queue.isNotEmpty()) {
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
         aligned = false
+        mediaGeneration++
       }
       state = "WAITING FOR KEYFRAME"
       lock.wait()
     }
-    false
+    null
   }
 
-  private fun waitUntilAligned(): Boolean = synchronized(lock) {
-    while (running && !aligned) {
+  private fun awaitFreshStartAndMarkLive(): Long? = synchronized(lock) {
+    while (running) {
+      if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
+        state = "LIVE"
+        return@synchronized mediaGeneration
+      }
+      if (aligned && queue.isNotEmpty()) {
+        droppedPackets += queue.size.toLong()
+        clearQueueLocked()
+        aligned = false
+        mediaGeneration++
+      }
       state = "WAITING FOR KEYFRAME"
       lock.wait()
     }
-    running
+    null
   }
 
   private fun takeNext(): Pending? = synchronized(lock) {
@@ -300,6 +324,7 @@ class ReliableRtmpOutput(
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
       aligned = false
+      mediaGeneration++
       state = "WAITING FOR KEYFRAME"
       lock.notifyAll()
       return@synchronized null
@@ -324,6 +349,7 @@ class ReliableRtmpOutput(
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
       aligned = false
+      mediaGeneration++
       state = "WAITING FOR KEYFRAME"
     } else {
       aligned = true
