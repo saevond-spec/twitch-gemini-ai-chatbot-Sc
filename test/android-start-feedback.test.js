@@ -6,7 +6,7 @@ const ui = readFileSync(new URL('java/com/saevond/sweatyobs/MainActivity.kt', ro
 const service = readFileSync(new URL('java/com/saevond/sweatyobs/Ps5LanService.kt', root), 'utf8');
 test('Start click always updates visible UI before service launch', () => {
   const start = ui.indexOf('startLan.setOnClickListener');
-  const feedback = ui.indexOf('status.text = "Start button tapped', start);
+  const feedback = ui.indexOf('status.text = "Checking the diagnostic-only PS5 ingest', start);
   const launch = ui.indexOf('startForegroundService(', start);
   assert.ok(start >= 0 && feedback > start && launch > feedback);
 });
