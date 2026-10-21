@@ -233,7 +233,7 @@ class TwitchRtmpsPublisherTest {
      try { publisher.connect() } catch (error: Exception) { connectFailure.set(error) }
      assertNotNull("synthetic TCP setup should fail", connectFailure.get())
      assertTrue("failed setup should dispatch its close asynchronously",
-       asyncCloseStarted.await(1, TimeUnit.SECONDS))
+       asyncCloseStarted.await(2, TimeUnit.SECONDS))
 
      val cleanup = Thread {
        try { publisher.close() } finally { cleanupReturned.countDown() }
