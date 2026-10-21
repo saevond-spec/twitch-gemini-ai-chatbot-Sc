@@ -48,7 +48,7 @@ internal enum class EncoderDiagnosticTarget(val wire: String) {
   MULTIPLE("multiple"), TWITCH("twitch"), YOUTUBE("youtube"), KICK("kick");
 }
 
-internal enum class EncoderDiagnosticError(val wire: String) {
+enum class EncoderDiagnosticError(val wire: String) {
   NONE("NONE"), IO_EXCEPTION("IOException"), ILLEGAL_STATE("IllegalStateException"),
   ILLEGAL_ARGUMENT("IllegalArgumentException"), SOCKET_TIMEOUT("SocketTimeoutException"),
   UNKNOWN_HOST("UnknownHostException"), SOCKET("SocketException"), TLS("SSLException"),
