@@ -22,11 +22,17 @@ data class OutputSnapshot(
   val droppedPackets: Long,
   val lastError: String?
 ) {
-  val health: String get() = when {
-    state != "LIVE" -> "Reconnecting"
-    queueMediaMs >= 900 -> "Poor"
-    queueMediaMs >= 300 -> "Fair"
-    else -> "Good"
+  val health: String get() = when (state) {
+    "LIVE" -> when {
+      queueMediaMs >= 900 -> "Poor"
+      queueMediaMs >= 300 -> "Fair"
+      else -> "Good"
+    }
+    "WAITING FOR KEYFRAME" -> "Waiting for keyframe"
+    "CONNECTING" -> "Connecting"
+    "RETRYING" -> "Retrying"
+    "STOPPED" -> "Offline"
+    else -> "Starting"
   }
 
   fun summary(): String {
@@ -115,7 +121,8 @@ class ReliableRtmpOutput(
   /** Nonblocking; called by the PS5 input worker. */
   fun offer(message: RtmpMessage) {
     if (message.type !in listOf(8, 9) || message.data.size !in 3..2_097_152) return
-    var shouldAbort = false
+    var queueReset = false
+    var publisherToAbort: MediaPublisher? = null
     synchronized(lock) {
       if (!running) return
       if (isAvcConfig(message)) avcConfig = copyMessage(message)
@@ -126,21 +133,23 @@ class ReliableRtmpOutput(
       }
       enqueueLocked(copyMessage(message))
       if (queueExceedsLimitsLocked()) {
+        val wasLive = state == "LIVE"
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
         aligned = false
         state = "WAITING FOR KEYFRAME"
-        shouldAbort = true
+        queueReset = true
+        if (wasLive) publisherToAbort = publisher
         enqueueStartupGopLocked(message)
         lock.notifyAll()
       }
       // The sender sleeps on an empty aligned queue; wake it for the next live packet.
       lock.notifyAll()
     }
-    if (shouldAbort) {
-      publisher?.close()
-      notifySnapshot()
-    }
+    // Overflow while CONNECTING must not cancel RTMPS/TLS setup. Once LIVE,
+    // close only that session so the worker can resume from a clean keyframe.
+    publisherToAbort?.close()
+    if (queueReset) notifySnapshot()
   }
 
   /** Force a fresh RTMPS session; the sender waits for a clean AVC keyframe. */
@@ -192,9 +201,25 @@ class ReliableRtmpOutput(
         publisher = active
         active.connect()
         if (!isRunning()) break
+        // A queue overflow during connect can invalidate the original start GOP.
+        // Keep this connection attempt, but publish only if a fresh keyframe GOP
+        // is queued when the handshake completes.
+        val hasFreshStart = synchronized(lock) {
+          if (!running) false
+          else if (!aligned || queue.isEmpty()) {
+            state = "WAITING FOR KEYFRAME"
+            false
+          } else {
+            state = "LIVE"
+            true
+          }
+        }
+        if (!hasFreshStart) {
+          notifySnapshot()
+          continue
+        }
         if (everConnected) reconnects++
         everConnected = true
-        synchronized(lock) { if (running) state = "LIVE" }
         failures = 0
         notifySnapshot()
         var sessionBaseTimestamp: Long? = null
