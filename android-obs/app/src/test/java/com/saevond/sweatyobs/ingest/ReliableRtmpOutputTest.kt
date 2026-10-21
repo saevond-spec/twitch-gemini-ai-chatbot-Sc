@@ -223,6 +223,77 @@ class ReliableRtmpOutputTest {
     }
   }
 
+  @Test fun liveSourceResetPreservesTheNewGopWhenTheOldPublisherFails() {
+    val firstBatch = CountDownLatch(3)
+    val blockedOldPublish = CountDownLatch(1)
+    val releaseOldPublish = CountDownLatch(1)
+    val retryReached = CountDownLatch(1)
+    val resumedBatch = CountDownLatch(3)
+    val attempts = AtomicInteger()
+    val sessionOne = CopyOnWriteArrayList<RtmpMessage>()
+    val sessionTwo = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val session = attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {}
+          override fun publish(media: RtmpMessage) {
+            if (session == 1 && media.type == 8 && media.data.size > 2 &&
+              (media.data[1].toInt() and 255) == 1) {
+              blockedOldPublish.countDown()
+              check(releaseOldPublish.await(10, TimeUnit.SECONDS)) { "old publish was not released" }
+              throw IOException("synthetic old-session close")
+            }
+            if (session == 1) {
+              sessionOne += media
+              firstBatch.countDown()
+            } else {
+              sessionTwo += media
+              resumedBatch.countDown()
+            }
+          }
+          override fun close() {}
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      waitMs = { retryReached.countDown() }
+    )
+    val newAvcConfig = avcConfig().copy(data = byteArrayOf(0x17, 0, 0, 0, 0, 8, 8, 8))
+    val newAacConfig = aacConfig().copy(data = byteArrayOf(0xaf.toByte(), 0, 0x56, 0x34))
+    val newKeyframe = keyframe(500).copy(data = byteArrayOf(0x17, 1, 0, 0, 0, 0, 0, 8))
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue("old output session should publish its start GOP", firstBatch.await(3, TimeUnit.SECONDS))
+
+      output.offer(RtmpMessage(8, 50, 1, byteArrayOf(0xaf.toByte(), 1, 7, 8)))
+      assertTrue("old publisher should be in-flight before source reset",
+        blockedOldPublish.await(3, TimeUnit.SECONDS))
+      output.resetForSourceSession()
+
+      // Queue the new source GOP before the old publisher reports its close.
+      output.offer(newAvcConfig)
+      output.offer(newAacConfig)
+      output.offer(newKeyframe)
+      releaseOldPublish.countDown()
+
+      assertTrue("old publisher failure should enter the retry path",
+        retryReached.await(3, TimeUnit.SECONDS))
+      assertTrue("retry should keep the new source GOP instead of waiting for another keyframe",
+        resumedBatch.await(3, TimeUnit.SECONDS))
+      assertEquals(2, attempts.get())
+      assertArrayEquals(newAvcConfig.data, sessionTwo[0].data)
+      assertArrayEquals(newAacConfig.data, sessionTwo[1].data)
+      assertArrayEquals(newKeyframe.data, sessionTwo[2].data)
+    } finally {
+      releaseOldPublish.countDown()
+      output.close()
+    }
+  }
+
   @Test fun manualReconnectWaitsForAnotherCleanKeyframeAndCreatesANewSession() {
     val publishers = CopyOnWriteArrayList<TestPublisher>()
     val retryStarted = CountDownLatch(1)
