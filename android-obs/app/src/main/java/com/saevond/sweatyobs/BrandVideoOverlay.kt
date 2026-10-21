@@ -53,7 +53,6 @@ internal class BrandVideoOverlay(
   private val onFailure: (String) -> Unit,
   private val encodingProfile: OverlayEncodingProfile = OverlayEncodingProfile.STABLE_720P
 ) : Closeable {
-  companion object { private const val CHAT_DRAIN_INTERVAL_MS = 50L }
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
   private val handler = Handler(worker.looper)
@@ -484,6 +483,7 @@ internal class BrandVideoOverlay(
   }
 
   companion object {
+    private const val CHAT_DRAIN_INTERVAL_MS = 50L
     private const val MAX_PENDING_FRAMES = 12
     private const val MAX_PENDING_BYTES = 6 * 1024 * 1024
     private const val MAX_FEED_PER_PUMP = 2
