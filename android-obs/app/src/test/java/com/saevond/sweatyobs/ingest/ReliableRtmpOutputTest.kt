@@ -1,6 +1,7 @@
 package com.saevond.sweatyobs.ingest
 
 import java.io.IOException
+import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -1089,29 +1090,47 @@ class ReliableRtmpOutputTest {
   @Test fun blockedSocketCloseRunsOffCallerAndDoesNotBlockAnotherDestination() {
     val closeEntered = CountDownLatch(1)
     val releaseClose = CountDownLatch(1)
+    val dispatchReturned = CountDownLatch(1)
     val otherDestinationClosed = CountDownLatch(1)
+    val closeThreadName = AtomicReference<String>()
+    val otherCloseThreadName = AtomicReference<String>()
     val blockedSocket = object : Socket() {
       override fun close() {
+        closeThreadName.set(Thread.currentThread().name)
         closeEntered.countDown()
         try { releaseClose.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       }
     }
-    val startNanos = System.nanoTime()
+    val caller = Thread({
+      try {
+        ReliableRtmpOutput.scheduleSocketClose("youtube", blockedSocket)
+      } finally {
+        dispatchReturned.countDown()
+      }
+    }, "socket-close-test-caller")
 
     try {
-      ReliableRtmpOutput.scheduleSocketClose("youtube", blockedSocket)
-      val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
-      assertTrue("socket-close dispatch must not block the output worker", elapsedMs < 250)
+      caller.start()
+      assertTrue("socket-close dispatch should return without waiting for close",
+        dispatchReturned.await(1, TimeUnit.SECONDS))
       assertTrue("YouTube close should run on its destination lane", closeEntered.await(2, TimeUnit.SECONDS))
+      assertEquals("YouTube socket close must use the dedicated cleanup lane",
+        "SweatyOBS-youtube-publisher-close", closeThreadName.get())
 
       val otherSocket = object : Socket() {
-        override fun close() { otherDestinationClosed.countDown() }
+        override fun close() {
+          otherCloseThreadName.set(Thread.currentThread().name)
+          otherDestinationClosed.countDown()
+        }
       }
       ReliableRtmpOutput.scheduleSocketClose("twitch", otherSocket)
       assertTrue("a stalled destination close must not block Twitch",
         otherDestinationClosed.await(2, TimeUnit.SECONDS))
+      assertEquals("Twitch close must use its own destination lane",
+        "SweatyOBS-twitch-publisher-close", otherCloseThreadName.get())
     } finally {
       releaseClose.countDown()
+      caller.join(1_000)
     }
   }
 

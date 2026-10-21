@@ -17,8 +17,9 @@ interface MediaPublisher : AutoCloseable {
   fun publish(media: RtmpMessage)
 
   /**
-   * Optional, idempotent cancellation hook invoked on the destination's cleanup lane
-   * immediately before close. It is never called by the PS5 ingest callback.
+   * Optional, idempotent, nonblocking cancellation hook. Normal session teardown invokes it
+   * on the destination cleanup lane; connection setup may invoke it from the output worker.
+   * It is never called by the PS5 ingest callback.
    */
   fun requestAbort() {}
 }
@@ -87,9 +88,9 @@ class ReliableRtmpOutput(
 
     /**
      * One permit and one cleanup lane per supported platform. A session keeps its permit until
-     * its close completes, so only one publisher per destination can exist at a time. Cleanup is
-     * coalesced per session; each lane therefore needs at most one pending close and cannot be
-     * filled by another destination's stalled socket.
+     * close completes, so only one publisher per destination can exist at a time. Each lane also
+     * owns setup-socket closes; one connect can queue at most eight failed-address closes plus the
+     * final session cleanup. The bounded queue isolates destinations and leaves setup workers free.
      */
     private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick")
       .associateWith { Semaphore(1, true) }
