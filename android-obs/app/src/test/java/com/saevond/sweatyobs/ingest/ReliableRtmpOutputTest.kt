@@ -636,7 +636,7 @@ class ReliableRtmpOutputTest {
           override fun close() { releaseFirstPublish.countDown() }
         }
       },
-      retryDelaysMs = longArrayOf(0),
+      retryDelaysMs = longArrayOf(10_000),
       maxQueueAgeMs = 100,
       clockMs = { nowMs.get() },
     )
