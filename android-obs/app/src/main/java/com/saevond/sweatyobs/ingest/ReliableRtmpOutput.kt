@@ -201,23 +201,9 @@ class ReliableRtmpOutput(
         publisher = active
         active.connect()
         if (!isRunning()) break
-        // A queue overflow during connect can invalidate the original start GOP.
-        // Keep this connection attempt, but publish only if a fresh keyframe GOP
-        // is queued when the handshake completes.
-        val hasFreshStart = synchronized(lock) {
-          if (!running) false
-          else if (!aligned || queue.isEmpty()) {
-            state = "WAITING FOR KEYFRAME"
-            false
-          } else {
-            state = "LIVE"
-            true
-          }
-        }
-        if (!hasFreshStart) {
-          notifySnapshot()
-          continue
-        }
+        // A queue overflow during connect may invalidate the original start GOP.
+        // Keep the successful publisher open and wait here for a fresh keyframe.
+        if (!awaitFreshStartAndMarkLive()) break
         if (everConnected) reconnects++
         everConnected = true
         failures = 0
@@ -254,6 +240,23 @@ class ReliableRtmpOutput(
     }
     synchronized(lock) { if (!running) state = "STOPPED" }
     notifySnapshot()
+  }
+
+  private fun awaitFreshStartAndMarkLive(): Boolean = synchronized(lock) {
+    while (running) {
+      if (aligned && queue.isNotEmpty() && !queueExceedsLimitsLocked()) {
+        state = "LIVE"
+        return@synchronized true
+      }
+      if (aligned && queue.isNotEmpty()) {
+        droppedPackets += queue.size.toLong()
+        clearQueueLocked()
+        aligned = false
+      }
+      state = "WAITING FOR KEYFRAME"
+      lock.wait()
+    }
+    false
   }
 
   private fun waitUntilAligned(): Boolean = synchronized(lock) {
