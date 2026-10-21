@@ -1266,6 +1266,8 @@ class ReliableRtmpOutputTest {
       releaseFirstClose.countDown()
       output.close()
     }
+    assertTrue("the released synthetic close should finish before the test exits",
+      firstCloseFinished.await(2, TimeUnit.SECONDS))
   }
 
   @Test fun stalledSocketCloseLaneDoesNotBlockSameDestinationReconnect() {
