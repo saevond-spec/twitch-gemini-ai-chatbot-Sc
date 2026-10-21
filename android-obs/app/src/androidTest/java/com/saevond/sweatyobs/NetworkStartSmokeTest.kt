@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.hamcrest.Matchers.*
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import org.junit.rules.TestRule
@@ -38,7 +39,7 @@ class NetworkStartSmokeTest {
   private class PreferenceSnapshotRule : TestRule {
     private val preferenceNames = listOf(
       "encoder_outputs", "secure_encoder_secrets", "encoder_diagnostics",
-      "diagnostic_status_v1", "ps5_setup", "ps5_audio_levels", "ps5_music"
+      "diagnostic_status_v1", "ps5_setup", "ps5_audio_levels", "ps5_music", "encoder_admin_lock"
     )
 
     override fun apply(base: Statement, description: Description): Statement =
@@ -71,12 +72,15 @@ class NetworkStartSmokeTest {
       }
   }
 
+  @Before fun unlockEncoderForUiTest() = AdminPasswordUiTestSupport.unlockOrSetPassword()
+
   @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences("encoder_outputs", 0)
     prefs.edit().putBoolean("twitch_enabled", true).putBoolean("youtube_enabled", false)
       .putBoolean("kick_enabled", false).putString("overlay_profile", "stable_720").commit()
     activityRule.scenario.recreate()
+    AdminPasswordUiTestSupport.unlockOrSetPassword()
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
       .check(matches(withText(containsString("9.3 Mbps sustained upload in total"))))
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
@@ -113,6 +117,7 @@ class NetworkStartSmokeTest {
       outputPrefs.edit().remove("youtube_server").remove("kick_server")
         .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
+    AdminPasswordUiTestSupport.unlockOrSetPassword()
     assertEquals(RtmpsPublisher.KICK_RTMPS_URL, outputPrefs.getString("kick_server", null))
     assertEquals(RtmpsPublisher.YOUTUBE_RTMPS_URL, outputPrefs.getString("youtube_server", null))
 
@@ -137,6 +142,7 @@ class NetworkStartSmokeTest {
     assertEquals(kickKey, SecretStore(context).get("kick_key"))
 
     activityRule.scenario.recreate()
+    AdminPasswordUiTestSupport.unlockOrSetPassword()
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("RTMPS server URL saved"))))
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
@@ -161,6 +167,7 @@ class NetworkStartSmokeTest {
     assertTrue(outputPrefs.getBoolean("kick_enabled", false))
 
     activityRule.scenario.recreate()
+    AdminPasswordUiTestSupport.unlockOrSetPassword()
     assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
     onView(withId(R.id.youtube_server)).check(matches(withText(equalToIgnoringCase("rtmps://youtube.example.test/live2"))))
@@ -196,6 +203,7 @@ class NetworkStartSmokeTest {
       .putString("twitch_chat_login", "saevond")
       .putString("twitch_chat_channel", "saevond").commit()
     activityRule.scenario.recreate()
+    AdminPasswordUiTestSupport.unlockOrSetPassword()
     try {
       onView(withText("Show live Twitch chat in the overlay")).perform(scrollTo())
         .check(matches(isNotChecked())).perform(click())

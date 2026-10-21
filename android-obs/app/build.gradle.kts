@@ -10,8 +10,8 @@ android {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
     targetSdk = 35
-    versionCode = 18
-    versionName = "0.1.9-dev.2"
+    versionCode = 19
+    versionName = "0.1.10-dev.1"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
