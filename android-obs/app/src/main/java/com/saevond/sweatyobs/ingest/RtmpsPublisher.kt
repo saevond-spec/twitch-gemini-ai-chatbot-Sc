@@ -587,15 +587,15 @@ class RtmpsPublisher internal constructor(
 }
 
 /** Compatibility wrapper retained for the existing Twitch settings and tests. */
-class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
+class TwitchRtmpsPublisher(private val key: String) : MediaPublisher {
   companion object {
     private const val TWITCH_SERVER = "rtmps://live.twitch.tv:443/app"
     fun isPublicDestination(address: InetAddress) = RtmpsPublisher.isPublicDestination(address)
     fun keyValid(value: String) = value.length in 15..160 && RtmpsPublisher.keyValid(value)
   }
   private val delegate = RtmpsPublisher(TWITCH_SERVER, key)
-  fun connect() = delegate.connect()
-  fun publish(media: RtmpMessage) = delegate.publish(media)
+  override fun connect() = delegate.connect()
+  override fun publish(media: RtmpMessage) = delegate.publish(media)
   override fun requestAbort() = delegate.requestAbort()
   override fun close() = delegate.close()
 }
