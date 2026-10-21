@@ -1562,6 +1562,12 @@ class MainActivity : Activity() {
   private fun showEncoderControls() {
     encoderUiVisible = true
     setContentView(encoderContentView)
+    // Authentication replaces the view tree. Restore the landing position so
+    // a prior focus or scroll offset never leaves the user on a blank-looking
+    // lower section after unlocking.
+    (encoderContentView as? ScrollView)?.post {
+      if (encoderUiVisible && !isFinishing) (encoderContentView as? ScrollView)?.scrollTo(0, 0)
+    }
     EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
     EncoderDiagnostics.record(this, EncoderDiagnosticEventName.APP_OPENED,
       EncoderDiagnosticResult.COMPLETED, EncoderDiagnosticTarget.APP)

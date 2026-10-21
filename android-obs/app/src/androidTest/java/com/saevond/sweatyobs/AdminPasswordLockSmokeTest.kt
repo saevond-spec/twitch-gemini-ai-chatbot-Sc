@@ -80,8 +80,6 @@ class AdminPasswordLockSmokeTest {
     onView(withId(R.id.admin_lock_now)).check(doesNotExist())
     onView(withId(R.id.admin_password)).perform(replaceText(AdminPasswordUiTestSupport.TEST_PASSWORD), closeSoftKeyboard())
     onView(withId(R.id.admin_password_submit)).perform(click())
-    // The main screen retains its previous scroll position after a manual lock;
-    // assert the lock control has returned instead of requiring the off-screen header.
-    AdminPasswordUiTestSupport.waitForView(R.id.admin_lock_now)
+    AdminPasswordUiTestSupport.waitForView(R.id.brand_header)
   }
 }
