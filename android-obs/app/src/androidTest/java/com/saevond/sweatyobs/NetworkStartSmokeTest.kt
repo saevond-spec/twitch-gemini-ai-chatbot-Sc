@@ -114,6 +114,7 @@ class NetworkStartSmokeTest {
         .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
     assertEquals(RtmpsPublisher.KICK_RTMPS_URL, outputPrefs.getString("kick_server", null))
+    assertEquals(RtmpsPublisher.YOUTUBE_RTMPS_URL, outputPrefs.getString("youtube_server", null))
 
     onView(withId(R.id.youtube_stream_key)).perform(scrollTo(), replaceText(youtubeKey), closeSoftKeyboard())
     onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
@@ -137,7 +138,7 @@ class NetworkStartSmokeTest {
 
     activityRule.scenario.recreate()
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
-      .check(matches(withText(containsString("save its RTMPS server URL before streaming"))))
+      .check(matches(withText(containsString("RTMPS server URL saved"))))
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("RTMPS server URL saved"))))
 

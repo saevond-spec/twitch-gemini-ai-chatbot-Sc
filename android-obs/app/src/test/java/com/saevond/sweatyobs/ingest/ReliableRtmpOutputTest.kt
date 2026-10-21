@@ -467,7 +467,7 @@ class ReliableRtmpOutputTest {
       output.close()
     }
   }
-  
+
   @Test fun reconnectBetweenDequeueAndSendFenceDropsTheStalePacket() {
     val sendFenceEntered = CountDownLatch(1)
     val releaseSendFence = CountDownLatch(1)

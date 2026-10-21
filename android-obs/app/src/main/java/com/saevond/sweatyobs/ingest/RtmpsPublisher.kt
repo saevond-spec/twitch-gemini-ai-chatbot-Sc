@@ -244,6 +244,7 @@ class RtmpsPublisher internal constructor(
 ) : MediaPublisher {
   companion object {
     const val KICK_RTMPS_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app"
+    const val YOUTUBE_RTMPS_URL = "rtmps://a.rtmps.youtube.com:443/live2"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val MAX_ADDRESS_CANDIDATES = 8
     fun isPublicDestination(address: InetAddress): Boolean =
@@ -254,6 +255,30 @@ class RtmpsPublisher internal constructor(
       value.length in 8..256 && value.all { it.isLetterOrDigit() || it == '_' || it == '-' }
 
     fun endpointValid(value: String): Boolean = parseEndpoint(value) != null
+
+    /** Repairs only the known legacy root-only Kick URL; custom endpoints are preserved. */
+    fun normalizeKnownKickEndpoint(value: String): String {
+      val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return value
+      val rootPath = uri.rawPath.isNullOrEmpty() || uri.rawPath == "/"
+      return if (uri.scheme?.equals("rtmps", true) == true &&
+        uri.host?.equals("fa723fc1b171.global-contribute.live-video.net", true) == true &&
+        uri.userInfo == null && uri.query == null && uri.fragment == null &&
+        uri.port in listOf(-1, 443) && rootPath) KICK_RTMPS_URL else value
+    }
+
+    /** Converts only YouTube's well-known insecure RTMP URLs to their RTMPS equivalents. */
+    fun normalizeKnownYouTubeEndpoint(value: String): String {
+      val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return value
+      val host = when {
+        uri.host?.equals("a.rtmp.youtube.com", true) == true -> "a.rtmps.youtube.com"
+        uri.host?.equals("b.rtmp.youtube.com", true) == true -> "b.rtmps.youtube.com"
+        else -> return value
+      }
+      val recognizedBackupQuery = uri.query == null || uri.query == "backup=1"
+      return if (uri.scheme?.equals("rtmp", true) == true && uri.path == "/live2" &&
+        uri.userInfo == null && uri.fragment == null && recognizedBackupQuery &&
+        uri.port in listOf(-1, 1935)) "rtmps://$host:443/live2" else value
+    }
 
     /** TLS-only reachability probe: opens and closes a secure socket without a key or media. */
     fun testTlsEndpoint(serverUrl: String): String {

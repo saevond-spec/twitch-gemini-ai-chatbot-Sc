@@ -16,6 +16,19 @@ class RtmpsConnectivityTest {
     assertTrue(RtmpsPublisher.endpointValid(RtmpsPublisher.KICK_RTMPS_URL))
   }
 
+  @Test fun repairsKnownLegacyKickAndYouTubeUrlsWithoutChangingCustomServers() {
+    assertEquals(RtmpsPublisher.KICK_RTMPS_URL,
+      RtmpsPublisher.normalizeKnownKickEndpoint("rtmps://fa723fc1b171.global-contribute.live-video.net/"))
+    assertEquals("rtmps://a.rtmps.youtube.com:443/live2",
+      RtmpsPublisher.normalizeKnownYouTubeEndpoint("rtmp://a.rtmp.youtube.com/live2"))
+    assertEquals("rtmps://b.rtmps.youtube.com:443/live2",
+      RtmpsPublisher.normalizeKnownYouTubeEndpoint("rtmp://b.rtmp.youtube.com/live2?backup=1"))
+    val custom = "rtmp://custom.example.test/live"
+    assertEquals(custom, RtmpsPublisher.normalizeKnownYouTubeEndpoint(custom))
+    val customKick = "rtmps://custom.example.test/app"
+    assertEquals(customKick, RtmpsPublisher.normalizeKnownKickEndpoint(customKick))
+  }
+
   @Test fun tlsProbeRejectsInvalidSchemesWithoutOpeningANetworkConnection() {
     assertEquals("INVALID_URL", RtmpsPublisher.testTlsEndpoint("rtmp://ingest.example.test/app"))
     assertEquals("INVALID_URL", RtmpsPublisher.testTlsEndpoint("https://ingest.example.test/app"))

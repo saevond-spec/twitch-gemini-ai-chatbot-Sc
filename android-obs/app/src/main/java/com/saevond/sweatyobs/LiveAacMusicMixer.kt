@@ -7,6 +7,14 @@ import android.media.MediaFormat
 import com.saevond.sweatyobs.ingest.RtmpMessage
 import java.nio.ByteBuffer
 
+internal enum class AudioSpecificConfigChange { INITIAL, IDENTICAL, DIFFERENT }
+
+internal fun classifyAudioSpecificConfig(previous: ByteArray?, next: ByteArray): AudioSpecificConfigChange = when {
+  previous == null -> AudioSpecificConfigChange.INITIAL
+  previous.contentEquals(next) -> AudioSpecificConfigChange.IDENTICAL
+  else -> AudioSpecificConfigChange.DIFFERENT
+}
+
 /**
  * Decodes actual game AAC audio, mixes a user-provided rights-cleared PCM track,
  * and encodes new AAC frames for the selected RTMP(S) outputs. No Android system capture.
@@ -18,6 +26,7 @@ import java.nio.ByteBuffer
 class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume: MixLevels = MixLevels()) : AutoCloseable {
   private var decoder: MediaCodec? = null
   private var encoder: MediaCodec? = null
+  private var sourceAudioSpecificConfig: ByteArray? = null
   private var hasOutputConfig = false
   private var lastTimestamp = 0L
   var mixedPackets: Long = 0L
@@ -49,8 +58,17 @@ class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume:
       require(supportedAudioSpecificConfig(data)) {
         "Music mixing needs game AAC-LC 48 kHz stereo; incompatible PS5 audio"
       }
-      check(decoder == null) { "Incoming game codec changed during live stream" }
-      startCodecs(data.copyOfRange(2, data.size))
+      val audioSpecificConfig = data.copyOfRange(2, data.size)
+      when (classifyAudioSpecificConfig(sourceAudioSpecificConfig, audioSpecificConfig)) {
+        AudioSpecificConfigChange.IDENTICAL -> return emptyList()
+        AudioSpecificConfigChange.DIFFERENT -> {
+          releaseCodecs()
+          hasOutputConfig = false
+        }
+        AudioSpecificConfigChange.INITIAL -> Unit
+      }
+      startCodecs(audioSpecificConfig)
+      sourceAudioSpecificConfig = audioSpecificConfig.copyOf()
       return drainEncoder()
     }
     require(data[1].toInt() == 1 && decoder != null && encoder != null) {
@@ -58,8 +76,10 @@ class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume:
     }
 
     val codec = decoder ?: error("Decoder not initialized")
-    val index = codec.dequeueInputBuffer(15_000)
-    check(index >= 0) { "Game AAC decoder backpressure; stopping instead of dropping audio" }
+    // Keep the PS5 ingest callback bounded. A late audio packet is disposable;
+    // killing the entire receiver on transient codec backpressure is not.
+    val index = codec.dequeueInputBuffer(0)
+    if (index < 0) return drainEncoder()
     val buffer = codec.getInputBuffer(index) ?: error("Missing game audio input")
     val size = data.size - 2
     check(size > 0 && size <= buffer.capacity()) { "Invalid AAC packet length" }
@@ -99,8 +119,8 @@ class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume:
                 if (playing && musicGain > 0.0) music.nextWindow(raw.size) else ByteArray(raw.size),
                 gameGain, musicGain)
               val audioEncoder = encoder ?: error("Encoder unavailable")
-              val writable = audioEncoder.dequeueInputBuffer(20_000)
-              check(writable >= 0) { "AAC encoder backpressure" }
+              val writable = audioEncoder.dequeueInputBuffer(0)
+              if (writable < 0) return@repeat
               val input = audioEncoder.getInputBuffer(writable) ?: error("Missing AAC encoder input")
               check(input.capacity() >= pcm.size) { "AAC encoder input too small" }
               input.clear()
@@ -185,6 +205,12 @@ class LiveAacMusicMixer(private val music: MusicTrackLooper, private val volume:
   }
 
   override fun close() {
+    sourceAudioSpecificConfig = null
+    hasOutputConfig = false
+    releaseCodecs()
+  }
+
+  private fun releaseCodecs() {
     val d = decoder; decoder = null
     val e = encoder; encoder = null
     runCatching { d?.stop() }

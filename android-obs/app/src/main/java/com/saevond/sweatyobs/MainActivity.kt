@@ -237,8 +237,19 @@ class MainActivity : Activity() {
       text = "Upload budget is calculated from the selected quality and platform count. It is a planning estimate, not a speed test."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
-    if (outputPrefs.getString("kick_server", "").isNullOrBlank()) {
-      outputPrefs.edit().putString("kick_server", RtmpsPublisher.KICK_RTMPS_URL).apply()
+    val savedKickServer = outputPrefs.getString("kick_server", "").orEmpty()
+    val repairedKickServer = RtmpsPublisher.normalizeKnownKickEndpoint(savedKickServer)
+    if (savedKickServer.isBlank() || repairedKickServer != savedKickServer) {
+      outputPrefs.edit().putString("kick_server", repairedKickServer.ifBlank {
+        RtmpsPublisher.KICK_RTMPS_URL
+      }).apply()
+    }
+    val savedYouTubeServer = outputPrefs.getString("youtube_server", "").orEmpty()
+    val repairedYouTubeServer = RtmpsPublisher.normalizeKnownYouTubeEndpoint(savedYouTubeServer)
+    if (savedYouTubeServer.isBlank() || repairedYouTubeServer != savedYouTubeServer) {
+      outputPrefs.edit().putString("youtube_server", repairedYouTubeServer.ifBlank {
+        RtmpsPublisher.YOUTUBE_RTMPS_URL
+      }).apply()
     }
     val secretStore = SecretStore(this)
     val initialTwitchEnabled = initializeDestinationSelection(
@@ -265,7 +276,7 @@ class MainActivity : Activity() {
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
-      hint = "YouTube Studio RTMPS URL (tap its lock icon) · auto-saves"
+      hint = "YouTube RTMPS URL · prefilled · auto-saves (confirm in Studio)"
       setSingleLine(true)
       setText(outputPrefs.getString("youtube_server", ""))
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
