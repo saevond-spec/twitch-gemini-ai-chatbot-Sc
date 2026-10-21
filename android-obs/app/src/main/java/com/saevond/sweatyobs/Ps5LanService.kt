@@ -411,6 +411,16 @@ class Ps5LanService : Service() {
             input.forEach { item ->
               mediaPhase = "relay_gate"
               val frames = liveGate?.process(item).orEmpty()
+              if (liveGate?.consumeOutputReconnectRequest() == true) {
+                // A real codec change needs a clean RTMPS session. Each output
+                // is reset independently and will resume from the next keyframe.
+                outputPublishers.forEach { it.reconnectNow() }
+                handler.post {
+                  if (!stopping) setNotification(
+                    "PS5 codec changed. Refreshing destinations; waiting for the next clean keyframe."
+                  )
+                }
+              }
               if (frames.isNotEmpty()) {
                 frames.forEach { media ->
                   when {
@@ -444,7 +454,8 @@ class Ps5LanService : Service() {
                     "overlay_config", "overlay_frame" -> EncoderDiagnosticTarget.OVERLAY
                     else -> EncoderDiagnosticTarget.NETWORK
                   }, EncoderDiagnosticError.fromThrowableName(error.javaClass.simpleName))
-                setNotification("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
+                setNotification("PS5 media processing failed during $mediaPhase (" +
+                  error.javaClass.simpleName + "). Stopped. Check the PS5 audio format, then reconnect.")
                 stopSelf()
               }
             }
