@@ -148,13 +148,13 @@ test('bot, broadcaster, ignored users, and service bots are never welcomed from 
   assert.deepEqual(arrivals.map(x => x.username), ['realviewer']);
 });
 
-test('401/403 disables polling until updated OAuth scope is granted', async () => {
+test('401 disables polling and reports an authorization failure without guessing the cause', async () => {
   const watcher = new ChatterWatcher({
     helix: {
       async getUserByLogin() { return { id: 'broadcaster-1' }; },
       async getTokenOwnerId() { return 'moderator-1'; },
       async getChatters() {
-        const err = new Error('missing scope');
+        const err = new Error('unauthorized');
         err.response = { status: 401 };
         throw err;
       },
@@ -165,8 +165,41 @@ test('401/403 disables polling until updated OAuth scope is granted', async () =
   });
 
   watcher.running = true;
-  await watcher.tick();
-  assert.equal(watcher.disabledReason, 'missing_moderator_read_chatters');
+  const result = await watcher.tick();
+  assert.equal(watcher.disabledReason, 'twitch_unauthorized');
+  assert.equal(result.failures[0].reason, 'twitch_unauthorized');
+  assert.equal(watcher.getStatus().ready, false);
+});
+
+test('403 reports missing channel moderator status and retries without another OAuth callback', async () => {
+  let isModerator = false;
+  const watcher = new ChatterWatcher({
+    helix: {
+      async getUserByLogin() { return { id: 'broadcaster-1' }; },
+      async getTokenOwnerId() { return 'moderator-1'; },
+      async getChatters() {
+        if (!isModerator) {
+          const err = new Error('not a moderator');
+          err.response = { status: 403 };
+          throw err;
+        }
+        return [{ user_login: 'alice' }];
+      },
+    },
+    channels: ['saevond'],
+    botLogin: 'sweatyclanker',
+  });
+
+  watcher.running = true;
+  const first = await watcher.tick();
+  assert.equal(watcher.disabledReason, null);
+  assert.equal(first.ready, false);
+  assert.equal(first.failures[0].reason, 'bot_not_channel_moderator');
+
+  isModerator = true;
+  const recovered = await watcher.tick();
+  assert.equal(recovered.ready, true);
+  assert.deepEqual(recovered.failures, []);
 });
 
 
@@ -181,7 +214,7 @@ test('OAuth scope upgrade resumes watcher, rebuilds baseline, and welcomes only 
       async getChatters() {
         calls += 1;
         if (calls === 1) {
-          const err = new Error('missing scope');
+          const err = new Error('unauthorized');
           err.response = { status: 401 };
           throw err;
         }
@@ -198,7 +231,7 @@ test('OAuth scope upgrade resumes watcher, rebuilds baseline, and welcomes only 
 
   watcher.running = true;
   await watcher.tick();
-  assert.equal(watcher.disabledReason, 'missing_moderator_read_chatters');
+  assert.equal(watcher.disabledReason, 'twitch_unauthorized');
 
   const resumed = await watcher.resumeAfterAuthorization();
   assert.equal(resumed, true);
@@ -208,4 +241,77 @@ test('OAuth scope upgrade resumes watcher, rebuilds baseline, and welcomes only 
   now += 30_000;
   await watcher.tick();
   assert.deepEqual(arrivals.map(event => event.username), ['charlie']);
+});
+
+test('OAuth resume returns false on a transient baseline failure and recovers on the next poll', async () => {
+  let calls = 0;
+  const watcher = new ChatterWatcher({
+    helix: {
+      async getUserByLogin(login) { return { id: 'broadcaster-1', login }; },
+      async getTokenOwnerId() { return 'moderator-1'; },
+      async getChatters() {
+        calls += 1;
+        if (calls === 1) {
+          const err = new Error('unauthorized');
+          err.response = { status: 401 };
+          throw err;
+        }
+        if (calls === 2) {
+          const err = new Error('temporarily unavailable');
+          err.response = { status: 503 };
+          throw err;
+        }
+        return [{ user_login: 'alice' }];
+      },
+    },
+    channels: ['saevond'],
+    botLogin: 'sweatyclanker',
+  });
+
+  watcher.running = true;
+  await watcher.tick();
+  assert.equal(await watcher.resumeAfterAuthorization(), false);
+  assert.equal(watcher.getStatus().ready, false);
+  assert.equal(watcher.getStatus().failures[0].reason, 'helix_poll_failed');
+
+  const recovered = await watcher.tick();
+  assert.equal(recovered.ready, true);
+});
+
+test('OAuth resume waits for an in-flight unauthorized poll before rebuilding the baseline', async () => {
+  let releaseFirstPoll;
+  let markFirstPollStarted;
+  const firstPollStarted = new Promise(resolve => { markFirstPollStarted = resolve; });
+  const firstPollGate = new Promise(resolve => { releaseFirstPoll = resolve; });
+  let calls = 0;
+  const watcher = new ChatterWatcher({
+    helix: {
+      async getUserByLogin(login) { return { id: 'broadcaster-1', login }; },
+      async getTokenOwnerId() { return 'moderator-1'; },
+      async getChatters() {
+        calls += 1;
+        if (calls === 1) {
+          markFirstPollStarted();
+          await firstPollGate;
+          const err = new Error('unauthorized');
+          err.response = { status: 401 };
+          throw err;
+        }
+        return [{ user_login: 'alice' }];
+      },
+    },
+    channels: ['saevond'],
+    botLogin: 'sweatyclanker',
+  });
+
+  watcher.running = true;
+  const oldTick = watcher.tick();
+  await firstPollStarted;
+  const resume = watcher.resumeAfterAuthorization();
+  releaseFirstPoll();
+
+  await oldTick;
+  assert.equal(await resume, true);
+  assert.equal(calls, 2);
+  assert.equal(watcher.getStatus().ready, true);
 });

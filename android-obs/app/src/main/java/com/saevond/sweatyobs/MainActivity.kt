@@ -86,7 +86,6 @@ class MainActivity : Activity() {
     serverPreference: String,
     secretPreference: String,
     enabledPreference: String,
-    enabledToggle: CheckBox,
     urlStatus: TextView,
     outputStatus: TextView,
     onSaved: () -> Unit
@@ -110,13 +109,13 @@ class MainActivity : Activity() {
     urlStatus.text = "$platform RTMPS URL saved on this phone ✓"
     urlStatus.setTextColor(getColor(R.color.sweaty_cyan))
     val hasKey = RtmpsPublisher.keyValid(SecretStore(this).get(secretPreference))
-    if (hasKey) {
-      prefs.edit().putBoolean(enabledPreference, true).commit()
-      enabledToggle.isChecked = true
-    }
+    val selected = prefs.getBoolean(enabledPreference, false)
     outputStatus.text = outputCredentialStatus(platform, secretPreference, serverPreference)
-    status.text = if (hasKey) "$platform URL saved; destination is ready for the next public stream."
-      else "$platform URL saved. Add its stream key to finish setup."
+    status.text = when {
+      !hasKey -> "$platform URL saved. Add its stream key to finish setup."
+      selected -> "$platform URL saved; destination is ready for the next public stream."
+      else -> "$platform URL saved. Turn on its checkbox to include it in your next public stream."
+    }
     onSaved()
     return true
   }
@@ -127,7 +126,6 @@ class MainActivity : Activity() {
     serverPreference: String,
     secretPreference: String,
     enabledPreference: String,
-    enabledToggle: CheckBox,
     urlStatus: TextView,
     outputStatus: TextView,
     onSaved: () -> Unit
@@ -150,7 +148,7 @@ class MainActivity : Activity() {
           return
         }
         if (saveOutputServerUrl(platform, serverInput, serverPreference, secretPreference,
-            enabledPreference, enabledToggle, urlStatus, outputStatus, onSaved)) {
+            enabledPreference, urlStatus, outputStatus, onSaved)) {
           lastSaved = candidate
         }
       }
@@ -253,14 +251,28 @@ class MainActivity : Activity() {
         RtmpsPublisher.YOUTUBE_RTMPS_URL
       }).apply()
     }
+    val secretStore = SecretStore(this)
+    val initialTwitchEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("twitch_enabled")) outputPrefs.getBoolean("twitch_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("rtmps"))
+    ) { outputPrefs.edit().putBoolean("twitch_enabled", it).apply() }
+    val initialYouTubeEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("youtube_enabled")) outputPrefs.getBoolean("youtube_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("youtube_key")) &&
+        RtmpsPublisher.endpointValid(outputPrefs.getString("youtube_server", "").orEmpty())
+    ) { outputPrefs.edit().putBoolean("youtube_enabled", it).apply() }
+    val initialKickEnabled = initializeDestinationSelection(
+      savedSelection = if (outputPrefs.contains("kick_enabled")) outputPrefs.getBoolean("kick_enabled", false) else null,
+      configuredDefault = RtmpsPublisher.keyValid(secretStore.get("kick_key")) &&
+        RtmpsPublisher.endpointValid(outputPrefs.getString("kick_server", "").orEmpty())
+    ) { outputPrefs.edit().putBoolean("kick_enabled", it).apply() }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
-      isChecked = outputPrefs.getBoolean("twitch_enabled", true)
+      isChecked = initialTwitchEnabled
     }
     val enableYouTube = CheckBox(this).apply {
       text = "Also stream to YouTube"
-      isChecked = outputPrefs.getBoolean("youtube_enabled",
-        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("youtube_key")))
+      isChecked = initialYouTubeEnabled
     }
     val youtubeServer = EditText(this).apply {
       id = R.id.youtube_server
@@ -305,8 +317,7 @@ class MainActivity : Activity() {
     }
     val enableKick = CheckBox(this).apply {
       text = "Also stream to Kick"
-      isChecked = outputPrefs.getBoolean("kick_enabled",
-        RtmpsPublisher.keyValid(SecretStore(this@MainActivity).get("kick_key")))
+      isChecked = initialKickEnabled
     }
     val kickServer = EditText(this).apply {
       id = R.id.kick_server
@@ -632,9 +643,9 @@ class MainActivity : Activity() {
     refreshOutputSummary()
 
     watchRtmpsUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
-      enableYouTube, youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
+      youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
     watchRtmpsUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
-      enableKick, kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
+      kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
 
     listOf(brandHeader, brandSubtitle, status,
       sectionHeader("PS5 input"), phoneIp, ps5Ip,
@@ -826,7 +837,7 @@ class MainActivity : Activity() {
     }
     saveYouTubeServer.setOnClickListener {
       saveOutputServerUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
-        enableYouTube, youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
+        youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
     }
     testYouTubeConnection.setOnClickListener {
       checkRtmpsEndpoint("YouTube", youtubeServer, youtubeOutputStatus, testYouTubeConnection)
@@ -939,10 +950,10 @@ class MainActivity : Activity() {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_KEY_SAVED,
           EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.YOUTUBE)
         youtubeKey.text.clear()
-        outputPrefs.edit().putBoolean("youtube_enabled", true).apply()
-        enableYouTube.isChecked = true
         youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
-        status.text = "YouTube key saved securely and YouTube selected for the next public stream. No stream has started."
+        status.text = if (outputPrefs.getBoolean("youtube_enabled", false))
+          "YouTube key saved securely. YouTube remains selected for the next public stream. No stream has started."
+        else "YouTube key saved securely. YouTube stays off until you turn on its checkbox. No stream has started."
         refreshOutputSummary()
       } catch (error: Exception) {
         status.text = "Could not securely save YouTube key (" + error.javaClass.simpleName + ")."
@@ -950,7 +961,7 @@ class MainActivity : Activity() {
     }
     saveKickServer.setOnClickListener {
       saveOutputServerUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
-        enableKick, kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
+        kickServerStatus, kickOutputStatus) { refreshOutputSummary() }
     }
     testKickConnection.setOnClickListener {
       checkRtmpsEndpoint("Kick", kickServer, kickOutputStatus, testKickConnection)
@@ -964,10 +975,10 @@ class MainActivity : Activity() {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_KEY_SAVED,
           EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.KICK)
         kickKey.text.clear()
-        outputPrefs.edit().putBoolean("kick_enabled", true).apply()
-        enableKick.isChecked = true
         kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
-        status.text = "Kick key saved securely and Kick selected for the next public stream. No stream has started."
+        status.text = if (outputPrefs.getBoolean("kick_enabled", false))
+          "Kick key saved securely. Kick remains selected for the next public stream. No stream has started."
+        else "Kick key saved securely. Kick stays off until you turn on its checkbox. No stream has started."
         refreshOutputSummary()
       } catch (error: Exception) {
         status.text = "Could not securely save Kick key (" + error.javaClass.simpleName + ")."

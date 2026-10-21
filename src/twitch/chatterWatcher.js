@@ -24,8 +24,13 @@ export class ChatterWatcher {
     this.now = now;
     this.timer = null;
     this.state = new Map();
+    this.pollErrors = new Map();
     this.running = false;
     this.disabledReason = null;
+    this.tickPromise = null;
+    this.resumePromise = null;
+    this.resuming = false;
+    this.firstPollPromise = null;
   }
 
   _channelKey(channel) {
@@ -42,6 +47,23 @@ export class ChatterWatcher {
       });
     }
     return this.state.get(key);
+  }
+
+  isReady() {
+    return this.running
+      && this.channels.length > 0
+      && !this.disabledReason
+      && this.pollErrors.size === 0
+      && this.channels.every(channel => this._stateFor(channel).baselineReady);
+  }
+
+  getStatus() {
+    return {
+      running: this.running,
+      ready: this.isReady(),
+      disabledReason: this.disabledReason,
+      failures: [...this.pollErrors.values()].map(failure => ({ ...failure })),
+    };
   }
 
   observeIrcJoin(channel, username, at = this.now()) {
@@ -80,7 +102,14 @@ export class ChatterWatcher {
     if (!broadcaster?.id) throw new Error(`broadcaster_not_found:${broadcasterLogin}`);
 
     const moderatorId = await this.helix.getTokenOwnerId();
-    const chatters = await this.helix.getChatters(broadcaster.id, moderatorId);
+    let chatters;
+    try {
+      chatters = await this.helix.getChatters(broadcaster.id, moderatorId);
+    } catch (err) {
+      err.helixOperation ||= 'get_chatters';
+      throw err;
+    }
+
     const current = new Set(
       chatters
         .map(entry => String(entry?.user_login || '').trim().toLowerCase())
@@ -119,46 +148,117 @@ export class ChatterWatcher {
     return { baseline: false, arrivals };
   }
 
-  async tick() {
-    if (!this.running || this.disabledReason) return;
+  _tickResult() {
+    const status = this.getStatus();
+    return { ...status, ok: status.ready };
+  }
+
+  async _pollChannels() {
+    if (!this.helix) {
+      const error = new Error('helix_unavailable');
+      log.warn('Chatter watcher poll failed', error.message);
+      return this._tickResult();
+    }
+
     for (const channel of this.channels) {
+      const channelKey = this._channelKey(channel);
       try {
-        await this.pollChannel(channel);
+        await this.pollChannel(channelKey);
+        if (this.pollErrors.delete(channelKey)) {
+          log.info(`Chatter watcher poll recovered for ${channelKey}`);
+        }
       } catch (err) {
         const status = Number(err?.response?.status || 0);
-        const missingScope = status === 401 || status === 403;
-        if (missingScope) {
-          this.disabledReason = 'missing_moderator_read_chatters';
-          log.warn('Chatter watcher disabled until Twitch OAuth includes moderator:read:chatters');
-          return;
+        const reason = status === 401
+          ? 'twitch_unauthorized'
+          : status === 403 && err.helixOperation === 'get_chatters'
+            ? 'bot_not_channel_moderator'
+            : 'helix_poll_failed';
+        const failure = { channel: channelKey, reason, status: status || null };
+        const previous = this.pollErrors.get(channelKey);
+        this.pollErrors.set(channelKey, failure);
+
+        if (status === 401) {
+          this.disabledReason = reason;
+          if (previous?.reason !== reason || previous.status !== status) {
+            log.warn(`Chatter watcher disabled after Twitch returned 401 for ${channelKey}; verify the bot token and moderator:read:chatters scope`);
+          }
+          break;
         }
-        log.warn(`Chatter watcher poll failed for ${channel}`, err?.response?.data || err.message);
+
+        if (status === 403 && err.helixOperation === 'get_chatters') {
+          if (previous?.reason !== reason || previous.status !== status) {
+            log.warn(`Twitch returned 403 for Get Chatters in ${channelKey}; make ${this.botLogin || 'the bot'} a channel moderator. The watcher will retry automatically.`);
+          }
+          continue;
+        }
+
+        if (previous?.reason !== reason || previous.status !== status) {
+          log.warn(`Chatter watcher poll failed for ${channelKey}`, err?.response?.data || err.message);
+        }
       }
+    }
+
+    return this._tickResult();
+  }
+
+  async _runExclusiveTick() {
+    if (this.tickPromise) return this.tickPromise;
+    const pending = this._pollChannels();
+    this.tickPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.tickPromise === pending) this.tickPromise = null;
     }
   }
 
+  async tick() {
+    if (!this.running || this.resuming || this.disabledReason) return this._tickResult();
+    return this._runExclusiveTick();
+  }
+
   start() {
-    if (this.running) return;
+    if (this.running) return this.firstPollPromise || Promise.resolve(this._tickResult());
     this.running = true;
-    this.tick().catch(err => log.warn('Initial chatter watcher poll failed', err.message));
+    this.firstPollPromise = this.tick();
+    this.firstPollPromise.catch(err => log.warn('Initial chatter watcher poll failed', err.message));
     this.timer = setInterval(() => {
       this.tick().catch(err => log.warn('Chatter watcher tick failed', err.message));
     }, this.pollMs);
     this.timer.unref?.();
     log.info(`Chatter watcher started (poll=${Math.round(this.pollMs / 1000)}s)`);
+    return this.firstPollPromise;
   }
 
   async resumeAfterAuthorization() {
     if (!this.running) return false;
-    this.disabledReason = null;
-    for (const state of this.state.values()) {
-      state.baselineReady = false;
-      state.current.clear();
-      state.seenAt.clear();
+    if (this.resumePromise) return this.resumePromise;
+
+    this.resuming = true;
+    const pending = (async () => {
+      if (this.tickPromise) await this.tickPromise;
+      if (!this.running) return false;
+
+      this.disabledReason = null;
+      this.pollErrors.clear();
+      for (const state of this.state.values()) {
+        state.baselineReady = false;
+        state.current.clear();
+        state.seenAt.clear();
+      }
+      log.info('Chatter watcher authorization refreshed; rebuilding baseline');
+      const result = await this._runExclusiveTick();
+      return result.ready;
+    })();
+    this.resumePromise = pending;
+
+    try {
+      return await pending;
+    } finally {
+      if (this.resumePromise === pending) this.resumePromise = null;
+      this.resuming = false;
     }
-    log.info('Chatter watcher authorization refreshed; rebuilding baseline');
-    await this.tick();
-    return !this.disabledReason;
   }
 
   stop() {
@@ -166,5 +266,7 @@ export class ChatterWatcher {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.state.clear();
+    this.pollErrors.clear();
+    this.disabledReason = null;
   }
 }

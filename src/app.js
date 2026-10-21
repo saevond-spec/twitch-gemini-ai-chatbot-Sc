@@ -41,6 +41,7 @@ import { AnalyticalMomentGate } from './chat/analyticalMomentGate.js';
 import { quietSpeakProbability, chooseQuietMode, quietPrompt } from './chat/quietChatterModel.js';
 import { EngagementAttribution } from './chat/engagementAttribution.js';
 import { JoinWelcomeBatcher } from './chat/joinWelcomeBatcher.js';
+import { joinWelcomeAuthMessage } from './chat/joinWelcomeStatus.js';
 import { shouldWelcomeJoin } from './chat/joinWelcomePolicy.js';
 import { FollowThankYouRotator } from './chat/followThankYou.js';
 import { youtubeAuthUrl, exchangeYouTubeCode } from './social/youtubeAuth.js';
@@ -349,6 +350,7 @@ app.get('/auth/callback', async (req, res) => {
     await exchangeCodeForToken(code, redirectUri);
     if (!botInitialized) {
       await initializeBot();
+      if (chatterWatcher?.firstPollPromise) await chatterWatcher.firstPollPromise;
     } else {
       log.info('Bot already running, refreshing OAuth-dependent features in place');
       if (chatterWatcher) {
@@ -356,13 +358,22 @@ app.get('/auth/callback', async (req, res) => {
         log.info(`Chatter watcher OAuth refresh result: resumed=${resumed}`);
       }
     }
-    res.send(`SweatyClanker bot authorization successful for ${configuredBotLogin()}. You may close this window.`);
+    const watcherStatus = chatterWatcher?.getStatus() || {
+      ready: false,
+      failures: [{ reason: 'watcher_unavailable' }],
+    };
+    res.set('Cache-Control', 'no-store');
+    res.type('text/plain').send(joinWelcomeAuthMessage(watcherStatus, configuredBotLogin()));
   } catch (err) {
     log.error('Auth callback failed', err);
     if (String(err.message || '').includes('Wrong Twitch account authorized')) {
-      return res.status(400).send(`Wrong Twitch account. Sign out of the current Twitch account, sign in as ${configuredBotLogin()}, then authorize again.`);
+      return res.status(400).type('text/plain').send(`Wrong Twitch account. Sign out of the current Twitch account, sign in as @${configuredBotLogin()}, then authorize again.`);
     }
-    res.status(500).send('Authorization failed');
+    const missingScopes = String(err.message || '').match(/Twitch authorization missing bot scopes: (.+)/);
+    if (missingScopes) {
+      return res.status(400).type('text/plain').send(`Twitch did not grant the required bot permission(s): ${missingScopes[1]}. Start again at /auth/login and allow the requested permissions.`);
+    }
+    res.status(500).type('text/plain').send('Authorization failed. Check the application logs for the Twitch error.');
   }
 });
 

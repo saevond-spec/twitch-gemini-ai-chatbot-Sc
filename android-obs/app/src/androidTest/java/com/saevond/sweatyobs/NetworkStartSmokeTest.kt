@@ -19,12 +19,57 @@ import java.util.concurrent.atomic.AtomicReference
 import org.hamcrest.Matchers.*
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
+import org.junit.rules.TestRule
+import org.junit.runner.Description
+import org.junit.runners.model.Statement
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NetworkStartSmokeTest {
-  @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
+  private val activityScenarioRule = ActivityScenarioRule(MainActivity::class.java)
+  val activityRule get() = activityScenarioRule
+
+  @get:Rule val stateRestoringRules: TestRule =
+    RuleChain.outerRule(PreferenceSnapshotRule()).around(activityScenarioRule)
+
+  /** Snapshot before ActivityScenarioRule launches the app, then restore after it closes. */
+  private class PreferenceSnapshotRule : TestRule {
+    private val preferenceNames = listOf(
+      "encoder_outputs", "secure_encoder_secrets", "encoder_diagnostics",
+      "diagnostic_status_v1", "ps5_setup", "ps5_audio_levels", "ps5_music"
+    )
+
+    override fun apply(base: Statement, description: Description): Statement =
+      object : Statement() {
+        override fun evaluate() {
+          val context = InstrumentationRegistry.getInstrumentation().targetContext
+          val snapshots = preferenceNames.associateWith {
+            context.getSharedPreferences(it, Context.MODE_PRIVATE).all.toMap()
+          }
+          try {
+            base.evaluate()
+          } finally {
+            snapshots.forEach { (name, snapshot) ->
+              val editor = context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear()
+              snapshot.forEach { (key, value) ->
+                when (value) {
+                  is Boolean -> editor.putBoolean(key, value)
+                  is Int -> editor.putInt(key, value)
+                  is Long -> editor.putLong(key, value)
+                  is Float -> editor.putFloat(key, value)
+                  is String -> editor.putString(key, value)
+                  is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                  else -> error("Unsupported preference value type for $key in $name")
+                }
+              }
+              check(editor.commit()) { "Could not restore $name after the UI test" }
+            }
+          }
+        }
+      }
+  }
 
   @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -61,8 +106,12 @@ class NetworkStartSmokeTest {
     val youtubeKey = "sandbox-youtube-key-123"
     val kickKey = "sandbox-kick-key-456"
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
-    outputPrefs.edit().remove("youtube_server").remove("kick_server")
-      .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
+    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+    val preferenceSnapshots = listOf("encoder_outputs", "secure_encoder_secrets", "encoder_diagnostics")
+      .associateWith { context.getSharedPreferences(it, 0).all.toMap() }
+    try {
+      outputPrefs.edit().remove("youtube_server").remove("kick_server")
+        .putBoolean("youtube_enabled", false).putBoolean("kick_enabled", false).commit()
     activityRule.scenario.recreate()
     assertEquals(RtmpsPublisher.KICK_RTMPS_URL, outputPrefs.getString("kick_server", null))
 
@@ -70,18 +119,17 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
     onView(withId(R.id.youtube_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
-    onView(withText("Also stream to YouTube")).check(matches(isChecked()))
-    assertTrue(outputPrefs.getBoolean("youtube_enabled", false))
+    onView(withText("Also stream to YouTube")).check(matches(isNotChecked()))
+    assertFalse(outputPrefs.getBoolean("youtube_enabled", true))
 
     onView(withId(R.id.kick_stream_key)).perform(scrollTo(), replaceText(kickKey), closeSoftKeyboard())
     onView(withId(R.id.save_kick_key)).perform(scrollTo(), click())
     onView(withId(R.id.kick_output_status)).perform(scrollTo())
       .check(matches(withText(containsString("key saved securely"))))
-    onView(withText("Also stream to Kick")).check(matches(isChecked()))
-    assertTrue(outputPrefs.getBoolean("kick_enabled", false))
+    onView(withText("Also stream to Kick")).check(matches(isNotChecked()))
+    assertFalse(outputPrefs.getBoolean("kick_enabled", true))
     onView(withId(R.id.connection_status)).check(matches(withText(containsString("No stream has started"))))
 
-    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
     assertNotEquals(youtubeKey, encryptedPrefs.getString("youtube_key", null))
     assertNotEquals(kickKey, encryptedPrefs.getString("kick_key", null))
     assertEquals(youtubeKey, SecretStore(context).get("youtube_key"))
@@ -103,12 +151,72 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_server_status)).check(matches(withText(containsString("saved on this phone"))))
     onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+    onView(withText("Also stream to YouTube")).check(matches(isNotChecked()))
+    onView(withText("Also stream to Kick")).check(matches(isNotChecked()))
+
+    onView(withText("Also stream to YouTube")).perform(scrollTo(), click())
+    onView(withText("Also stream to Kick")).perform(scrollTo(), click())
+    assertTrue(outputPrefs.getBoolean("youtube_enabled", false))
+    assertTrue(outputPrefs.getBoolean("kick_enabled", false))
 
     activityRule.scenario.recreate()
     assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
     onView(withId(R.id.youtube_server)).check(matches(withText(equalToIgnoringCase("rtmps://youtube.example.test/live2"))))
     onView(withId(R.id.kick_server)).check(matches(withText(equalToIgnoringCase("rtmps://kick.example.test/app"))))
+    onView(withText("Also stream to YouTube")).check(matches(isChecked()))
+    onView(withText("Also stream to Kick")).check(matches(isChecked()))
+    } finally {
+      preferenceSnapshots.forEach { (name, snapshot) ->
+        val editor = context.getSharedPreferences(name, 0).edit().clear()
+        snapshot.forEach { (key, value) ->
+          when (value) {
+            is Boolean -> editor.putBoolean(key, value)
+            is Int -> editor.putInt(key, value)
+            is Long -> editor.putLong(key, value)
+            is Float -> editor.putFloat(key, value)
+            is String -> editor.putString(key, value)
+            is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+            else -> error("Unsupported preference value type for $key")
+          }
+        }
+        check(editor.commit()) { "Could not restore $name after the UI test" }
+      }
+    }
+  }
+
+  @Test fun twitchChatTokenIsSavedEncryptedAndLiveChatIsOptIn() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
+    val secrets = SecretStore(context)
+    val fakeToken = "synthetic-twitch-chat-token-12345"
+    secrets.put("twitch_chat_token", "")
+    outputPrefs.edit().putBoolean("twitch_chat_enabled", false)
+      .putString("twitch_chat_login", "saevond")
+      .putString("twitch_chat_channel", "saevond").commit()
+    activityRule.scenario.recreate()
+    try {
+      onView(withText("Show live Twitch chat in the overlay")).perform(scrollTo())
+        .check(matches(isNotChecked())).perform(click())
+      onView(withHint("Twitch login for the token (example: saevond)"))
+        .perform(scrollTo(), replaceText("saevond"), closeSoftKeyboard())
+      onView(withHint("Twitch channel to display (example: saevond)"))
+        .perform(scrollTo(), replaceText("saevond"), closeSoftKeyboard())
+      onView(withHint("Twitch user access token with chat:read (saved to Android Keystore)"))
+        .perform(scrollTo(), replaceText(fakeToken), closeSoftKeyboard())
+      onView(withText("Save Twitch chat settings securely")).perform(scrollTo(), click())
+
+      assertTrue(outputPrefs.getBoolean("twitch_chat_enabled", false))
+      assertEquals("saevond", outputPrefs.getString("twitch_chat_login", null))
+      assertEquals("saevond", outputPrefs.getString("twitch_chat_channel", null))
+      assertEquals(fakeToken, secrets.get("twitch_chat_token"))
+      assertNotEquals(fakeToken, context.getSharedPreferences("secure_encoder_secrets", 0)
+        .getString("twitch_chat_token", null))
+      onView(withId(R.id.connection_status)).check(matches(withText(containsString("Android Keystore"))))
+    } finally {
+      secrets.put("twitch_chat_token", "")
+      outputPrefs.edit().putBoolean("twitch_chat_enabled", false).commit()
+    }
   }
 
   @Test fun twitchChatTokenIsSavedEncryptedAndLiveChatIsOptIn() {

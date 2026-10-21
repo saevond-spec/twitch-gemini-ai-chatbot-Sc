@@ -36,6 +36,15 @@ class TwitchChatClientTest {
     assertNull(TwitchChatProtocol.pongLine("PING "))
   }
 
+  @Test fun reconnectRequiresTheServerIrcCommandAndNeverMatchesChatText() {
+    assertTrue(TwitchChatProtocol.isServerReconnect(":tmi.twitch.tv RECONNECT"))
+    assertTrue(TwitchChatProtocol.isServerReconnect("@time=0 :tmi.twitch.tv RECONNECT"))
+    assertFalse(TwitchChatProtocol.isServerReconnect(
+      "@display-name=Player :player!player@player.tmi.twitch.tv PRIVMSG #saevond :please RECONNECT the overlay"))
+    assertFalse(TwitchChatProtocol.isServerReconnect(":tmi.twitch.tv NOTICE #saevond :RECONNECT"))
+    assertFalse(TwitchChatProtocol.isServerReconnect("RECONNECT"))
+  }
+
   @Test fun parsesDisplayNameAndBoundsUntrustedChatText() {
     val line = "@display-name=Ice\\sQueen :icequeen!icequeen@icequeen.tmi.twitch.tv PRIVMSG #saevond :Clean parry!\u0001"
     val parsed = TwitchChatProtocol.parsePrivmsg(line, "saevond")
@@ -64,5 +73,11 @@ class TwitchChatClientTest {
     assertEquals(60_000L, TwitchChatProtocol.retryDelayMillis(30, 1.0))
     assertEquals(0L, TwitchChatProtocol.retryDelayMillis(-4, -1.0))
     assertTrue(TwitchChatProtocol.retryDelayMillis(30, .99) <= 60_000L)
+  }
+
+  @Test fun shortJoinThenDropRetainsBackoffUntilSessionIsStable() {
+    assertEquals(4, TwitchChatProtocol.retryAttemptAfterSessionFailure(4, 59_999))
+    assertEquals(0, TwitchChatProtocol.retryAttemptAfterSessionFailure(4, 60_000))
+    assertEquals(4, TwitchChatProtocol.retryAttemptAfterSessionFailure(4, null))
   }
 }
