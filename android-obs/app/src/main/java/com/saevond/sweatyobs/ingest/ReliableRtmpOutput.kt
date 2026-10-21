@@ -1,6 +1,10 @@
 package com.saevond.sweatyobs.ingest
 
 import java.io.IOException
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import kotlin.math.max
@@ -65,6 +69,13 @@ class ReliableRtmpOutput(
     const val DEFAULT_QUEUE_MEDIA_MS = 1_500L
     const val DEFAULT_QUEUE_AGE_MS = 2_000L
     val DEFAULT_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
+
+    /** Bounded cleanup pool: slow TLS closes cannot create unbounded threads or retain retries. */
+    private val CLOSE_EXECUTOR = ThreadPoolExecutor(
+      3, 3, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(6),
+      { task -> Thread(task, "SweatyOBS-publisher-close").apply { isDaemon = true } },
+      ThreadPoolExecutor.AbortPolicy()
+    )
 
     fun retryDelayMs(failures: Int): Long {
       val n = failures.coerceAtLeast(1)
@@ -234,7 +245,7 @@ class ReliableRtmpOutput(
       lock.notifyAll()
     }
     abortPublisherAsync(publisherToAbort)
-    worker?.takeIf { it !== Thread.currentThread() }?.let { runCatching { it.join(1_000) } }
+    worker?.takeIf { it !== Thread.currentThread() }?.let { runCatching { it.join(250) } }
     publisher = null
     worker = null
     notifySnapshot()
@@ -320,7 +331,7 @@ class ReliableRtmpOutput(
           }
         } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       } finally {
-        abortPublisherAsync(active)
+        abortPublisherAsync(active, waitForCapacity = true)
         if (publisher === active) publisher = null
       }
     }
@@ -448,16 +459,39 @@ class ReliableRtmpOutput(
 
   /**
    * Socket close can block in the platform TLS provider. Keep it away from the LAN ingest
-   * callback, and coalesce repeated abort requests for the same publisher instance.
+   * callback, coalesce repeated aborts, and bound cleanup threads and queued publishers.
+   * Only the output worker may wait for capacity; ingest, UI, and service teardown stay quick.
    */
-  private fun abortPublisherAsync(candidate: MediaPublisher?) {
+  private fun abortPublisherAsync(candidate: MediaPublisher?, waitForCapacity: Boolean = false) {
     if (candidate == null) return
-    val shouldClose = synchronized(lock) { closingPublishers.add(candidate) }
-    if (!shouldClose) return
-    thread(name = "SweatyOBS-${destination.id}-abort", isDaemon = true) {
+    val closeTask = Runnable {
       try {
         runCatching { candidate.close() }
       } finally {
+        synchronized(lock) { closingPublishers.remove(candidate) }
+      }
+    }
+    var waitForQueueCapacity = false
+    // Keep reservation and nonblocking submission under one lock. If submission is
+    // rejected, the output worker's finally block can then safely retry the same close.
+    synchronized(lock) {
+      if (!closingPublishers.add(candidate)) return
+      try {
+        CLOSE_EXECUTOR.execute(closeTask)
+        return
+      } catch (_: RejectedExecutionException) {
+        if (!waitForCapacity) {
+          closingPublishers.remove(candidate)
+          return
+        }
+        waitForQueueCapacity = true
+      }
+    }
+    if (waitForQueueCapacity) {
+      try {
+        CLOSE_EXECUTOR.queue.put(closeTask)
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
         synchronized(lock) { closingPublishers.remove(candidate) }
       }
     }

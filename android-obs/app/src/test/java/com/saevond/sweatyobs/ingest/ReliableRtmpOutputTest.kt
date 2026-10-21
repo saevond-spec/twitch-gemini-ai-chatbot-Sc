@@ -857,6 +857,67 @@ class ReliableRtmpOutputTest {
     }
   }
 
+  @Test fun publisherCleanupUsesABoundedWorkerPoolUnderConcurrentAborts() {
+    val outputCount = 12
+    val connected = CountDownLatch(outputCount)
+    val firstCloseWorkersStarted = CountDownLatch(3)
+    val closeCallsStarted = AtomicInteger()
+    val closed = CountDownLatch(outputCount)
+    val allowCloseToFinish = CountDownLatch(1)
+    val activeCloses = AtomicInteger()
+    val maxActiveCloses = AtomicInteger()
+    val outputs = (0 until outputCount).map { index ->
+      ReliableRtmpOutput(sandboxDestination("youtube$index"), publisherFactory = {
+        object : MediaPublisher {
+          override fun connect() { connected.countDown() }
+          override fun publish(media: RtmpMessage) {}
+          override fun close() {
+            val active = activeCloses.incrementAndGet()
+            maxActiveCloses.updateAndGet { previous -> maxOf(previous, active) }
+            closeCallsStarted.incrementAndGet()
+            firstCloseWorkersStarted.countDown()
+            try {
+              check(allowCloseToFinish.await(5, TimeUnit.SECONDS)) { "synthetic close was not released" }
+            } finally {
+              activeCloses.decrementAndGet()
+              closed.countDown()
+            }
+          }
+        }
+      })
+    }
+    try {
+      outputs.forEach { output ->
+        output.start()
+        output.offer(avcConfig())
+        output.offer(aacConfig())
+        output.offer(keyframe(0))
+      }
+      assertTrue("every synthetic output should connect", connected.await(3, TimeUnit.SECONDS))
+      outputs.forEach { it.reconnectNow() }
+
+      assertTrue("cleanup workers should start closing publishers",
+        firstCloseWorkersStarted.await(2, TimeUnit.SECONDS))
+      Thread.sleep(150)
+      assertEquals("slow closes should be capped at the fixed pool size",
+        3, closeCallsStarted.get())
+      assertTrue("the maximum active close count must remain bounded",
+        maxActiveCloses.get() <= 3)
+      val closeThreads = Thread.getAllStackTraces().keys.count {
+        it.name == "SweatyOBS-publisher-close" || it.name.endsWith("-abort")
+      }
+      assertTrue("publisher cleanup must not create one thread per reconnect", closeThreads <= 3)
+    } finally {
+      allowCloseToFinish.countDown()
+      outputs.forEach { it.close() }
+    }
+    assertTrue("all publishers should eventually close after capacity returns",
+      closed.await(5, TimeUnit.SECONDS))
+    assertEquals(0, closed.count)
+    assertTrue("publisher cleanup remains bounded after draining",
+      maxActiveCloses.get() <= 3)
+  }
+
   private fun pollUntil(timeoutMs: Long, predicate: () -> Boolean): Boolean {
     val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
     while (System.nanoTime() < end) {

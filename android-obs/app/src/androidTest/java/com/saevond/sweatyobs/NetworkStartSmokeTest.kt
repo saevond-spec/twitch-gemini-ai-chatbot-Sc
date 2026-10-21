@@ -19,12 +19,57 @@ import java.util.concurrent.atomic.AtomicReference
 import org.hamcrest.Matchers.*
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
+import org.junit.rules.TestRule
+import org.junit.runner.Description
+import org.junit.runners.model.Statement
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NetworkStartSmokeTest {
-  @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
+  private val activityScenarioRule = ActivityScenarioRule(MainActivity::class.java)
+  val activityRule get() = activityScenarioRule
+
+  @get:Rule val stateRestoringRules: TestRule =
+    RuleChain.outerRule(PreferenceSnapshotRule()).around(activityScenarioRule)
+
+  /** Snapshot before ActivityScenarioRule launches the app, then restore after it closes. */
+  private class PreferenceSnapshotRule : TestRule {
+    private val preferenceNames = listOf(
+      "encoder_outputs", "secure_encoder_secrets", "encoder_diagnostics",
+      "diagnostic_status_v1", "ps5_setup", "ps5_audio_levels", "ps5_music"
+    )
+
+    override fun apply(base: Statement, description: Description): Statement =
+      object : Statement() {
+        override fun evaluate() {
+          val context = InstrumentationRegistry.getInstrumentation().targetContext
+          val snapshots = preferenceNames.associateWith {
+            context.getSharedPreferences(it, Context.MODE_PRIVATE).all.toMap()
+          }
+          try {
+            base.evaluate()
+          } finally {
+            snapshots.forEach { (name, snapshot) ->
+              val editor = context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear()
+              snapshot.forEach { (key, value) ->
+                when (value) {
+                  is Boolean -> editor.putBoolean(key, value)
+                  is Int -> editor.putInt(key, value)
+                  is Long -> editor.putLong(key, value)
+                  is Float -> editor.putFloat(key, value)
+                  is String -> editor.putString(key, value)
+                  is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                  else -> error("Unsupported preference value type for $key in $name")
+                }
+              }
+              check(editor.commit()) { "Could not restore $name after the UI test" }
+            }
+          }
+        }
+      }
+  }
 
   @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext

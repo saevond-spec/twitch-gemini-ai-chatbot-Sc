@@ -269,15 +269,14 @@ class RtmpsPublisher internal constructor(
         if (addresses.any { !isPublicDestination(it) }) return "BLOCKED_ADDRESS"
         try {
           val remaining = remainingTimeoutMs(deadline)
-          val tls = tryResolvedAddresses(addresses, remaining) { address, remainingMs ->
+          tryResolvedAddresses(addresses, remaining) { address, remainingMs ->
             cancellation.throwIfCancelled()
             openTlsSocket(endpoint, address, remainingMs, cancellation)
           }
           if (!startupDeadline.complete()) {
             throw SocketTimeoutException("RTMPS startup deadline exceeded")
           }
-          cancellation.clearCancelAction()
-          tls.close()
+          cancellation.cancel()
           "TLS_OK"
         } catch (error: Exception) {
           cancellation.cancel()
@@ -361,7 +360,6 @@ class RtmpsPublisher internal constructor(
       var tls: SSLSocket? = null
       cancellation.setCancelAction {
         runCatching { plain.close() }
-        runCatching { tls?.close() }
       }
       try {
         cancellation.throwIfCancelled()
@@ -375,7 +373,6 @@ class RtmpsPublisher internal constructor(
           .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
         cancellation.setCancelAction {
           runCatching { plain.close() }
-          runCatching { tls?.close() }
         }
         tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
         tls.soTimeout = minOf(8_000, tlsRemaining)
@@ -385,7 +382,6 @@ class RtmpsPublisher internal constructor(
         return tls
       } catch (error: Exception) {
         cancellation.clearCancelAction()
-        runCatching { tls?.close() }
         runCatching { plain.close() }
         throw error
       }
@@ -496,7 +492,6 @@ class RtmpsPublisher internal constructor(
       deadlineInput.disableDeadline()
       // The control reader stays open during quiet streams once startup succeeds.
       tls.soTimeout = 0
-      cancellation.clearCancelAction()
       output = out
       initialized = true
       if (stopped) {
@@ -539,7 +534,7 @@ class RtmpsPublisher internal constructor(
         while (!stopped && initialized) processServerControl(reader.nextMessage(), out, countedInput)
       } catch (_: Exception) {
         // The next media write observes the closed socket and enters the output retry path.
-        if (!stopped) runCatching { socket?.close() }
+        if (!stopped) connectCancellation?.cancel()
       }
     }
   }
@@ -580,7 +575,6 @@ class RtmpsPublisher internal constructor(
     output = null
     connectCancellation?.cancel()
     connectCancellation = null
-    runCatching { socket?.close() }
     socket = null
     controlReaderThread = null
   }
