@@ -446,6 +446,7 @@ class ReliableRtmpOutputTest {
     val firstLiveSnapshot = AtomicInteger()
     val attempts = AtomicInteger()
     val stalePackets = CopyOnWriteArrayList<RtmpMessage>()
+    val stalePublishCalls = AtomicInteger()
     val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
     val firstCloseCount = AtomicInteger()
     val output = ReliableRtmpOutput(
@@ -457,6 +458,7 @@ class ReliableRtmpOutputTest {
             if (session == 2) secondConnected.countDown()
           }
           override fun publish(media: RtmpMessage) {
+            if (session == 1) stalePublishCalls.incrementAndGet()
             if (session == 1 && firstCloseCount.get() > 0) throw IOException("stale publisher was closed")
             if (session == 1) stalePackets += media else resumedPackets += media
           }
@@ -489,6 +491,7 @@ class ReliableRtmpOutputTest {
       assertTrue("new publisher should receive the complete fresh GOP",
         pollUntil(2_000) { resumedPackets.size >= 3 })
       assertTrue("stale publisher must not consume any fresh-GOP packets", stalePackets.isEmpty())
+      assertEquals("stale publisher must not be called after reconnect", 0, stalePublishCalls.get())
       assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
       assertEquals(listOf(0L, 0L, 0L), resumedPackets.take(3).map { it.timestamp })
       assertEquals(2, attempts.get())
@@ -524,7 +527,8 @@ class ReliableRtmpOutputTest {
         }
       },
       retryDelaysMs = longArrayOf(10_000),
-      maxQueueMediaMs = 100
+      maxQueueMediaMs = 100,
+      maxQueueAgeMs = 15_000
     )
     try {
       output.start()
