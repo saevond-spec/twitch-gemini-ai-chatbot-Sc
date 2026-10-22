@@ -187,6 +187,10 @@ class MainActivity : Activity() {
   private lateinit var encoderContentView: View
   private var encoderUiVisible = false
   private var lockOnResume = false
+  private var adminUnlockAttempt = 0
+  private var adminUnlockInFlight = false
+  private var adminUnlockWasBackgrounded = false
+  internal var adminKeyVerifier: AdminKeyVerifier = RemoteAdminKeyVerifier()
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val text = intent?.getStringExtra(Ps5LanService.EXTRA_STATUS_MESSAGE) ?: return
@@ -199,6 +203,9 @@ class MainActivity : Activity() {
     // Older builds cached one diagnostic status line on-device. Remove it and
     // keep live status in memory/broadcasts only from this version onward.
     getSharedPreferences(LEGACY_STATUS_PREFS, MODE_PRIVATE).edit().clear().apply()
+    // Remove the local-password hash from earlier builds. Streaming keys and
+    // other encoder settings live in separate preferences and are untouched.
+    getSharedPreferences("encoder_admin_lock", MODE_PRIVATE).edit().clear().apply()
     EncoderDiagnostics.setMode(EncoderDiagnosticMode.IDLE)
     val layout = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -606,7 +613,7 @@ class MainActivity : Activity() {
     val lockAdmin = Button(this).apply {
       id = R.id.admin_lock_now
       text = "LOCK ADMIN CONTROLS"
-      setOnClickListener { showAdminPasswordGate(setup = false) }
+      setOnClickListener { showAdminPasswordGate() }
     }
 
     fun refreshOutputSummary() {
@@ -677,7 +684,7 @@ class MainActivity : Activity() {
       sectionHeader("Device safety"), privacy, checkSafety, safetyReading, lockAdmin)
       .forEach { layout.addView(it) }
     encoderContentView = ScrollView(this).apply { addView(layout) }
-    showAdminPasswordGate(setup = !AdminPasswordStore(this).isConfigured())
+    showAdminPasswordGate()
 
     stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -1437,8 +1444,12 @@ class MainActivity : Activity() {
       ?.address?.hostAddress
   }
 
-  private fun showAdminPasswordGate(setup: Boolean) {
+  private fun showAdminPasswordGate() {
     encoderUiVisible = false
+    adminUnlockAttempt += 1
+    adminUnlockInFlight = false
+    adminUnlockWasBackgrounded = false
+    val attempt = adminUnlockAttempt
     val root = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(dp(22), dp(34), dp(22), dp(28))
@@ -1453,7 +1464,7 @@ class MainActivity : Activity() {
       setPadding(0, 0, 0, dp(8))
     }
     val title = TextView(this).apply {
-      text = if (setup) "SET ADMIN PASSWORD" else "ADMIN ACCESS"
+      text = "ADMIN ACCESS"
       textSize = 20f
       letterSpacing = .08f
       setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
@@ -1461,89 +1472,77 @@ class MainActivity : Activity() {
       setPadding(0, dp(8), 0, dp(8))
     }
     val explanation = TextView(this).apply {
-      text = if (setup)
-        "Create a unique device-only password to protect this encoder's controls. Use 8–128 characters and keep it private."
-      else
-        "Enter your device-only admin password to open the encoder controls."
+      text = "Enter the current admin key to open the encoder controls. It is checked over HTTPS and is not saved on this phone."
       textSize = 15f
       setTextColor(getColor(R.color.sweaty_text))
       setPadding(0, 0, 0, dp(14))
     }
-    val password = EditText(this).apply {
+    val keyInput = EditText(this).apply {
       id = R.id.admin_password
-      hint = if (setup) "Create admin password" else "Admin password"
+      hint = "Admin key"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
       setSingleLine(true)
-      filters = arrayOf(android.text.InputFilter.LengthFilter(AdminPasswordStore.MAX_PASSWORD_LENGTH))
+      filters = arrayOf(android.text.InputFilter.LengthFilter(RemoteAdminKeyVerifier.MAX_KEY_LENGTH))
       importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-    }
-    val confirmation = EditText(this).apply {
-      id = R.id.admin_password_confirm
-      hint = "Confirm admin password"
-      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-      setSingleLine(true)
-      filters = arrayOf(android.text.InputFilter.LengthFilter(AdminPasswordStore.MAX_PASSWORD_LENGTH))
-      visibility = if (setup) View.VISIBLE else View.GONE
-      importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+      isSaveEnabled = false
     }
     val message = TextView(this).apply {
       id = R.id.admin_password_status
-      text = "Password stays on this phone; it is not sent to Amaana or Render."
+      text = "The key is checked by the SweatyClanker encoder service."
       textSize = 13f
       setTextColor(getColor(R.color.sweaty_muted))
       setPadding(0, dp(10), 0, dp(12))
     }
     val submit = Button(this).apply {
       id = R.id.admin_password_submit
-      text = if (setup) "SET PASSWORD AND OPEN ENCODER" else "UNLOCK ENCODER"
+      text = "UNLOCK ENCODER"
       setBackgroundResource(R.drawable.sweaty_button_live)
       setTextColor(getColor(R.color.sweaty_text))
       setPadding(dp(12), dp(12), dp(12), dp(12))
     }
     val recovery = TextView(this).apply {
-      text = "Forgot the password? Clear this app's data in Android Settings to set it again. This also removes saved stream keys and settings."
+      text = "If the key is rotated, use the new key. Unlocking requires an internet connection and an available encoder service."
       textSize = 12f
       setTextColor(getColor(R.color.sweaty_muted))
       setPadding(0, dp(20), 0, 0)
     }
     submit.setOnClickListener {
-      val entered = password.text.toString()
-      val confirmed = confirmation.text.toString()
-      if (setup && !AdminPasswordStore.isValidPassword(entered)) {
-        message.text = "Choose a password between 8 and 128 characters."
+      val entered = keyInput.text.toString()
+      if (entered.isEmpty()) {
+        message.text = "Enter the admin key to continue."
         message.setTextColor(getColor(R.color.sweaty_red))
         return@setOnClickListener
       }
-      if (setup && entered != confirmed) {
-        message.text = "The passwords do not match."
-        message.setTextColor(getColor(R.color.sweaty_red))
-        return@setOnClickListener
-      }
-      password.text.clear()
-      confirmation.text.clear()
+      keyInput.text.clear()
       (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
-        ?.hideSoftInputFromWindow(password.windowToken, 0)
-      password.isEnabled = false
-      confirmation.isEnabled = false
+        ?.hideSoftInputFromWindow(keyInput.windowToken, 0)
+      keyInput.isEnabled = false
       submit.isEnabled = false
-      message.text = if (setup) "Saving password securely on this phone…" else "Checking password…"
+      adminUnlockInFlight = true
+      message.text = "Checking key securely…"
       message.setTextColor(getColor(R.color.sweaty_muted))
-      thread(name = "SweatyOBS-admin-password") {
-        val success = runCatching {
-          val store = AdminPasswordStore(this)
-          if (setup) store.setPassword(entered) else store.verify(entered)
-        }.getOrDefault(false)
+      thread(name = "SweatyOBS-admin-unlock") {
+        val result = runCatching { adminKeyVerifier.verify(entered) }
+          .getOrDefault(AdminKeyUnlockResult.UNAVAILABLE)
         runOnUiThread {
-          if (success) {
+          if (attempt != adminUnlockAttempt || isFinishing) return@runOnUiThread
+          adminUnlockInFlight = false
+          val backgrounded = adminUnlockWasBackgrounded
+          adminUnlockWasBackgrounded = false
+          if (result == AdminKeyUnlockResult.ACCEPTED && !backgrounded && !lockOnResume && hasWindowFocus()) {
             lockOnResume = false
             showEncoderControls()
           } else {
-            password.isEnabled = true
-            confirmation.isEnabled = true
+            keyInput.isEnabled = true
             submit.isEnabled = true
-            message.text = if (setup) "Could not save the password. Try again." else "Password not accepted. Try again."
-            message.setTextColor(getColor(R.color.sweaty_red))
-            password.requestFocus()
+            message.text = when (result) {
+              AdminKeyUnlockResult.ACCEPTED -> "Unlock was interrupted when the app left the foreground. Enter the key again."
+              AdminKeyUnlockResult.REJECTED -> "Key not accepted. Check it and try again."
+              AdminKeyUnlockResult.RATE_LIMITED -> "Too many attempts. Wait a little, then try again."
+              AdminKeyUnlockResult.UNAVAILABLE -> "Unlock service unavailable. Check internet and try again."
+            }
+            message.setTextColor(if (result == AdminKeyUnlockResult.ACCEPTED) getColor(R.color.sweaty_muted) else getColor(R.color.sweaty_red))
+            keyInput.requestFocus()
           }
         }
       }
@@ -1551,8 +1550,7 @@ class MainActivity : Activity() {
     root.addView(brand)
     root.addView(title)
     root.addView(explanation)
-    root.addView(password)
-    if (setup) root.addView(confirmation)
+    root.addView(keyInput)
     root.addView(message)
     root.addView(submit)
     root.addView(recovery)
@@ -1575,13 +1573,14 @@ class MainActivity : Activity() {
 
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
-    if (encoderUiVisible) lockOnResume = true
+    if (encoderUiVisible || adminUnlockInFlight) lockOnResume = true
+    if (adminUnlockInFlight) adminUnlockWasBackgrounded = true
   }
 
   override fun onPause() {
     if (lockOnResume && encoderUiVisible) {
       lockOnResume = false
-      showAdminPasswordGate(setup = false)
+      showAdminPasswordGate()
     }
     super.onPause()
   }
@@ -1590,7 +1589,11 @@ class MainActivity : Activity() {
     super.onResume()
     if (lockOnResume && encoderUiVisible) {
       lockOnResume = false
-      showAdminPasswordGate(setup = false)
+      showAdminPasswordGate()
+    } else if (lockOnResume) {
+      // An unlock request that was pending while backgrounded cannot reveal
+      // the controls on return; the owner must enter the key again.
+      lockOnResume = false
     }
   }
 
