@@ -143,11 +143,15 @@ class ReliableRtmpOutput(
   }
 
   /** Force a fresh RTMPS session; the sender waits for a clean AVC keyframe. */
-  fun reconnectNow() {
+  fun reconnectNow(forgetCodecHeaders: Boolean = false) {
     synchronized(lock) {
       if (!running) return
       droppedPackets += queue.size.toLong()
       clearQueueLocked()
+      if (forgetCodecHeaders) {
+        avcConfig = null
+        aacConfig = null
+      }
       aligned = false
       state = "WAITING FOR KEYFRAME"
       lock.notifyAll()

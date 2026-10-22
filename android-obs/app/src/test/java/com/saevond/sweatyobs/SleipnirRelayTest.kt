@@ -33,4 +33,9 @@ class SleipnirRelayTest {
     assertEquals("sleipnir", relay.single().id)
     assertEquals(direct, OutputRouteSelector.select(false, "", "", direct))
   }
+
+  @Test fun transcodedRelayForwardsOnlyEncoderGeneratedCodecHeaders() {
+    assertFalse(OutputRouteSelector.shouldForwardSourceAvcConfig(transcoderActive = true))
+    assertTrue(OutputRouteSelector.shouldForwardSourceAvcConfig(transcoderActive = false))
+  }
 }

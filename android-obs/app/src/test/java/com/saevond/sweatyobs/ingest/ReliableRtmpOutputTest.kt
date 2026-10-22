@@ -71,6 +71,41 @@ class ReliableRtmpOutputTest {
     } finally { output.close() }
   }
 
+  @Test fun sourceRestartForgetsOldCodecHeadersUntilNewHeadersAndKeyframeArrive() {
+    val sessions = CopyOnWriteArrayList<CopyOnWriteArrayList<RtmpMessage>>()
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      val sent = CopyOnWriteArrayList<RtmpMessage>()
+      sessions += sent
+      object : MediaPublisher {
+        override fun connect() {}
+        override fun publish(media: RtmpMessage) { sent += media }
+        override fun close() {}
+      }
+    }, retryDelaysMs = longArrayOf(0), waitMs = {})
+    val oldVideoConfig = avcConfig()
+    val newVideoConfig = avcConfig().copy(data = byteArrayOf(0x17, 0, 0, 0, 0, 1, 2, 9))
+    try {
+      output.start()
+      output.offer(oldVideoConfig)
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue(pollUntil(2_000) { sessions.size == 1 && sessions[0].size >= 3 })
+
+      output.reconnectNow(forgetCodecHeaders = true)
+      output.offer(keyframe(200))
+      Thread.sleep(50)
+      assertEquals("stale headers cannot start the new source session", 1, sessions.size)
+
+      output.offer(newVideoConfig)
+      output.offer(aacConfig())
+      output.offer(keyframe(300))
+      assertTrue(pollUntil(2_000) { sessions.size >= 2 && sessions[1].size >= 3 })
+      assertEquals(newVideoConfig.data.toList(), sessions[1][0].data.toList())
+      assertEquals(listOf(9, 8, 9), sessions[1].take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), sessions[1].take(3).map { it.timestamp })
+    } finally { output.close() }
+  }
+
   @Test fun slowServerCannotGrowTheQueueWithoutLimitOrBlockLanInput() {
     val enteredPublish = CountDownLatch(1)
     val closeWrite = CountDownLatch(1)

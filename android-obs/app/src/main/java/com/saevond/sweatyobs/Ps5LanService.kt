@@ -342,8 +342,11 @@ class Ps5LanService : Service() {
                   when {
                     ReliableRtmpOutput.isAvcConfig(media) -> {
                       sourceVideoConfig = media.copy(data = media.data.copyOf())
-                      brandOverlay?.setConfiguration(media)
-                      outputPublishers.forEach { it.offer(media) }
+                      val transcoder = brandOverlay
+                      transcoder?.setConfiguration(media)
+                      if (OutputRouteSelector.shouldForwardSourceAvcConfig(transcoderActive = transcoder != null)) {
+                        outputPublishers.forEach { it.offer(media) }
+                      }
                     }
                     media.type == 9 && (brandOverlayRequested || sleipnirRelayRequested) && brandOverlay != null -> brandOverlay?.offer(media)
                     else -> outputPublishers.forEach { it.offer(media) }
@@ -366,6 +369,7 @@ class Ps5LanService : Service() {
       }, onSourceSessionStart = {
         if (publicTest) {
           liveGate?.resetForSourceReconnect()
+          outputPublishers.forEach { it.reconnectNow(forgetCodecHeaders = true) }
           audioMixer?.close()
           audioMixer = LiveAacMusicMixer(musicTrack ?: error("Music state missing"), liveLevels)
         }
