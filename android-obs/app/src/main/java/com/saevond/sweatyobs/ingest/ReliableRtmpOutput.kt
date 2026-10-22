@@ -125,6 +125,7 @@ class ReliableRtmpOutput(
         return@synchronized
       }
       enqueueLocked(copyMessage(message))
+      lock.notifyAll()
       if (queueExceedsLimitsLocked()) {
         droppedPackets += queue.size.toLong()
         clearQueueLocked()
