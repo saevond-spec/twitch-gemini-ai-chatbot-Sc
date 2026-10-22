@@ -439,19 +439,6 @@ class MainActivity : Activity() {
     openTwitchDashboard.setOnClickListener {
       startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://dashboard.twitch.tv/settings/stream")))
     }
-    enableTwitch.setOnCheckedChangeListener { _, checked ->
-      outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
-    }
-    enableYouTube.setOnCheckedChangeListener { _, checked ->
-      outputPrefs.edit().putBoolean("youtube_enabled", checked).apply()
-    }
-    enableKick.setOnCheckedChangeListener { _, checked ->
-      outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
-    }
-    enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
-      outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
-      refreshOutputRoute()
-    }
     fun refreshOutputRoute() {
       val relay = enableSleipnirRelay.isChecked
       enableTwitch.isEnabled = !relay
@@ -467,6 +454,19 @@ class MainActivity : Activity() {
       } else {
         "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
       }
+    }
+    enableTwitch.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
+    }
+    enableYouTube.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("youtube_enabled", checked).apply()
+    }
+    enableKick.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("kick_enabled", checked).apply()
+    }
+    enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
+      refreshOutputRoute()
     }
     enableSleipnirRelay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("sleipnir_enabled", checked).apply()
