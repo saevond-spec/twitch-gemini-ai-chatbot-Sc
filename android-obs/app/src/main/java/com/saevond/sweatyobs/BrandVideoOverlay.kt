@@ -35,7 +35,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class BrandVideoOverlay(
   private val onOutput: (RtmpMessage) -> Unit,
   private val onStatus: (String) -> Unit,
-  private val onFailure: (String) -> Unit
+  private val onFailure: (String) -> Unit,
+  private val showBrandOverlay: Boolean = true,
+  private val maxVideoBitrate: Int = Int.MAX_VALUE
 ) : Closeable {
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
@@ -150,15 +152,11 @@ internal class BrandVideoOverlay(
     releaseCodecs()
     val parsed = AvcFlv.parseConfig(message)
     val decoderInfo = findDecoder(parsed.width, parsed.height)
-    val profile = chooseEncoderProfile(parsed.width, parsed.height)
+    val profile = chooseEncoderProfile(parsed.width, parsed.height, maxVideoBitrate)
     outputWidth = profile.first
     outputHeight = profile.second
     outputFps = profile.third
-    val outputBitrate = when {
-      outputWidth >= 1920 && outputHeight >= 1080 -> 8_000_000
-      outputWidth >= 1280 && outputHeight >= 720 -> 6_000_000
-      else -> 4_000_000
-    }
+    val outputBitrate = SleipnirRelay.videoBitrate(outputWidth, outputHeight, maxVideoBitrate)
 
     val encoderInfo = findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
     val videoEncoder = MediaCodec.createByCodecName(encoderInfo.name)
@@ -176,7 +174,7 @@ internal class BrandVideoOverlay(
       videoEncoder.configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
       val encoderSurface = videoEncoder.createInputSurface()
       createdInputSurface = encoderSurface
-      val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight)
+      val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight, showBrandOverlay)
       val gl = try {
         GlBrandCompositor(
           encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
@@ -211,7 +209,8 @@ internal class BrandVideoOverlay(
       config = parsed
       announcedConfig = false
       lastOutputTimestampMs = -1L
-      runCatching { onStatus("@saevond overlay active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode") }
+    val mode = if (showBrandOverlay) "@saevond overlay" else "RTMPS relay bitrate cap"
+    runCatching { onStatus("$mode active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode") }
     } catch (error: Exception) {
       runCatching { createdCompositor?.close() }
       runCatching { videoEncoder.stop() }
@@ -317,7 +316,7 @@ internal class BrandVideoOverlay(
           .getOrDefault(false)
     } ?: throw IllegalStateException("This phone has no hardware H.264 decoder for ${width}×${height}")
 
-  private fun chooseEncoderProfile(sourceWidth: Int, sourceHeight: Int): Triple<Int, Int, Int> {
+  private fun chooseEncoderProfile(sourceWidth: Int, sourceHeight: Int, maxBitrate: Int): Triple<Int, Int, Int> {
     val scale = minOf(1.0, 1920.0 / sourceWidth, 1080.0 / sourceHeight)
     var width = maxOf(16, (sourceWidth * scale).toInt() and -2)
     var height = maxOf(16, (sourceHeight * scale).toInt() and -2)
@@ -329,11 +328,7 @@ internal class BrandVideoOverlay(
       info.isEncoder && !info.isSoftwareOnly && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
     }
     for ((w, h) in candidates) {
-      val bitrate = when {
-        w >= 1920 && h >= 1080 -> 8_000_000
-        w >= 1280 && h >= 720 -> 6_000_000
-        else -> 4_000_000
-      }
+      val bitrate = SleipnirRelay.videoBitrate(w, h, maxBitrate)
       for (fps in listOf(60, 30)) {
         if (w > width || h > height) continue
         if (codecs.any { info -> runCatching {

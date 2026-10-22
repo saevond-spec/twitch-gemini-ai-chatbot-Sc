@@ -10,7 +10,7 @@ import javax.net.ssl.SSLSocketFactory
 
 /** User-provided secure RTMPS endpoint and private platform stream key. */
 data class RtmpDestination(val id: String, val label: String, val serverUrl: String, val key: String) {
-  fun isValid(): Boolean = id in setOf("twitch", "youtube", "kick") &&
+  fun isValid(): Boolean = id in setOf("twitch", "youtube", "kick", "sleipnir") &&
     label.length in 1..40 && RtmpsPublisher.endpointValid(serverUrl) && RtmpsPublisher.keyValid(key)
 }
 

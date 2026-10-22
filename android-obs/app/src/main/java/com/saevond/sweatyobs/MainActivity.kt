@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private const val PICK_MUSIC = 31416
     private const val PICK_CLUB = 31417
     private const val PICK_DUBSTEP = 31418
+    private const val PICK_POP_TRAP = 31419
   }
   private lateinit var status: TextView
   private val statusReceiver = object : BroadcastReceiver() {
@@ -70,9 +71,43 @@ class MainActivity : Activity() {
       text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
     }
     val destinations = TextView(this).apply {
-      text = "Each selected RTMPS output has an independent retry loop. With the 1080p overlay, budget about 12 Mbps of sustained phone upload per selected platform; every platform receives a separate copy."
+      id = R.id.output_upload_budget
+      text = "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    val enableSleipnirRelay = CheckBox(this).apply {
+      id = R.id.sleipnir_enabled
+      text = "Use Sleipnir cloud relay (configure Twitch / YouTube / Kick in Sleipnir)"
+      isChecked = outputPrefs.getBoolean("sleipnir_enabled", false)
+    }
+    val sleipnirServer = EditText(this).apply {
+      id = R.id.sleipnir_server
+      hint = "Sleipnir RTMPS ingest URL"
+      setSingleLine(true)
+      setText(outputPrefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL))
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+    }
+    val saveSleipnirServer = Button(this).apply {
+      id = R.id.save_sleipnir_server
+      text = "Save Sleipnir RTMPS ingest URL"
+    }
+    val sleipnirKey = EditText(this).apply {
+      id = R.id.sleipnir_stream_key
+      hint = "Sleipnir ingest key from your Sleipnir dashboard"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val sleipnirOutputStatus = TextView(this).apply {
+      id = R.id.sleipnir_output_status
+      text = outputCredentialStatus("Sleipnir", "sleipnir_key", "sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL)
+    }
+    val saveSleipnirKey = Button(this).apply {
+      id = R.id.save_sleipnir_key
+      text = "Save Sleipnir key securely"
+    }
+    val sleipnirNote = TextView(this).apply {
+      text = "Relay mode sends one RTMPS feed from this phone to Sleipnir; configure destination accounts in its dashboard. The PS5 feed still passes through the phone. Free tier is advertised at 5 Mbps, so relay mode hardware-encodes video at up to 4.7 Mbps even when the overlay is off."
+    }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
       isChecked = outputPrefs.getBoolean("twitch_enabled", true)
@@ -82,33 +117,59 @@ class MainActivity : Activity() {
       isChecked = outputPrefs.getBoolean("youtube_enabled", false)
     }
     val youtubeServer = EditText(this).apply {
+      id = R.id.youtube_server
       hint = "YouTube RTMPS server URL from Live Control Room"
       setSingleLine(true)
       setText(outputPrefs.getString("youtube_server", ""))
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
     }
+    val saveYouTubeServer = Button(this).apply {
+      id = R.id.save_youtube_server
+      text = "Save YouTube RTMPS server URL"
+    }
     val youtubeKey = EditText(this).apply {
+      id = R.id.youtube_stream_key
       hint = "YouTube stream key (kept in Android Keystore)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
       setSingleLine(true)
     }
-    val saveYouTube = Button(this).apply { text = "Save YouTube RTMPS server and key" }
+    val youtubeOutputStatus = TextView(this).apply {
+      id = R.id.youtube_output_status
+      text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+    }
+    val saveYouTube = Button(this).apply {
+      id = R.id.save_youtube_key
+      text = "Save YouTube key securely"
+    }
     val enableKick = CheckBox(this).apply {
       text = "Also stream to Kick"
       isChecked = outputPrefs.getBoolean("kick_enabled", false)
     }
     val kickServer = EditText(this).apply {
+      id = R.id.kick_server
       hint = "Kick RTMPS server URL from Creator Dashboard"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
       setSingleLine(true)
       setText(outputPrefs.getString("kick_server", ""))
     }
+    val saveKickServer = Button(this).apply {
+      id = R.id.save_kick_server
+      text = "Save Kick RTMPS server URL"
+    }
     val kickKey = EditText(this).apply {
+      id = R.id.kick_stream_key
       hint = "Kick stream key (kept in Android Keystore)"
       inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
       setSingleLine(true)
     }
-    val saveKick = Button(this).apply { text = "Save Kick RTMPS server and key" }
+    val kickOutputStatus = TextView(this).apply {
+      id = R.id.kick_output_status
+      text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+    }
+    val saveKick = Button(this).apply {
+      id = R.id.save_kick_key
+      text = "Save Kick key securely"
+    }
     val enableBrandOverlay = CheckBox(this).apply {
       text = "Add the @saevond live overlay to the stream"
       isChecked = outputPrefs.getBoolean("brand_overlay", true)
@@ -147,24 +208,27 @@ class MainActivity : Activity() {
       setText(getSharedPreferences("ps5_setup", MODE_PRIVATE).getString("ps5_ipv4", ""))
     }
     val genreSettings = MusicGenreSettings(this)
-    val stationNames = listOf("Mixed", "Club", "Dubstep")
-    val stationCodes = listOf("mixed", "club", "dubstep")
+    val stationNames = listOf("Mixed", "Club", "Dubstep / Bass", "Pop / Trap")
+    val stationCodes = listOf(GenrePlaylist.MIXED, GenrePlaylist.CLUB, GenrePlaylist.DUBSTEP, GenrePlaylist.POP_TRAP)
     val stationPicker = Spinner(this).apply {
       id = R.id.music_genre
       adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, stationNames)
       setSelection(stationCodes.indexOf(genreSettings.selected()).coerceAtLeast(0))
-      contentDescription = "Music genre: Mixed, Club or Dubstep"
+      contentDescription = "Music genre: Mixed, Club, Dubstep and Bass, or Pop and Trap"
     }
     val genreStatus = TextView(this).apply {
       id = R.id.genre_library_status
-      text = "Music library: Club ${genreSettings.tracks("club").size} · Dubstep ${genreSettings.tracks("dubstep").size}"
+      text = musicLibrarySummary(genreSettings)
     }
     val remoteCatalogStatus = TextView(this).apply {
       id = R.id.remote_catalog_status
-      val savedRemote = (genreSettings.tracks("club") + genreSettings.tracks("dubstep"))
+      val savedRemote = allSavedMusicTracks(genreSettings)
         .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
-      text = "Remote NCS catalog: ${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
-        "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep. ${savedRemote} saved for online playback."
+      text = "Remote NCS catalog: ${RemoteMusicCatalog.tracks.size} creator tracks · " +
+        "${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
+        "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep / Bass · " +
+        "${RemoteMusicCatalog.forGenre(GenrePlaylist.POP_TRAP).size} Pop / Trap · " +
+        "$savedRemote saved. Use required song credits and check current platform terms."
     }
     val browseRemoteClub = Button(this).apply {
       id = R.id.remote_club_catalog
@@ -172,7 +236,10 @@ class MainActivity : Activity() {
     }
     val browseRemoteDubstep = Button(this).apply {
       id = R.id.remote_dubstep_catalog
-      text = "Browse remote NCS Dubstep catalog"
+      text = "Browse remote NCS Dubstep / Bass catalog"
+    }
+    val browseRemotePopTrap = Button(this).apply {
+      text = "Browse remote NCS Pop / Trap catalog"
     }
     val copyStreamCredit = Button(this).apply {
       id = R.id.copy_ncs_stream_credit
@@ -184,6 +251,7 @@ class MainActivity : Activity() {
     }
     val addClub = Button(this).apply { text = "Add local licensed Club / House songs" }
     val addDubstep = Button(this).apply { text = "Add local licensed Dubstep songs" }
+    val addPopTrap = Button(this).apply { text = "Add local licensed Pop / Trap songs" }
     val shuffleSongs = CheckBox(this).apply {
       id = R.id.music_shuffle
       text = "Shuffle songs"
@@ -217,12 +285,12 @@ class MainActivity : Activity() {
     val resetMix = Button(this).apply { text = "Reset volumes: game 85% · music 22%" }
     val musicNote = TextView(this).apply {
       val ready = getSharedPreferences("ps5_music", MODE_PRIVATE).contains("track_uri")
-      val remoteCount = (genreSettings.tracks("club") + genreSettings.tracks("dubstep"))
+      val remoteCount = allSavedMusicTracks(genreSettings)
         .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
       text = when {
-        remoteCount > 0 -> "$remoteCount remote NCS songs saved. They load over the internet when selected; audio is not saved as a music file."
+        remoteCount > 0 -> "$remoteCount remote NCS songs saved. Tracks load online when selected; audio is not saved as a music file. Shuffle avoids repeats until the selected list has played through."
         ready -> "Local licensed music selected. Autoplay begins after a platform accepts publishing."
-        else -> "No music selected. Add tracks from the remote NCS catalog or choose a local rights-cleared audio file."
+        else -> "No music selected. Browse the 100-track remote NCS catalog or choose a local rights-cleared audio file."
       }
     }
     val chooseMusic = Button(this).apply { text = "Choose local licensed music file (MP3 / AAC / WAV)" }
@@ -269,13 +337,17 @@ class MainActivity : Activity() {
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
 
-    listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
-      enableYouTube, youtubeServer, youtubeKey, saveYouTube,
-      enableKick, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
+    listOf(phoneIp, destinations, enableSleipnirRelay, sleipnirServer, saveSleipnirServer,
+      sleipnirKey, saveSleipnirKey, sleipnirOutputStatus, sleipnirNote,
+      enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
+      enableYouTube, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
+      enableKick, kickServer, saveKickServer, kickKey, saveKick, kickOutputStatus,
+      enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
       privacy, checkSafety, safetyReading, ps5Ip,
       genreStatus, stationPicker, remoteCatalogStatus, browseRemoteClub, browseRemoteDubstep,
-      copyStreamCredit, copyTrackCredits, addClub, addDubstep, shuffleSongs, autoNextSong, skipSong,
+      browseRemotePopTrap, copyStreamCredit, copyTrackCredits, addClub, addDubstep, addPopTrap,
+      shuffleSongs, autoNextSong, skipSong,
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard,
@@ -299,8 +371,10 @@ class MainActivity : Activity() {
     }
     addClub.setOnClickListener { pickGenreTracks(PICK_CLUB) }
     addDubstep.setOnClickListener { pickGenreTracks(PICK_DUBSTEP) }
+    addPopTrap.setOnClickListener { pickGenreTracks(PICK_POP_TRAP) }
     browseRemoteClub.setOnClickListener { browseRemoteCatalog(GenrePlaylist.CLUB) }
     browseRemoteDubstep.setOnClickListener { browseRemoteCatalog(GenrePlaylist.DUBSTEP) }
+    browseRemotePopTrap.setOnClickListener { browseRemoteCatalog(GenrePlaylist.POP_TRAP) }
     copyStreamCredit.setOnClickListener {
       (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
         ClipData.newPlainText("NCS live-stream credit", RemoteMusicCatalog.LIVE_STREAM_CREDIT)
@@ -308,8 +382,7 @@ class MainActivity : Activity() {
       status.text = "Copied the NCS live-stream credit. Paste it into the description on each platform where you stream."
     }
     copyTrackCredits.setOnClickListener {
-      val savedTracks = MusicGenreSettings(this).tracks(GenrePlaylist.CLUB) +
-        MusicGenreSettings(this).tracks(GenrePlaylist.DUBSTEP)
+      val savedTracks = allSavedMusicTracks(MusicGenreSettings(this))
       val credits = RemoteMusicCatalog.creditsForAudioUrls(savedTracks)
       if (credits.isBlank()) {
         status.text = "Add remote NCS tracks first. Their artist and song credits will be copied here for VOD descriptions."
@@ -377,37 +450,96 @@ class MainActivity : Activity() {
     }
     enableBrandOverlay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("brand_overlay", checked).apply()
+      refreshOutputRoute()
+    }
+    fun refreshOutputRoute() {
+      val relay = enableSleipnirRelay.isChecked
+      enableTwitch.isEnabled = !relay
+      enableYouTube.isEnabled = !relay
+      enableKick.isEnabled = !relay
+      destinations.text = if (relay) {
+        "Sleipnir relay mode sends one RTMPS upload from the phone, with up to 4.7 Mbps video + 128 kbps AAC. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard."
+      } else {
+        "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule."
+      }
+      videoModeNote.text = if (relay) {
+        "Sleipnir mode always hardware-transcodes PS5 video to stay under the free tier's advertised bitrate. The overlay checkbox only adds the simulated @saevond graphics; turning it off keeps the video plain but still encoded at up to 4.7 Mbps. If hardware processing fails, the stream stops instead of sending uncapped video. This is not a 4K output."
+      } else {
+        "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
+      }
+    }
+    enableSleipnirRelay.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("sleipnir_enabled", checked).apply()
+      refreshOutputRoute()
+    }
+    refreshOutputRoute()
+    saveSleipnirServer.setOnClickListener {
+      val server = sleipnirServer.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Enter a valid secure Sleipnir RTMPS ingest URL."
+      } else {
+        outputPrefs.edit().putString("sleipnir_server", server).apply()
+        sleipnirOutputStatus.text = outputCredentialStatus("Sleipnir", "sleipnir_key", "sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL)
+        status.text = "Sleipnir RTMPS ingest URL saved on this phone. It has not been tested with Sleipnir."
+      }
+    }
+    saveSleipnirKey.setOnClickListener {
+      val key = sleipnirKey.text.toString().trim()
+      if (!RtmpsPublisher.keyValid(key)) {
+        status.text = "Enter the Sleipnir ingest key from your dashboard. It is saved only to this phone's Android Keystore."
+      } else try {
+        SecretStore(this).put("sleipnir_key", key)
+        sleipnirKey.text.clear()
+        sleipnirOutputStatus.text = outputCredentialStatus("Sleipnir", "sleipnir_key", "sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL)
+        status.text = "Sleipnir ingest key encrypted and saved on this phone. No stream has started."
+      } catch (error: Exception) {
+        status.text = "Could not securely save Sleipnir key (" + error.javaClass.simpleName + ")."
+      }
+    }
+    saveYouTubeServer.setOnClickListener {
+      val server = youtubeServer.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Enter a valid secure YouTube RTMPS server URL from Live Control Room."
+      } else {
+        outputPrefs.edit().putString("youtube_server", server).apply()
+        youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+        status.text = "YouTube RTMPS server URL saved on this phone. It has not been tested with YouTube."
+      }
     }
     saveYouTube.setOnClickListener {
-      val server = youtubeServer.text.toString().trim()
       val key = youtubeKey.text.toString().trim()
-      if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Paste the secure RTMPS server URL from YouTube Live Control Room."
-      } else if (!RtmpsPublisher.keyValid(key)) {
+      if (!RtmpsPublisher.keyValid(key)) {
         status.text = "Enter a valid YouTube stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("youtube_key", key)
-        outputPrefs.edit().putString("youtube_server", server).apply()
         youtubeKey.text.clear()
-        status.text = "YouTube server saved and key encrypted on this phone. No stream has started."
+        youtubeOutputStatus.text = outputCredentialStatus("YouTube", "youtube_key", "youtube_server")
+        status.text = "YouTube key encrypted and saved on this phone. No stream has started."
       } catch (error: Exception) {
-        status.text = "Could not save YouTube output settings (" + error.javaClass.simpleName + ")."
+        status.text = "Could not securely save YouTube key (" + error.javaClass.simpleName + ")."
+      }
+    }
+    saveKickServer.setOnClickListener {
+      val server = kickServer.text.toString().trim()
+      if (!RtmpsPublisher.endpointValid(server)) {
+        status.text = "Enter a valid secure Kick RTMPS server URL from Creator Dashboard."
+      } else {
+        outputPrefs.edit().putString("kick_server", server).apply()
+        kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+        status.text = "Kick RTMPS server URL saved on this phone. It has not been tested with Kick."
       }
     }
     saveKick.setOnClickListener {
-      val server = kickServer.text.toString().trim()
       val key = kickKey.text.toString().trim()
-      if (!RtmpsPublisher.endpointValid(server)) {
-        status.text = "Paste the secure RTMPS server URL from the Kick Creator Dashboard."
-      } else if (!RtmpsPublisher.keyValid(key)) {
+      if (!RtmpsPublisher.keyValid(key)) {
         status.text = "Enter a valid Kick stream key. It is saved only to this phone's Android Keystore."
       } else try {
         SecretStore(this).put("kick_key", key)
-        outputPrefs.edit().putString("kick_server", server).apply()
         kickKey.text.clear()
-        status.text = "Kick server saved and key encrypted on this phone. No stream has started."
+        kickOutputStatus.text = outputCredentialStatus("Kick", "kick_key", "kick_server")
+        status.text = "Kick key encrypted and saved on this phone. No stream has started."
       } catch (error: Exception) {
-        status.text = "Could not save Kick output settings (" + error.javaClass.simpleName + ")."
+        status.text = "Could not securely save Kick key (" + error.javaClass.simpleName + ")."
       }
     }
     reconnectOutputs.setOnClickListener {
@@ -427,12 +559,13 @@ class MainActivity : Activity() {
         .putString("metadata_keywords", metadataKeywords.text.toString())
         .apply()
       val activePlatforms = buildList {
-        if (enableTwitch.isChecked) add("Twitch")
-        if (enableYouTube.isChecked) add("YouTube")
-        if (enableKick.isChecked) add("Kick")
+        if (enableSleipnirRelay.isChecked) add("Sleipnir relay destinations") else {
+          if (enableTwitch.isChecked) add("Twitch")
+          if (enableYouTube.isChecked) add("YouTube")
+          if (enableKick.isChecked) add("Kick")
+        }
       }
-      val savedTracks = MusicGenreSettings(this).tracks(GenrePlaylist.CLUB) +
-        MusicGenreSettings(this).tracks(GenrePlaylist.DUBSTEP)
+      val savedTracks = allSavedMusicTracks(MusicGenreSettings(this))
       val trackCredits = RemoteMusicCatalog.creditsForAudioUrls(savedTracks)
       val musicCredits = if (trackCredits.isBlank()) "" else
         RemoteMusicCatalog.LIVE_STREAM_CREDIT + "\n" + trackCredits
@@ -559,7 +692,7 @@ class MainActivity : Activity() {
         return@setOnClickListener
       }
       val secrets = SecretStore(this)
-      val destinations = buildList {
+      val directDestinations = buildList {
         if (enableTwitch.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
           "twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
         if (enableYouTube.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
@@ -567,13 +700,18 @@ class MainActivity : Activity() {
         if (enableKick.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
           "kick", "Kick", outputPrefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
+      val destinations = OutputRouteSelector.select(
+        enableSleipnirRelay.isChecked,
+        outputPrefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL).orEmpty(),
+        secrets.get("sleipnir_key"),
+        directDestinations)
       val missing = destinations.firstOrNull { !it.isValid() }
       if (destinations.isEmpty()) {
         status.text = "Choose at least one platform output above."
         return@setOnClickListener
       }
       if (missing != null) {
-        status.text = "Save a valid ${missing.label} RTMPS server URL and stream key before going live."
+        status.text = "Save a valid ${missing.label} RTMPS ingest URL and stream key before going live."
         return@setOnClickListener
       }
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
@@ -582,7 +720,9 @@ class MainActivity : Activity() {
           action = Ps5LanService.ACTION_START_TWITCH
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
-        status.text = "Waiting for PS5 H.264/AAC RTMP feed. Selected outputs publish independently and retry if a connection drops."
+        status.text = if (enableSleipnirRelay.isChecked)
+          "Waiting for PS5 H.264/AAC RTMP feed. Sleipnir receives one capped RTMPS feed; its enabled dashboard destinations fan out from there."
+        else "Waiting for PS5 H.264/AAC RTMP feed. Selected outputs publish independently and retry if a connection drops."
       } catch (error: RuntimeException) {
         status.text = "Android could not start public test: " + error.javaClass.simpleName
       }
@@ -614,13 +754,35 @@ class MainActivity : Activity() {
     }
   }
 
+  private fun outputCredentialStatus(
+    platform: String,
+    secretName: String,
+    serverPreference: String,
+    defaultServer: String? = null
+  ): String {
+    val keySaved = RtmpsPublisher.keyValid(SecretStore(this).get(secretName))
+    val serverSaved = RtmpsPublisher.endpointValid(
+      getSharedPreferences("encoder_outputs", MODE_PRIVATE).getString(serverPreference, defaultServer.orEmpty()).orEmpty())
+    return when {
+      keySaved && serverSaved -> "$platform key saved securely; RTMPS server URL saved."
+      keySaved -> "$platform key saved securely; save its RTMPS server URL before streaming."
+      serverSaved -> "$platform server URL saved; save a stream key before streaming."
+      else -> "$platform stream key and RTMPS server URL are not saved yet."
+    }
+  }
+
   private fun browseRemoteCatalog(genre: String) {
     val tracks = RemoteMusicCatalog.forGenre(genre)
     if (tracks.isEmpty()) {
       status.text = "No remote NCS songs are listed for this genre."
       return
     }
-    val label = if (genre == GenrePlaylist.CLUB) "Club / House" else "Dubstep"
+    val label = when (genre) {
+      GenrePlaylist.CLUB -> "Club / House"
+      GenrePlaylist.DUBSTEP -> "Dubstep / Bass"
+      GenrePlaylist.POP_TRAP -> "Pop / Trap"
+      else -> "Music"
+    }
     val selected = linkedSetOf<Int>()
     val options = tracks.map { it.title + " — " + it.artist }.toTypedArray()
     AlertDialog.Builder(this)
@@ -639,17 +801,19 @@ class MainActivity : Activity() {
         settings.add(genre, selected.map { tracks[it].audioUrl })
         val after = settings.tracks(genre).size
         val added = after - before
-        findViewById<TextView>(R.id.genre_library_status)?.text =
-          "Music library: Club ${settings.tracks("club").size} · Dubstep ${settings.tracks("dubstep").size}"
-        val savedRemote = (settings.tracks("club") + settings.tracks("dubstep"))
+        findViewById<TextView>(R.id.genre_library_status)?.text = musicLibrarySummary(settings)
+        val savedRemote = allSavedMusicTracks(settings)
           .count { RemoteMusicCatalog.isSupportedAudioUrl(it) }
         findViewById<TextView>(R.id.remote_catalog_status)?.text =
-          "Remote NCS catalog: ${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
-            "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep. ${savedRemote} saved for online playback."
+          "Remote NCS catalog: ${RemoteMusicCatalog.tracks.size} creator tracks · " +
+            "${RemoteMusicCatalog.forGenre("club").size} Club / House · " +
+            "${RemoteMusicCatalog.forGenre("dubstep").size} Dubstep / Bass · " +
+            "${RemoteMusicCatalog.forGenre(GenrePlaylist.POP_TRAP).size} Pop / Trap · " +
+            "$savedRemote saved. Use required song credits and check current platform terms."
         status.text = if (added > 0)
-          "Added $added remote NCS songs to $label. Use Copy NCS Twitch stream credit before going live."
+          "Added $added remote NCS songs to $label. Copy the NCS live-stream credit into each stream description."
         else
-          "No new songs added. The selected tracks may already be saved or this genre has reached its 20-song limit."
+          "No new songs added. The tracks may already be saved or this genre has reached its 100-song limit."
         if (added > 0 && Ps5LanService.receiverRunning) refreshGenreService()
       }
       .show()
@@ -671,10 +835,24 @@ class MainActivity : Activity() {
     })
   }
 
+  private fun allSavedMusicTracks(settings: MusicGenreSettings): List<String> =
+    GenrePlaylist.GENRES.flatMap { settings.tracks(it) }
+
+  private fun musicLibrarySummary(settings: MusicGenreSettings): String =
+    "Music library: Club ${settings.tracks(GenrePlaylist.CLUB).size} · " +
+      "Dubstep / Bass ${settings.tracks(GenrePlaylist.DUBSTEP).size} · " +
+      "Pop / Trap ${settings.tracks(GenrePlaylist.POP_TRAP).size}"
+
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     super.onActivityResult(requestCode, resultCode, data)
-    if ((requestCode == PICK_CLUB || requestCode == PICK_DUBSTEP) && resultCode == RESULT_OK) {
-      val genre = if (requestCode == PICK_CLUB) "club" else "dubstep"
+    val pickedGenre = when (requestCode) {
+      PICK_CLUB -> GenrePlaylist.CLUB
+      PICK_DUBSTEP -> GenrePlaylist.DUBSTEP
+      PICK_POP_TRAP -> GenrePlaylist.POP_TRAP
+      else -> null
+    }
+    if (pickedGenre != null && resultCode == RESULT_OK) {
+      val genre = pickedGenre
       val uris = mutableListOf<Uri>()
       data?.data?.let { uris.add(it) }
       data?.clipData?.let { clip ->
@@ -691,9 +869,8 @@ class MainActivity : Activity() {
       if (granted.isNotEmpty()) {
         val store = MusicGenreSettings(this)
         store.add(genre, granted)
-        findViewById<TextView>(R.id.genre_library_status)?.text =
-          "Local library: Club ${store.tracks("club").size} · Dubstep ${store.tracks("dubstep").size}"
-        status.text = "Saved ${granted.size} locally authorized $genre songs. Club ${store.tracks("club").size}, Dubstep ${store.tracks("dubstep").size}."
+        findViewById<TextView>(R.id.genre_library_status)?.text = musicLibrarySummary(store)
+        status.text = "Saved ${granted.size} local licensed $genre tracks. ${musicLibrarySummary(store)}"
         if (Ps5LanService.receiverRunning) refreshGenreService()
       } else status.text = "No accessible local songs were selected."
       return

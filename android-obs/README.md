@@ -5,6 +5,8 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 ## What this build adds
 
 - Twitch, YouTube, and Kick can be configured as separate RTMPS outputs. Each selected destination has its own queue, connection state, backoff retry loop, and health summary.
+- Sleipnir can be selected as a single RTMPS output. Enter the Sleipnir ingest key from its dashboard; link Twitch, YouTube, and Kick in Sleipnir itself. When Sleipnir mode is selected, this app ignores the direct-output checkboxes and publishes only to the relay. Its public pages advertise a free tier at 5 Mbps video; the app uses a 4.7 Mbps hardware encode plus 128 kbps AAC, including when the visual overlay is turned off. This keeps the app's target media rate below the advertised 5 Mbps cap, but actual network and platform acceptance still require testing.
+- In Sleipnir mode, video still enters and is encoded by the phone. The app uploads one stream from the phone to Sleipnir, which then fans out server-side. This does not make the phone a remote-only controller.
 - The optional @saevond cyber-samurai overlay defaults on. It adds a transparent 1920×1080 HUD with red/cyan scanlines, particles, sword accents, session panels, and social footer, then sends one shared H.264/AAC feed to selected platforms.
 - The overlay's stats, AI lines, chat preview, follower/subscriber names, and donation alerts are simulated demo data. They are marked on-screen and do not come from Twitch, YouTube, Kick, or real viewers.
 - Adding the overlay requires hardware H.264 decode, GLES composition, and H.264 re-encoding up to 1080p. If codec setup or composition fails, the app reconnects outputs and falls back to the original PS5 video. Each extra platform still uses additional upload bandwidth.
@@ -12,16 +14,19 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 - The notification refreshes queue health every three seconds. It reports this app's sender backlog, not platform uptime or internet latency.
 - Platform stream keys are stored using Android Keystore encryption. YouTube and Kick server URLs are taken from the creator's dashboard and stored as ordinary app settings.
 - A description helper creates a title and searchable live-stream description for the selected platforms, includes up to eight tags, and adds NCS track credits for catalog songs. It copies text to the clipboard; the platform titles/descriptions must still be pasted into each creator dashboard.
+- The remote catalog now has 100 NCS releases: Club / House, Dubstep / Bass, and Pop / Trap. Select several or all tracks from each catalog; the Mixed station shuffles across the saved genres and will not repeat a track until its current shuffle deck is exhausted. It supports up to 100 saved tracks per genre. Audio streams from NCS when played and is not saved as a music file.
+- NCS use is conditional on its current creator policy and correct credit. Use **Copy NCS live-stream credit** for a stream description and **Copy selected NCS track credits for VODs** for exact song credits. Check the current terms for each destination before multistreaming. Drake and Taylor Swift commercial recordings are not included as free tracks; only add a local file when you hold the streaming/VOD rights.
 - A network-only diagnostic remains available and does not broadcast.
 
 ## Set up and test
 
 1. Put the phone and PS5 on the same private Wi-Fi network. Enter the PS5's private IPv4 address in the app.
-2. Select each platform you want. Save the Twitch key, or paste the RTMPS server URL and stream key from the YouTube or Kick creator dashboard. Keys stay on the device; do not send them in chat.
+2. For direct streaming, select each platform and save its key and RTMPS URL. For Sleipnir, select **Use Sleipnir cloud relay**, leave the default secure ingest URL unless your dashboard specifies another, save the Sleipnir ingest key from its dashboard, and configure Twitch / YouTube / Kick destinations in Sleipnir. Do not send keys in chat.
 3. In **Stream title**, **Game name**, and **Search phrases / tags**, enter your metadata and choose **Generate and copy stream description**. Paste the copied text into each platform's stream setup.
-4. Choose **START MULTISTREAM (public broadcast)** only when ready to publish. Outputs begin only after compatible PS5 media arrives and a video keyframe is available. The ongoing notification shows each platform's state, recent send rate, buffer delay, reconnect count, and skipped stale packets.
-5. If a platform is stuck, tap **Reconnect stream outputs**. The sender waits for a clean keyframe and then establishes a fresh RTMPS session. **Stop receiver and all outputs** ends the session.
-6. Use **Start PS5 network connection test** for a private packet-count diagnostic. That button never sends a public broadcast.
+4. For music, choose **Mixed**, **Club**, **Dubstep / Bass**, or **Pop / Trap**, then tap **Browse remote NCS ... catalog** and select multiple tracks. Turn on **Shuffle songs** and **Automatically play next song** to avoid repeats until the selected playlist has played through. Copy the NCS stream credit into the stream description and the selected track credits into the VOD description.
+5. Choose **START MULTISTREAM (public broadcast)** only when ready to publish. Outputs begin only after compatible PS5 media arrives and a video keyframe is available. The ongoing notification shows each platform's state, recent send rate, buffer delay, reconnect count, and skipped stale packets.
+6. If a platform is stuck, tap **Reconnect stream outputs**. The sender waits for a clean keyframe and then establishes a fresh RTMPS session. **Stop receiver and all outputs** ends the session.
+7. Use **Start PS5 network connection test** for a private packet-count diagnostic. That button never sends a public broadcast.
 
 ## Video limits
 

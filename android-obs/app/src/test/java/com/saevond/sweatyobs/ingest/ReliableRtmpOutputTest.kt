@@ -1,8 +1,11 @@
 package com.saevond.sweatyobs.ingest
 
+import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -14,6 +17,9 @@ class ReliableRtmpOutputTest {
   private fun aacConfig() = RtmpMessage(8, 0, 1, byteArrayOf(0xaf.toByte(), 0, 0x12, 0x10))
   private fun keyframe(timestamp: Long) =
     RtmpMessage(9, timestamp, 1, byteArrayOf(0x17, 1, 0, 0, 0, 0, 0, 1))
+
+  private fun sandboxDestination(id: String) = RtmpDestination(
+    id, id.replaceFirstChar { it.uppercase() }, "rtmps://$id.example.test/app", "sandbox-key-12345")
 
   @Test fun outputWaitsForBothCodecHeadersAndAKeyframeThenSendsARebasedStart() {
     val connected = CountDownLatch(1)
@@ -93,6 +99,149 @@ class ReliableRtmpOutputTest {
       assertTrue("the stale queue should be counted and discarded", output.snapshot().droppedPackets > 0)
       assertTrue("buffer stays below its configured bound", output.snapshot().queueBytes <= ReliableRtmpOutput.DEFAULT_QUEUE_LIMIT_BYTES)
     } finally { output.close() }
+  }
+
+  @Test fun initialHeadersAndKeyframeCannotExceedConfiguredQueueLimit() {
+    val connected = CountDownLatch(1)
+    val output = ReliableRtmpOutput(destination(), publisherFactory = {
+      object : MediaPublisher {
+        override fun connect() { connected.countDown() }
+        override fun publish(media: RtmpMessage) {}
+        override fun close() {}
+      }
+    }, queueLimitBytes = 32_768)
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      val largeKeyframe = ByteArray(40_000).also {
+        it[0] = 0x17
+        it[1] = 1
+      }
+      output.offer(keyframe(100).copy(data = largeKeyframe))
+
+      val snapshot = output.snapshot()
+      assertEquals("startup GOP should be discarded when it exceeds the queue budget", 0, snapshot.queueBytes)
+      assertEquals(3L, snapshot.droppedPackets)
+      assertEquals("WAITING FOR KEYFRAME", snapshot.state)
+      assertFalse("oversized startup GOP must not connect", connected.await(100, TimeUnit.MILLISECONDS))
+    } finally { output.close() }
+  }
+
+  @Test fun staleQueuedMediaIsDroppedAndAKeyframeStartsTheNextSession() {
+    val nowMs = AtomicLong(0)
+    val attempts = AtomicInteger()
+    val firstPublishEntered = CountDownLatch(1)
+    val releaseFirstPublish = CountDownLatch(1)
+    val retryDelayReached = CountDownLatch(1)
+    val resumedPackets = CopyOnWriteArrayList<RtmpMessage>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        val session = attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {}
+          override fun publish(media: RtmpMessage) {
+            if (session == 1) {
+              firstPublishEntered.countDown()
+              check(releaseFirstPublish.await(2, TimeUnit.SECONDS)) { "blocked fake publisher was not released" }
+            } else resumedPackets.add(media)
+          }
+          override fun close() { releaseFirstPublish.countDown() }
+        }
+      },
+      retryDelaysMs = longArrayOf(0),
+      maxQueueAgeMs = 100,
+      clockMs = { nowMs.get() },
+      waitMs = { retryDelayReached.countDown() }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue(firstPublishEntered.await(2, TimeUnit.SECONDS))
+
+      nowMs.set(101)
+      output.offer(RtmpMessage(9, 100, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
+      assertTrue("stale media should be counted as dropped", output.snapshot().droppedPackets >= 3)
+      assertEquals(0, output.snapshot().queueBytes)
+      assertTrue("stale output should enter its retry path", retryDelayReached.await(2, TimeUnit.SECONDS))
+
+      output.offer(keyframe(500))
+      assertTrue("a fresh keyframe should restart publishing", pollUntil(2_000) {
+        attempts.get() >= 2 && resumedPackets.size >= 3
+      })
+      assertEquals(listOf(9, 8, 9), resumedPackets.take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), resumedPackets.take(3).map { it.timestamp })
+    } finally {
+      releaseFirstPublish.countDown()
+      output.close()
+    }
+  }
+
+  @Test fun oneFailedDestinationDoesNotStallOtherOutputsAndRetriesFromAKeyframe() {
+    val ids = listOf("twitch", "youtube", "kick")
+    val sent = ids.associateWith { CopyOnWriteArrayList<RtmpMessage>() }
+    val attempts = ids.associateWith { AtomicInteger() }
+    val blockedPublisher = CountDownLatch(1)
+    val releaseFailure = CountDownLatch(1)
+    val retryDelayReached = CountDownLatch(1)
+    val outputs = ids.map { id ->
+      ReliableRtmpOutput(
+        sandboxDestination(id),
+        publisherFactory = {
+          val session = attempts.getValue(id).incrementAndGet()
+          object : MediaPublisher {
+            override fun connect() {}
+            override fun publish(media: RtmpMessage) {
+              if (id == "youtube" && session == 1) {
+                blockedPublisher.countDown()
+                check(releaseFailure.await(2, TimeUnit.SECONDS)) { "sandbox failure was not released" }
+                throw IOException("synthetic destination failure")
+              }
+              sent.getValue(id).add(media)
+            }
+            override fun close() {}
+          }
+        },
+        retryDelaysMs = longArrayOf(0),
+        waitMs = { retryDelayReached.countDown() }
+      )
+    }
+    fun fanOut(media: RtmpMessage) = outputs.forEach { it.offer(media) }
+
+    try {
+      outputs.forEach { it.start() }
+      fanOut(avcConfig())
+      fanOut(aacConfig())
+      fanOut(keyframe(0))
+      assertTrue("fake YouTube publisher should enter its injected failure", blockedPublisher.await(2, TimeUnit.SECONDS))
+      assertTrue("Twitch should send while YouTube is blocked", pollUntil(2_000) { sent.getValue("twitch").size >= 3 })
+      assertTrue("Kick should send while YouTube is blocked", pollUntil(2_000) { sent.getValue("kick").size >= 3 })
+
+      fanOut(RtmpMessage(9, 100, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
+      fanOut(RtmpMessage(8, 125, 1, byteArrayOf(0xaf.toByte(), 1, 1, 2)))
+      assertTrue("healthy destinations should continue receiving media", pollUntil(2_000) {
+        sent.getValue("twitch").size >= 5 && sent.getValue("kick").size >= 5
+      })
+
+      releaseFailure.countDown()
+      assertTrue("failed output should enter its automatic retry path", retryDelayReached.await(2, TimeUnit.SECONDS))
+      fanOut(keyframe(400))
+      assertTrue("failed output should reconnect and resume at a clean keyframe", pollUntil(2_000) {
+        attempts.getValue("youtube").get() >= 2 && sent.getValue("youtube").size >= 3
+      })
+      assertEquals(listOf(9, 8, 9), sent.getValue("youtube").take(3).map { it.type })
+      assertEquals(listOf(0L, 0L, 0L), sent.getValue("youtube").take(3).map { it.timestamp })
+      assertTrue("other destinations should keep receiving after the third output recovers", pollUntil(2_000) {
+        sent.getValue("twitch").size >= 6 && sent.getValue("kick").size >= 6
+      })
+      assertEquals(1L, outputs[1].snapshot().reconnects)
+    } finally {
+      releaseFailure.countDown()
+      outputs.forEach { it.close() }
+    }
   }
 
   @Test fun retryBackoffIncreasesAndCaps() {

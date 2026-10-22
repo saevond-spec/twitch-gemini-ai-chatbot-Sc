@@ -14,7 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 class SecretStore(context: Context) {
   private val prefs = context.getSharedPreferences("secure_encoder_secrets", Context.MODE_PRIVATE)
   private val alias = "sweatyobs_aes_gcm_v1"
-  private val secretNames = setOf("rtmps", "youtube_key", "kick_key", "bridge_token")
+  private val secretNames = setOf("rtmps", "youtube_key", "kick_key", "sleipnir_key", "bridge_token")
   private val key: SecretKey
     get() {
       val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

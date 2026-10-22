@@ -18,6 +18,88 @@ import org.junit.runner.RunWith
 class NetworkStartSmokeTest {
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
+  @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
+    val prefs = InstrumentationRegistry.getInstrumentation().targetContext
+      .getSharedPreferences("encoder_outputs", 0)
+    prefs.edit().putBoolean("sleipnir_enabled", false).commit()
+    activityRule.scenario.recreate()
+    onView(withId(R.id.output_upload_budget)).perform(scrollTo())
+      .check(matches(allOf(
+        withText(containsString("16.3 Mbps")),
+        withText(containsString("48.8 Mbps"))
+      )))
+  }
+
+  @Test fun sleipnirRelayUsesOneCappedUpstreamAndStoresOnlyEncryptedKey() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
+    val secrets = SecretStore(context)
+    val syntheticKey = "sandbox-sleipnir-key-1234"
+    outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
+    activityRule.scenario.recreate()
+
+    onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
+    onView(withId(R.id.output_upload_budget)).perform(scrollTo())
+      .check(matches(allOf(
+        withText(containsString("one RTMPS upload")),
+        withText(containsString("4.7 Mbps video"))
+      )))
+    onView(withId(R.id.sleipnir_stream_key)).perform(scrollTo(), replaceText(syntheticKey), closeSoftKeyboard())
+    onView(withId(R.id.save_sleipnir_key)).perform(scrollTo(), click())
+    onView(withId(R.id.sleipnir_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+
+    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+    assertNotEquals(syntheticKey, encryptedPrefs.getString("sleipnir_key", null))
+    assertEquals(syntheticKey, secrets.get("sleipnir_key"))
+    assertTrue(outputPrefs.getBoolean("sleipnir_enabled", false))
+
+    // Keep the disposable emulator's following tests in direct-output mode.
+    outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
+  }
+
+  @Test fun youtubeAndKickKeysSaveSecurelyWithoutAnRtmpsServerUrl() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val youtubeKey = "sandbox-youtube-key-123"
+    val kickKey = "sandbox-kick-key-456"
+    val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
+    outputPrefs.edit().remove("youtube_server").remove("kick_server").commit()
+    activityRule.scenario.recreate()
+
+    onView(withId(R.id.youtube_stream_key)).perform(scrollTo(), replaceText(youtubeKey), closeSoftKeyboard())
+    onView(withId(R.id.save_youtube_key)).perform(scrollTo(), click())
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+
+    onView(withId(R.id.kick_stream_key)).perform(scrollTo(), replaceText(kickKey), closeSoftKeyboard())
+    onView(withId(R.id.save_kick_key)).perform(scrollTo(), click())
+    onView(withId(R.id.kick_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+
+    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+    assertNotEquals(youtubeKey, encryptedPrefs.getString("youtube_key", null))
+    assertNotEquals(kickKey, encryptedPrefs.getString("kick_key", null))
+    assertEquals(youtubeKey, SecretStore(context).get("youtube_key"))
+    assertEquals(kickKey, SecretStore(context).get("kick_key"))
+
+    activityRule.scenario.recreate()
+    onView(withId(R.id.youtube_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+    onView(withId(R.id.kick_output_status)).perform(scrollTo())
+      .check(matches(withText(containsString("key saved securely"))))
+    onView(withId(R.id.youtube_output_status)).check(
+      matches(withText(containsString("save its RTMPS server URL before streaming"))))
+    onView(withId(R.id.kick_output_status)).check(
+      matches(withText(containsString("save its RTMPS server URL before streaming"))))
+
+    onView(withId(R.id.youtube_server)).perform(scrollTo(), replaceText("rtmps://youtube.example.test/live2"), closeSoftKeyboard())
+    onView(withId(R.id.save_youtube_server)).perform(scrollTo(), click())
+    assertEquals("rtmps://youtube.example.test/live2", outputPrefs.getString("youtube_server", null))
+    onView(withId(R.id.kick_server)).perform(scrollTo(), replaceText("rtmps://kick.example.test/app"), closeSoftKeyboard())
+    onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
+    assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+  }
+
   @Test fun invalidAddressTapReportsVisibleFailure() {
     onView(withId(R.id.ps5_ip_address)).perform(scrollTo(), replaceText(""), closeSoftKeyboard())
     onView(withId(R.id.start_network_test)).perform(scrollTo(), click())

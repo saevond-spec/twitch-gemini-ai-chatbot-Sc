@@ -4,6 +4,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.*
@@ -21,12 +22,31 @@ class SyntheticPs5IngestIntegrationTest {
     val sourceStarted = AtomicInteger(0)
     val sourceEnded = CountDownLatch(1)
     val forwarded = mutableListOf<RtmpMessage>()
+    val outputIds = listOf("twitch", "youtube", "kick")
+    val outputPackets = outputIds.associateWith { CopyOnWriteArrayList<RtmpMessage>() }
+    val outputLatch = CountDownLatch(12)
+    val outputs = outputIds.map { id ->
+      val destination = RtmpDestination(id, id, "rtmps://$id.example.test/app", "sandbox-key-12345")
+      ReliableRtmpOutput(destination, publisherFactory = {
+        object : MediaPublisher {
+          override fun connect() {}
+          override fun publish(media: RtmpMessage) {
+            outputPackets.getValue(id).add(media)
+            outputLatch.countDown()
+          }
+          override fun close() {}
+        }
+      })
+    }
+    outputs.forEach { it.start() }
     val receiver = LanRtmpIngest("10.233.31.1", "10.233.31.2", onMedia = { packet ->
-      synchronized(forwarded) { forwarded.addAll(gate.process(packet)) }
+      val relayed = gate.process(packet)
+      synchronized(forwarded) { forwarded.addAll(relayed) }
+      relayed.forEach { media -> outputs.forEach { it.offer(media) } }
       latch.countDown()
     }, onSourceSessionStart = { sourceStarted.incrementAndGet() }, onSourceSessionEnd = { sourceEnded.countDown() })
-    receiver.start()
     try {
+      receiver.start()
       val sock = Socket()
       sock.bind(InetSocketAddress("10.233.31.2", 0))
       sock.connect(InetSocketAddress("10.233.31.1", 1935), 3000)
@@ -64,10 +84,17 @@ class SyntheticPs5IngestIntegrationTest {
       assertEquals(1, sourceStarted.get())
       assertEquals(2L, receiver.videoPackets)
       assertEquals(2L, receiver.audioPackets)
+      assertTrue("all three fake destinations should receive the synthetic source media", outputLatch.await(2, TimeUnit.SECONDS))
       synchronized(forwarded) {
         assertEquals(listOf(9,8,9,8), forwarded.map { it.type })
         assertEquals(listOf(0L,0L,0L,25L), forwarded.map { it.timestamp })
       }
-    } finally { receiver.stop() }
+      outputIds.forEach { id ->
+        assertEquals(listOf(9,8,9,8), outputPackets.getValue(id).map { it.type })
+      }
+    } finally {
+      receiver.stop()
+      outputs.forEach { it.close() }
+    }
   }
 }

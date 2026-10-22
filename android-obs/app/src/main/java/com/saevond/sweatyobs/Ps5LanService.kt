@@ -80,6 +80,7 @@ class Ps5LanService : Service() {
   private var liveGate: MediaRelayGate? = null
   @Volatile private var brandOverlay: BrandVideoOverlay? = null
   @Volatile private var brandOverlayRequested = false
+  @Volatile private var sleipnirRelayRequested = false
   @Volatile private var sourceVideoConfig: RtmpMessage? = null
   @Volatile private var audioMixer: LiveAacMusicMixer? = null
   private var musicTrack: MusicTrackLooper? = null
@@ -209,20 +210,37 @@ class Ps5LanService : Service() {
       outputStatus = outputPublishers.joinToString(" | ") { it.snapshot().summary() }
       liveGate = MediaRelayGate()
       sourceVideoConfig = null
-      brandOverlayRequested = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
-        .getBoolean("brand_overlay", true)
+      val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+      brandOverlayRequested = outputPrefs.getBoolean("brand_overlay", true)
+      sleipnirRelayRequested = outputPrefs.getBoolean("sleipnir_enabled", false)
       brandOverlay?.close()
-      brandOverlay = if (brandOverlayRequested) {
+      brandOverlay = if (brandOverlayRequested || sleipnirRelayRequested) {
         runCatching {
           BrandVideoOverlay(
             onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
             onStatus = { message -> handler.post { if (!stopping) setNotification(message) } },
-            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } })
+            onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } },
+            showBrandOverlay = brandOverlayRequested,
+            maxVideoBitrate = if (sleipnirRelayRequested) SleipnirRelay.MAX_VIDEO_BITRATE_BPS else Int.MAX_VALUE)
         }.onFailure { error ->
-          brandOverlayRequested = false
-          handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
+          if (!sleipnirRelayRequested) brandOverlayRequested = false
+          handler.post {
+            if (!stopping) {
+              if (sleipnirRelayRequested) {
+                setNotification("Could not initialize the Sleipnir bitrate-limited encoder (${error.javaClass.simpleName}); stream stopped before publishing.")
+                terminalReason = true
+                stopSelf()
+              } else setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.")
+            }
+          }
         }.getOrNull()
       } else null
+      if (sleipnirRelayRequested && brandOverlay == null) {
+        terminalReason = true
+        publishUiStatus("Sleipnir needs the capped hardware video encoder. Startup failed before the PS5 receiver opened; no broadcast was sent.")
+        stopSelf()
+        return START_NOT_STICKY
+      }
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
     }
@@ -327,7 +345,7 @@ class Ps5LanService : Service() {
                       brandOverlay?.setConfiguration(media)
                       outputPublishers.forEach { it.offer(media) }
                     }
-                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> brandOverlay?.offer(media)
+                    media.type == 9 && (brandOverlayRequested || sleipnirRelayRequested) && brandOverlay != null -> brandOverlay?.offer(media)
                     else -> outputPublishers.forEach { it.offer(media) }
                   }
                 }
@@ -362,7 +380,7 @@ class Ps5LanService : Service() {
       receiverRunning = true
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
-      setNotification(if (publicTest) "Public Twitch test armed. Awaiting PS5 RTMP on $local:1935. Music " +
+      setNotification(if (publicTest) "Public stream armed. Awaiting PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "ready to auto-start on Twitch publish" else "not loaded")
         else "Waiting for PS5 at $local:1935 — diagnostic only")
       if (publicTest) {
@@ -502,6 +520,8 @@ class Ps5LanService : Service() {
     musicTrack = null
     brandOverlay?.close()
     brandOverlay = null
+    brandOverlayRequested = false
+    sleipnirRelayRequested = false
     outputPublishers.toList().forEach { it.close() }
     outputPublishers.clear()
     liveGate = null
@@ -514,7 +534,7 @@ class Ps5LanService : Service() {
   private fun selectedDestinations(): List<RtmpDestination> {
     val prefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
     val secrets = SecretStore(this)
-    return buildList {
+    val direct = buildList {
       if (prefs.getBoolean("twitch_enabled", true)) {
         add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
       }
@@ -525,6 +545,11 @@ class Ps5LanService : Service() {
         add(RtmpDestination("kick", "Kick", prefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
     }
+    return OutputRouteSelector.select(
+      prefs.getBoolean("sleipnir_enabled", false),
+      prefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL).orEmpty(),
+      secrets.get("sleipnir_key"),
+      direct)
   }
 
   private fun onOutputSnapshot() {
@@ -535,8 +560,8 @@ class Ps5LanService : Service() {
       val musicStarted = musicTrack?.onBroadcastStarted() == true
       handler.post {
         if (!stopping) setNotification(if (musicStarted)
-          "At least one platform accepted publishing; music started. Viewer playback is unverified. $outputStatus"
-        else "At least one platform accepted publishing; music is paused or unset. Viewer playback is unverified. $outputStatus")
+          "An RTMPS destination accepted publishing; music started. Viewer playback is unverified. $outputStatus"
+        else "An RTMPS destination accepted publishing; music is paused or unset. Viewer playback is unverified. $outputStatus")
       }
     } else {
       if (reportedOutputStatus != outputStatus) {
@@ -547,6 +572,12 @@ class Ps5LanService : Service() {
   }
 
   private fun disableBrandOverlay(reason: String) {
+    if (sleipnirRelayRequested) {
+      terminalReason = true
+      setNotification("$reason · stopped because Sleipnir mode requires the bitrate-limited hardware encoder")
+      stopSelf()
+      return
+    }
     brandOverlayRequested = false
     brandOverlay?.close()
     brandOverlay = null

@@ -18,7 +18,11 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /** Low-frequency animated, full-screen @saevond overlay. Demo metrics are labeled as simulated. */
-internal class BrandOverlayCanvas(private val width: Int, private val height: Int) : Closeable {
+internal class BrandOverlayCanvas(
+  private val width: Int,
+  private val height: Int,
+  private val showOverlay: Boolean = true
+) : Closeable {
   val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
   private val canvas = Canvas(bitmap)
   private val random = Random(0x5ae70dL)
@@ -59,6 +63,11 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
 
   fun redrawIfDue(now: Long = SystemClock.elapsedRealtime()): Boolean {
     if (lastRenderAt != 0L && now - lastRenderAt < FRAME_UPDATE_MS) return false
+    if (!showOverlay) {
+      bitmap.eraseColor(Color.TRANSPARENT)
+      lastRenderAt = now
+      return true
+    }
     updateSimulation(now)
     bitmap.eraseColor(Color.TRANSPARENT)
     canvas.save()
