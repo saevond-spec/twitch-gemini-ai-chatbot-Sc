@@ -53,7 +53,6 @@ import { gameLanguageInstruction } from './chat/gameLanguage.js';
 import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './music/player.js';
 import { createEncoderEventBridge } from './music/encoderBridge.js';
 import { createEncoderDiagnostics } from './music/encoderDiagnostics.js';
-import { createEncoderAdminUnlockRouter } from './security/encoderAdminUnlockRouter.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -207,7 +206,6 @@ const encoderPollLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, validate: f
 const diagnosticsSessionLimiter = rateLimit({ windowMs: 60 * 1000, max: 4, validate: false });
 const diagnosticsUploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 3, validate: false });
 const diagnosticsEventLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, validate: false });
-app.use('/api/encoder/admin', createEncoderAdminUnlockRouter());
 
 app.post('/api/encoder/diagnostics/session', diagnosticsSessionLimiter, express.json({ limit: '1kb' }), (req, res) => {
   const result = encoderDiagnostics.issueSession(req.get('authorization'));

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 const root = new URL('../app/src/main/', import.meta.url);
 const ui = readFileSync(new URL('java/com/saevond/sweatyobs/MainActivity.kt', root), 'utf8');
 const service = readFileSync(new URL('java/com/saevond/sweatyobs/Ps5LanService.kt', root), 'utf8');
@@ -22,7 +22,13 @@ test('remote-only migration removes old phone credentials and destination URLs',
   assert.doesNotMatch(ui, /putString\("kick_server",\s*RtmpsPublisher/);
 });
 test('emulator smoke test must be present in Android workflow', () => {
-  const workflow = readFileSync(new URL('../../.github/workflows/sweatyobs-android.yml', import.meta.url),'utf8');
+  const workflowPaths = [
+    new URL('../../.github/workflows/android-obs.yml', import.meta.url),
+    new URL('../../.github/workflows/sweatyobs-android.yml', import.meta.url),
+  ];
+  const workflowPath = workflowPaths.find(path => existsSync(path));
+  assert.ok(workflowPath, 'Android CI workflow file must exist');
+  const workflow = readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /android-emulator-runner@v2/);
   assert.match(workflow, /connectedDebugAndroidTest/);
 });
