@@ -1525,7 +1525,7 @@ class MainActivity : Activity() {
         val result = runCatching { adminKeyVerifier.verify(entered) }
           .getOrDefault(AdminKeyUnlockResult.UNAVAILABLE)
         runOnUiThread {
-          if (attempt != adminUnlockAttempt || isFinishing) return@runOnUiThread
+          if (attempt != adminUnlockAttempt || isFinishing || isDestroyed) return@runOnUiThread
           adminUnlockInFlight = false
           val backgrounded = adminUnlockWasBackgrounded
           adminUnlockWasBackgrounded = false
