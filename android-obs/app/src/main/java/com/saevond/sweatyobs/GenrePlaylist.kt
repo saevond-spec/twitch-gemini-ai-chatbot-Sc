@@ -7,11 +7,13 @@ class GenrePlaylist(private val random: Random = Random.Default) {
   companion object {
     const val CLUB = "club"
     const val DUBSTEP = "dubstep"
+    const val POP_TRAP = "poptrap"
     const val MIXED = "mixed"
-    val STATIONS = setOf(CLUB, DUBSTEP, MIXED)
-    const val MAX_TRACKS_PER_GENRE = 20
+    val GENRES = setOf(CLUB, DUBSTEP, POP_TRAP)
+    val STATIONS = GENRES + MIXED
+    const val MAX_TRACKS_PER_GENRE = 100
   }
-  private val catalogs = mutableMapOf(CLUB to emptyList<String>(), DUBSTEP to emptyList())
+  private val catalogs = GENRES.associateWith { emptyList<String>() }.toMutableMap()
   private var deck = ArrayDeque<String>()
   private var current: String? = null
   var station: String = MIXED
@@ -31,7 +33,7 @@ class GenrePlaylist(private val random: Random = Random.Default) {
   }
 
   @Synchronized fun setTracks(genre: String, uris: List<String>) {
-    require(genre == CLUB || genre == DUBSTEP)
+    require(genre in GENRES)
     require(uris.size <= MAX_TRACKS_PER_GENRE)
     require(uris.all { (it.startsWith("content://") && it.length <= 2048) || RemoteMusicCatalog.isSupportedAudioUrl(it) })
     catalogs[genre] = uris.distinct()
@@ -44,7 +46,8 @@ class GenrePlaylist(private val random: Random = Random.Default) {
   private fun pool(): List<String> = when (station) {
     CLUB -> catalogs[CLUB].orEmpty()
     DUBSTEP -> catalogs[DUBSTEP].orEmpty()
-    else -> (catalogs[CLUB].orEmpty() + catalogs[DUBSTEP].orEmpty()).distinct()
+    POP_TRAP -> catalogs[POP_TRAP].orEmpty()
+    else -> GENRES.flatMap { catalogs[it].orEmpty() }.distinct()
   }
 
   /** Manual skip always advances; auto-next advances only when enabled. */
@@ -68,5 +71,6 @@ class GenrePlaylist(private val random: Random = Random.Default) {
   @Synchronized fun current(): String? = current
   @Synchronized fun summary(): String =
     station + " · Club " + count(CLUB) + " / Dubstep " + count(DUBSTEP) +
+      " / Pop & Trap " + count(POP_TRAP) +
       " · shuffle " + shuffle + " · auto-next " + autoNext
 }
