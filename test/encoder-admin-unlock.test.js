@@ -53,11 +53,12 @@ test('unlock fails closed when the Render key is missing or too short', async ()
       });
       assert.equal(response.status, 503);
       assert.equal(response.headers.get('cache-control'), 'no-store');
+      await response.text();
     });
   }
 });
 
-test('failed unlock requests are rate limited without logging or echoing the submitted key', async () => {
+test('failed unlock requests are rate limited without echoing the submitted key', async () => {
   await withUnlockServer(() => TEST_KEY, async url => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const accepted = await fetch(url, {
@@ -75,6 +76,7 @@ test('failed unlock requests are rate limited without logging or echoing the sub
         body: JSON.stringify({ key: `wrong-${attempt}` }),
       });
       assert.equal(response.status, 401);
+      await response.text();
     }
     const limited = await fetch(url, {
       method: 'POST',

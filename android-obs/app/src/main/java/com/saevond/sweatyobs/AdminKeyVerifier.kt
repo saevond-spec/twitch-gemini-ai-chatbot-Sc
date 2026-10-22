@@ -48,8 +48,9 @@ internal class RemoteAdminKeyVerifier : AdminKeyVerifier {
 
   companion object {
     const val MAX_KEY_LENGTH = 256
-    private const val CONNECT_TIMEOUT_MS = 12_000
-    private const val READ_TIMEOUT_MS = 12_000
+    private const val CONNECT_TIMEOUT_MS = 15_000
+    // Render's free service can take about a minute to wake after idle.
+    private const val READ_TIMEOUT_MS = 75_000
     private const val HTTP_TOO_MANY_REQUESTS = 429
     private const val UNLOCK_URL = "https://twitch-gemini-ai-chatbot-sc-2.onrender.com/api/encoder/admin/unlock"
   }

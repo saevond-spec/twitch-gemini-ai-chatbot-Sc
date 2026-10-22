@@ -1501,7 +1501,7 @@ class MainActivity : Activity() {
       setPadding(dp(12), dp(12), dp(12), dp(12))
     }
     val recovery = TextView(this).apply {
-      text = "If the key is rotated, use the new key. Unlocking requires an internet connection and an available encoder service."
+      text = "If Render has been idle, its first response may take about a minute. Keep this screen open. If the check times out, retry when the service is awake. The key is not saved on this phone."
       textSize = 12f
       setTextColor(getColor(R.color.sweaty_muted))
       setPadding(0, dp(20), 0, 0)
