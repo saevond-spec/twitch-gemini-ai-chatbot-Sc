@@ -7,7 +7,7 @@ import org.json.JSONArray
 class MusicGenreSettings(context: Context) {
   private val prefs = context.getSharedPreferences("ps5_music", Context.MODE_PRIVATE)
   fun tracks(genre: String): List<String> {
-    require(genre == "club" || genre == "dubstep")
+    require(genre in GenrePlaylist.GENRES)
     val data = prefs.getString("library_$genre", "[]") ?: "[]"
     return runCatching {
       val parsed = JSONArray(data)
@@ -17,13 +17,13 @@ class MusicGenreSettings(context: Context) {
     }.getOrDefault(emptyList())
   }
   fun add(genre: String, tracks: List<String>) {
-    require(genre == "club" || genre == "dubstep")
+    require(genre in GenrePlaylist.GENRES)
     require(tracks.all { (it.startsWith("content://") && it.length <= 2048) || RemoteMusicCatalog.isSupportedAudioUrl(it) })
     val combined = (tracks(genre) + tracks).distinct().take(GenrePlaylist.MAX_TRACKS_PER_GENRE)
     prefs.edit().putString("library_$genre", JSONArray(combined).toString()).apply()
   }
   fun clear(genre: String) {
-    require(genre == "club" || genre == "dubstep")
+    require(genre in GenrePlaylist.GENRES)
     prefs.edit().remove("library_$genre").apply()
   }
   fun selected(): String = prefs.getString("station", "mixed").orEmpty().let {
@@ -40,6 +40,7 @@ class MusicGenreSettings(context: Context) {
   fun playlist() = GenrePlaylist().also {
     it.setTracks("club", tracks("club"))
     it.setTracks("dubstep", tracks("dubstep"))
+    it.setTracks(GenrePlaylist.POP_TRAP, tracks(GenrePlaylist.POP_TRAP))
     it.configure(selected(), shuffle(), autoNext())
   }
 }
