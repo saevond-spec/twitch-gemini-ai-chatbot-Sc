@@ -1,0 +1,15 @@
+{
+  "name": "sweatyobs-encoder",
+  "private": true,
+  "version": "0.2.0-dev.1",
+  "type": "module",
+  "description": "Standalone SweatyOBS streaming encoder helpers and tests",
+  "scripts": {
+    "start:control-api": "node server/controlApi.mjs",
+    "start:host": "node server/remote-run.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

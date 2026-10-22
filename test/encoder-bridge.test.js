@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEncoderEventBridge } from '../src/music/encoderBridge.js';
-import { applyPacket } from '../encoder/bridge-client.mjs';
 
 const token = 's'.repeat(48);
 const state = { station: 'dubstep', playing: false };
@@ -25,14 +24,7 @@ test('ordered music events, no duplicate replay, and resync after overflow', () 
   assert.equal(bridge.poll('Bearer ' + token, begin.cursor).body.reset, true);
 });
 
-test('restart resync restores selected station, paused state and skips stale events', () => {
-  const calls = [];
-  const feeder = { command: (...args) => calls.push(args) };
-  applyPacket(feeder, { reset: true, state: { station: 'club', playing: false }, events: [{ action: 'skip' }] });
-  assert.deepEqual(calls, [['station', 'club'], ['pause']]);
-});
-
-test('fails closed on malformed event types and cursor', () => {
+test('fails closed on unsupported event types and invalid cursors', () => {
   const bridge = createEncoderEventBridge({ token, getState: () => state });
   const begin = bridge.poll('Bearer ' + token).body;
   bridge.publish({ type: 'music.player.status', action: 'play', state });

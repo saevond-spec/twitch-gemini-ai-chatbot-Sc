@@ -36,11 +36,10 @@ services:
         value: "your-pollinations-api-key"
       - key: REDIS_URL
         value: "your-upstash-redis-url"
-      # Optional private Android encoder bridge. Copy the same random 32+
-      # character secret into Android's !play bridge setting.
+      # Legacy music/diagnostics bridge token. Kept separate from remote encoder
+      # host authentication and the admin unlock key.
       - key: ENCODER_BRIDGE_TOKEN
         sync: false
-
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Command Names (customizable triggers)
       # ═══════════════════════════════════════════════════════════════════
@@ -146,6 +145,8 @@ services:
         value: "30"
       - key: CHATTER_REJOIN_SUPPRESS_MINUTES
         value: "30"
+      - key: ADMIN_API_KEY
+        sync: false
 
       # ═══════════════════════════════════════════════════════════════════
       # OPTIONAL: Additional API Keys
@@ -162,9 +163,6 @@ services:
         value: "300"
       - key: REDIS_REQUIRED
         value: "false"
-      - key: ADMIN_API_KEY
-        sync: false
-
       - key: YOUTUBE_UPLOAD_ENABLED
         value: "false"
       - key: YOUTUBE_CLIENT_ID
@@ -216,3 +214,21 @@ services:
         value: "0.42"
       - key: LURKER_TRACKING_WARMUP_SECONDS
         value: "90"
+
+  - type: web
+    name: sweatyobs-control-api
+    runtime: node
+    branch: main
+    rootDir: sweatyobs
+    plan: free
+    numInstances: 1
+    buildCommand: npm install --omit=dev
+    startCommand: npm run start:control-api
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ENCODER_ADMIN_KEY
+        sync: false
+      - key: ENCODER_REMOTE_HOST_TOKEN
+        sync: false
