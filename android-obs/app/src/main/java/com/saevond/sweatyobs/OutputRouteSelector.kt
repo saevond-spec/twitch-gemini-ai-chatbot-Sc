@@ -13,4 +13,3 @@ internal object OutputRouteSelector {
     listOf(RtmpDestination("sleipnir", "Sleipnir", sleipnirServer, sleipnirKey))
   } else directDestinations
 }
-}
