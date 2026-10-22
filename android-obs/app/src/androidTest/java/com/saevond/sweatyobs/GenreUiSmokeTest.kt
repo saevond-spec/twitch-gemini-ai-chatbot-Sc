@@ -14,7 +14,7 @@ import org.junit.runner.RunWith
 class GenreUiSmokeTest {
   @get:Rule val scenario = ActivityScenarioRule(MainActivity::class.java)
 
-  @Before fun unlockEncoderForUiTest() = AdminPasswordUiTestSupport.unlockOrSetPassword()
+  @Before fun unlockEncoderForUiTest() = AdminPasswordUiTestSupport.unlockOrSetPassword(scenario.scenario)
 
   @Test fun changingGenreAndAutoNextPersistsSelection() {
     scenario.scenario.onActivity { activity ->
