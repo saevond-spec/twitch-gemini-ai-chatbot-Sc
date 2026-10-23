@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <item name="connection_status" type="id"/>
+  <item name="open_app_settings" type="id"/>
   <item name="connection_timeline" type="id"/>
   <item name="viewer_playback_check" type="id"/>
   <item name="viewer_playback_destination" type="id"/>

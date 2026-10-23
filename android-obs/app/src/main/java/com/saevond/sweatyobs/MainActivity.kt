@@ -75,8 +75,17 @@ class MainActivity : Activity() {
       accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
     val backgroundNote = TextView(this).apply {
-      text = "Background streaming: allow notifications for live status and Stop/Reconnect controls. Go Live holds a partial CPU wake lock for the session so media processing can continue with the screen off; battery use and heat may increase. If Android stops the app or Wi-Fi changes, open the app and start again; live sessions are never auto-restarted."
+      text = "Background streaming: allow notifications for live status and Stop/Reconnect controls; denied notifications may hide stop alerts from the drawer. Go Live holds a partial CPU wake lock so media processing can continue with the screen off, but Android Doze or phone-maker power saving can still interrupt networking. Test a screen-off stream on this phone before relying on it; battery use and heat may increase. If Android stops the app or Wi-Fi changes, open the app and start again; live sessions are never auto-restarted."
       setPadding(12, 0, 12, 20)
+    }
+    val appSettingsButton = Button(this).apply {
+      id = R.id.open_app_settings
+      text = "Open app settings for background access"
+      setOnClickListener {
+        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = Uri.parse("package:$packageName")
+        })
+      }
     }
     val phoneIp = TextView(this).apply {
       val ip = wifiIpv4()
@@ -364,7 +373,7 @@ class MainActivity : Activity() {
       setOnClickListener { showViewerPlaybackConfirmation() }
     }
 
-    listOf(status, backgroundNote, phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, rotateSleipnir180, sleipnirServer, saveSleipnirServer,
+    listOf(status, backgroundNote, appSettingsButton, phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, rotateSleipnir180, sleipnirServer, saveSleipnirServer,
       sleipnirKey, saveSleipnirKey, sleipnirOutputStatus, sleipnirNote,
       enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,

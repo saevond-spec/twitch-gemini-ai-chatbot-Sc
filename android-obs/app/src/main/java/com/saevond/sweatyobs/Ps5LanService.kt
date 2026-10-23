@@ -583,54 +583,68 @@ class Ps5LanService : Service() {
   }
 
   override fun onDestroy() {
-    receiverRunning = false
-    sessionForegroundActive = false
-    startupInProgress = false
-    stopping = true
-    musicDecodeGeneration++
-    decodingTrack = false
-    genrePlaylist = null
-    handler.removeCallbacks(updateTask)
-    receiver?.stop()
-    musicBridge?.stop()
-    musicBridge = null
-    audioMixer?.close()
-    audioMixer = null
-    musicTrack?.clear()
-    musicTrack = null
-    brandOverlay?.close()
-    brandOverlay = null
-    brandOverlayRequested = false
-    sleipnirRelayRequested = false
-    outputPublishers.toList().forEach { it.close() }
-    outputPublishers.clear()
-    releaseStreamWakeLock()
-    liveGate = null
-    outputConnected = false
-    receiver = null
-    getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
-      .putBoolean(PREF_SESSION_ACTIVE, false)
-      .remove(PREF_SESSION_PHASE)
-      .commit()
-    if (!terminalReason) {
-      val stoppedMessage = when {
-        !publicTest -> "Receiver stopped. Diagnostic only; no broadcast was sent."
-        musicStartedOnOutput.get() -> "Receiver and output senders stopped. At least one RTMPS destination accepted publishing; viewer playback was not independently verified."
-        else -> "Receiver stopped before any RTMPS destination accepted publishing."
+    try {
+      receiverRunning = false
+      sessionForegroundActive = false
+      startupInProgress = false
+      stopping = true
+      musicDecodeGeneration++
+      decodingTrack = false
+      genrePlaylist = null
+      handler.removeCallbacks(updateTask)
+      receiver?.let { ingest -> closeResource("PS5 receiver") { ingest.stop() } }
+      musicBridge?.let { bridge -> closeResource("music bridge") { bridge.stop() } }
+      musicBridge = null
+      audioMixer?.let { mixer -> closeResource("audio mixer") { mixer.close() } }
+      audioMixer = null
+      musicTrack?.let { track -> closeResource("music track") { track.clear() } }
+      musicTrack = null
+      brandOverlay?.let { overlay -> closeResource("brand video overlay") { overlay.close() } }
+      brandOverlay = null
+      brandOverlayRequested = false
+      sleipnirRelayRequested = false
+      outputPublishers.toList().forEach { publisher ->
+        closeResource("RTMPS output") { publisher.close() }
       }
-      publishUiStatus(stoppedMessage)
+      outputPublishers.clear()
+      liveGate = null
+      outputConnected = false
+      receiver = null
+      getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
+        .putBoolean(PREF_SESSION_ACTIVE, false)
+        .remove(PREF_SESSION_PHASE)
+        .commit()
+      if (!terminalReason) {
+        val stoppedMessage = when {
+          !publicTest -> "Receiver stopped. Diagnostic only; no broadcast was sent."
+          musicStartedOnOutput.get() -> "Receiver and output senders stopped. At least one RTMPS destination accepted publishing; viewer playback was not independently verified."
+          else -> "Receiver stopped before any RTMPS destination accepted publishing."
+        }
+        publishUiStatus(stoppedMessage)
+      }
+    } finally {
+      releaseStreamWakeLock()
+      try {
+        if (terminalReason) {
+          val finalMessage = report ?: getSharedPreferences(STATUS_PREFS, MODE_PRIVATE)
+            .getString(PREF_STATUS_MESSAGE, "Session stopped. Open the app for details.")
+            .orEmpty()
+          stopForeground(STOP_FOREGROUND_DETACH)
+          (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID, notification(finalMessage, ongoing = false))
+        } else {
+          stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+      } finally {
+        super.onDestroy()
+      }
     }
-    if (terminalReason) {
-      val finalMessage = report ?: getSharedPreferences(STATUS_PREFS, MODE_PRIVATE)
-        .getString(PREF_STATUS_MESSAGE, "Session stopped. Open the app for details.")
-        .orEmpty()
-      stopForeground(STOP_FOREGROUND_DETACH)
-      (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-        .notify(NOTIFICATION_ID, notification(finalMessage, ongoing = false))
-    } else {
-      stopForeground(STOP_FOREGROUND_REMOVE)
+  }
+
+  private fun closeResource(label: String, close: () -> Unit) {
+    runCatching(close).onFailure {
+      Log.w("SweatyOBS-PS5", "Could not close $label", it)
     }
-    super.onDestroy()
   }
 
   private fun acquireStreamWakeLock(): Boolean {

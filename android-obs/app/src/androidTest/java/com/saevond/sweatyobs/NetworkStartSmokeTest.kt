@@ -223,12 +223,20 @@ class NetworkStartSmokeTest {
       terminal = notificationManager.activeNotifications.firstOrNull { it.id == 734 }
     }
 
-    assertNotNull("terminal notification should remain after the service stops", terminal)
-    assertEquals(0, terminal!!.notification.flags and android.app.Notification.FLAG_ONGOING_EVENT)
-    assertTrue(terminal.notification.extras
-      .getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
-      .contains("Unavailable: use Wi-Fi"))
-    notificationManager.cancel(734)
+    try {
+      val completed = requireNotNull(terminal) {
+        "terminal notification should remain after the service stops"
+      }
+      val flags = completed.notification.flags
+      assertFalse((flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0)
+      assertTrue((flags and android.app.Notification.FLAG_AUTO_CANCEL) != 0)
+      assertFalse((flags and android.app.Notification.FLAG_NO_CLEAR) != 0)
+      assertTrue(completed.notification.extras
+        .getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+        .contains("Unavailable: use Wi-Fi"))
+    } finally {
+      notificationManager.cancel(734)
+    }
   }
 
   @Test fun invalidAddressTapReportsVisibleFailure() {
