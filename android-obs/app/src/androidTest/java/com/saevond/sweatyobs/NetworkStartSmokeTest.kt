@@ -82,6 +82,10 @@ class NetworkStartSmokeTest {
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
     val secrets = SecretStore(context)
     val syntheticKey = "sandbox-sleipnir-key-1234"
+    // Clear the live view before changing the preference; ActivityScenario recreation restores view state.
+    activityRule.scenario.onActivity { activity ->
+      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+    }
     outputPrefs.edit().remove("sleipnir_server").putBoolean("sleipnir_enabled", false).commit()
     activityRule.scenario.recreate()
 
@@ -105,6 +109,9 @@ class NetworkStartSmokeTest {
     assertTrue(outputPrefs.getBoolean("sleipnir_enabled", false))
 
     // Keep the disposable emulator's following tests in direct-output mode.
+    activityRule.scenario.onActivity { activity ->
+      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+    }
     outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
   }
 
@@ -115,6 +122,10 @@ class NetworkStartSmokeTest {
     val enabledBefore = prefs.getBoolean("sleipnir_enabled", false)
     val hadRotation = prefs.contains("sleipnir_rotate_180")
     val rotationBefore = prefs.getBoolean("sleipnir_rotate_180", true)
+    // Clear the live view before changing the preference; ActivityScenario recreation restores view state.
+    activityRule.scenario.onActivity { activity ->
+      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+    }
     prefs.edit().putBoolean("sleipnir_enabled", false).remove("sleipnir_rotate_180").commit()
     activityRule.scenario.recreate()
 
@@ -130,6 +141,11 @@ class NetworkStartSmokeTest {
       onView(withId(R.id.sleipnir_rotate_180)).perform(scrollTo())
         .check(matches(not(isChecked())))
     } finally {
+      // Restore both widgets and preferences so this emulator test cannot leak relay state.
+      activityRule.scenario.onActivity { activity ->
+        activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = enabledBefore
+        activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_rotate_180).isChecked = rotationBefore
+      }
       val editor = prefs.edit()
       if (hadEnabled) editor.putBoolean("sleipnir_enabled", enabledBefore) else editor.remove("sleipnir_enabled")
       if (hadRotation) editor.putBoolean("sleipnir_rotate_180", rotationBefore) else editor.remove("sleipnir_rotate_180")
