@@ -69,6 +69,32 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: cd android-obs && gradle --no-daemon :app:connectedDebugAndroidTest
+      - name: Install Android 15 emulator image with bounded retries
+        run: |
+          set -eu
+          package='system-images;android-35;google_apis;x86_64'
+          image="$ANDROID_HOME/system-images/android-35/google_apis/x86_64"
+          for attempt in 1 2 3; do
+            echo "Android 15 emulator image installation attempt $attempt"
+            if sdkmanager "$package" && test -f "$image/system.img"; then
+              echo "Android 15 image is present"
+              break
+            fi
+            if test "$attempt" -eq 3; then
+              echo "Android 15 system image unavailable after 3 attempts" >&2
+              exit 1
+            fi
+            rm -rf "$image" "$ANDROID_HOME/.temp"
+            sleep 8
+          done
+      - name: 'Android 15 emulator: verify local Wi-Fi request criteria'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: cd android-obs && gradle --no-daemon :app:connectedDebugAndroidTest
       - name: Upload tested APK for release publishing
         uses: actions/upload-artifact@v4
         with:

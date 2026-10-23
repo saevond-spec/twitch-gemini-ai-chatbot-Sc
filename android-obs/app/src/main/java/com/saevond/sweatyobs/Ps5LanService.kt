@@ -63,6 +63,16 @@ class Ps5LanService : Service() {
     const val SESSION_PHASE_ARMED = "ARMED"
     const val SESSION_PHASE_PUBLISH_ACCEPTED = "PUBLISH_ACCEPTED"
     private const val WIFI_CHANGE_GRACE_MS = 15_000L
+    
+    /**
+     * Match Wi-Fi even when it has no Internet route. Android 15 adds INTERNET to
+     * NetworkRequest defaults, so remove it for the local PS5 LAN diagnostic.
+     */
+    fun localWifiDiagnosticsRequest(): NetworkRequest =
+      NetworkRequest.Builder()
+        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        .build()
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
@@ -616,9 +626,7 @@ class Ps5LanService : Service() {
       ConnectionTimeline.append(this, "Internet route diagnostics unavailable (" + error.javaClass.simpleName + ")")
     }
 
-    val wifiRequest = NetworkRequest.Builder()
-      .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-      .build()
+    val wifiRequest = localWifiDiagnosticsRequest()
     val wifiCallback = object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) {
         appendNetworkEvent("Local Wi-Fi transport available for PS5 LAN")
@@ -709,7 +717,7 @@ class Ps5LanService : Service() {
     val temperatureTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
     val batteryTemperature = if (temperatureTenths >= 0) "${temperatureTenths / 10.0}°C" else "unknown"
     val thermal = power?.currentThermalStatus?.let(::thermalStatusName) ?: "unknown"
-    val lowPowerStandby = if (Build.VERSION.SDK_INT >= 33)
+    val lowPowerStandbyEnabled = if (Build.VERSION.SDK_INT >= 33)
       power?.isLowPowerStandbyEnabled?.toString() ?: "unknown" else "unsupported"
     ConnectionTimeline.append(
       this,
@@ -717,7 +725,7 @@ class Ps5LanService : Service() {
         " · charging=$charging · batteryTemp=$batteryTemperature · thermal=$thermal" +
         " · screenOn=${power?.isInteractive == true}" +
         " · batterySaver=${power?.isPowerSaveMode == true}" +
-        " · lowPowerStandby=$lowPowerStandby" +
+        " · lowPowerStandbyEnabled=$lowPowerStandbyEnabled" +
         " · deviceIdle=${Build.VERSION.SDK_INT >= 23 && power?.isDeviceIdleMode == true}"
     )
   }

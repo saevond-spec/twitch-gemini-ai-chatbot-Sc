@@ -20,6 +20,12 @@ class NetworkStartSmokeTest {
   @get:Rule val notificationPermissionRule = GrantPermissionRule.grant("android.permission.POST_NOTIFICATIONS")
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
+  @Test fun localWifiDiagnosticsRequestDoesNotRequireInternet() {
+    val request = Ps5LanService.localWifiDiagnosticsRequest()
+    assertTrue(request.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI))
+    assertFalse(request.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET))
+  }
+
   @Test fun viewerPlaybackConfirmationRequiresVideoAndAudioAndLogsManualEvent() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     onView(withId(R.id.viewer_playback_check)).perform(scrollTo(), click())
