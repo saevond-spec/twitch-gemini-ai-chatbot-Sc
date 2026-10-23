@@ -25,7 +25,7 @@ internal object ConnectionTimeline {
         .put("timestampMs", System.currentTimeMillis())
         .put("message", cleanMessage)
       context.openFileOutput(FILE_NAME, Context.MODE_APPEND).bufferedWriter(Charsets.UTF_8).use { writer ->
-        writer.append(row.toString()).append('\\n')
+        writer.append(row.toString()).append('\n')
       }
       cachedCount = cachedCount?.plus(1)
     } catch (error: Exception) {
@@ -63,7 +63,7 @@ internal object ConnectionTimeline {
 
   fun format(events: List<Event>): String {
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.getDefault())
-    return events.joinToString("\\n") { event ->
+    return events.joinToString("\n") { event ->
       "${formatter.format(Date(event.timestampMs))} · ${event.message}"
     }
   }
