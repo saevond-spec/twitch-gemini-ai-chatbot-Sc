@@ -1,6 +1,7 @@
 package com.saevond.sweatyobs.ingest
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.net.SocketTimeoutException
 import org.junit.Assert.*
 import org.junit.Test
 class TwitchRtmpsPublisherTest {
@@ -44,4 +45,22 @@ class TwitchRtmpsPublisherTest {
    assertEquals(msg.timestamp,parsed.timestamp)
    assertArrayEquals(msg.data,parsed.data)
  }
+ @Test fun triesAnotherValidatedAddressWithinSharedConnectBudget() {
+   val first = java.net.InetAddress.getByName("1.1.1.1")
+   val second = java.net.InetAddress.getByName("8.8.8.8")
+   var now = 0L
+   val attempts = mutableListOf<Pair<java.net.InetAddress, Int>>()
+   val result = connectFirstWorkingAddress(listOf(first, second), 1_000, nowMs = { now }) { address, timeout ->
+     attempts += address to timeout
+     if (address == first) {
+       now += timeout
+       throw SocketTimeoutException("first address unreachable")
+     }
+     "connected"
+   }
+   assertEquals("connected", result)
+   assertEquals(listOf(first, second), attempts.map { it.first })
+   assertTrue(attempts.sumOf { it.second } <= 1_000)
+ }
+
 }
