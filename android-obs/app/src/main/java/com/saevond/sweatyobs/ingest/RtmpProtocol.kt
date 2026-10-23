@@ -3,6 +3,7 @@ package com.saevond.sweatyobs.ingest
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.SocketTimeoutException
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -21,15 +22,49 @@ internal fun InputStream.readRequired(length: Int): ByteArray {
   }
   return result
 }
+
+/** Reads one handshake field against an absolute deadline, even if a peer trickles bytes. */
+internal fun InputStream.readRequiredWithin(
+  length: Int,
+  timeoutMs: Int,
+  updateReadTimeoutMs: ((Int) -> Unit)? = null,
+  nowMs: () -> Long = { System.nanoTime() / 1_000_000L }
+): ByteArray {
+  require(length in 0..4_194_304 && timeoutMs > 0)
+  val deadline = nowMs() + timeoutMs
+  val result = ByteArray(length)
+  var pos = 0
+  while (pos < length) {
+    val remaining = deadline - nowMs()
+    if (remaining <= 0L) throw SocketTimeoutException("RTMP handshake progress deadline exceeded")
+    updateReadTimeoutMs?.invoke(minOf(timeoutMs.toLong(), remaining).coerceAtLeast(1L).toInt())
+    val count = read(result, pos, length - pos)
+    if (count <= 0) throw EOFException("RTMP peer disconnected")
+    pos += count
+    if (nowMs() >= deadline && pos < length) {
+      throw SocketTimeoutException("RTMP handshake progress deadline exceeded")
+    }
+  }
+  updateReadTimeoutMs?.invoke(timeoutMs)
+  return result
+}
 internal fun be24(v: ByteArray, start: Int) =
   ((v[start].toInt() and 255) shl 16) or ((v[start + 1].toInt() and 255) shl 8) or (v[start + 2].toInt() and 255)
 internal fun be32(v: ByteArray) = ByteBuffer.wrap(v).order(ByteOrder.BIG_ENDIAN).int
 private fun bytes24(value: Int) = byteArrayOf((value shr 16).toByte(), (value shr 8).toByte(), value.toByte())
 private fun bytes32(value: Int) = byteArrayOf((value shr 24).toByte(), (value shr 16).toByte(), (value shr 8).toByte(), value.toByte())
 
-fun rtmpHandshake(input: InputStream, output: OutputStream, random: SecureRandom = SecureRandom()) {
-  if (input.read() != 3) throw IllegalArgumentException("Only RTMP version 3 supported")
-  val c1 = input.readRequired(1536)
+fun rtmpHandshake(
+  input: InputStream,
+  output: OutputStream,
+  random: SecureRandom = SecureRandom(),
+  readTimeoutMs: ((Int) -> Unit)? = null,
+  timeoutMs: Int = 15_000
+) {
+  if (input.readRequiredWithin(1, timeoutMs, readTimeoutMs)[0].toInt() != 3) {
+    throw IllegalArgumentException("Only RTMP version 3 supported")
+  }
+  val c1 = input.readRequiredWithin(1536, timeoutMs, readTimeoutMs)
   val s1 = ByteArray(1536)
   random.nextBytes(s1)
   val now = (System.currentTimeMillis() / 1000).toInt()
@@ -39,29 +74,86 @@ fun rtmpHandshake(input: InputStream, output: OutputStream, random: SecureRandom
   output.write(s1)
   output.write(c1)
   output.flush()
-  input.readRequired(1536) // C2
+  input.readRequiredWithin(1536, timeoutMs, readTimeoutMs) // C2
 }
 
 /** Bounded RTMP chunk reassembler. Only one ongoing message per chunk stream ID. */
-class RtmpChunkReader(private val input: InputStream) {
+class RtmpChunkReader(
+  private val input: InputStream,
+  private val maxAggregateBufferedBytes: Int = 8 * 1024 * 1024,
+  private val messageDeadlineMs: Long = 15_000L,
+  private val readTimeoutMs: ((Int) -> Unit)? = null,
+  private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L }
+) {
+  private class MessageBuffer : ByteArrayOutputStream() {
+    fun capacityBytes(): Int = buf.size
+  }
   private data class Channel(
     var timestamp: Long = 0, var delta: Long = 0, var length: Int = 0,
     var type: Int = 0, var streamId: Int = 0, var extended: Boolean = false,
-    var buffer: ByteArrayOutputStream = ByteArrayOutputStream(),
-    var initialized: Boolean = false, var lastFmt: Int = 0
+    var buffer: MessageBuffer = MessageBuffer(),
+    var initialized: Boolean = false, var lastFmt: Int = 0,
+    var messageStartedAtMs: Long? = null
   )
   private val channels = HashMap<Int, Channel>()
   private var chunkSize = 128
 
+  init {
+    require(maxAggregateBufferedBytes in 128..64 * 2_097_152)
+    require(messageDeadlineMs in 1_000L..120_000L)
+  }
+
+  private fun applyReadDeadline(deadlineAtMs: Long?) {
+    if (deadlineAtMs == null) {
+      readTimeoutMs?.invoke(12_000)
+      return
+    }
+    val remaining = deadlineAtMs - nowMs()
+    if (remaining <= 0L) throw SocketTimeoutException("RTMP message progress deadline exceeded")
+    readTimeoutMs?.invoke(minOf(12_000L, remaining).coerceAtLeast(1L).toInt())
+  }
+
+  private fun checkReadDeadline(deadlineAtMs: Long?) {
+    if (deadlineAtMs != null && nowMs() >= deadlineAtMs) {
+      throw SocketTimeoutException("RTMP message progress deadline exceeded")
+    }
+  }
+
+  private fun readByte(deadlineAtMs: Long? = null): Int {
+    applyReadDeadline(deadlineAtMs)
+    val value = input.read()
+    checkReadDeadline(deadlineAtMs)
+    return value
+  }
+
+  private fun readRequiredBounded(length: Int, deadlineAtMs: Long): ByteArray {
+    require(length in 0..4_194_304)
+    val result = ByteArray(length)
+    var position = 0
+    while (position < length) {
+      applyReadDeadline(deadlineAtMs)
+      val count = input.read(result, position, length - position)
+      if (count <= 0) throw EOFException("RTMP peer disconnected")
+      position += count
+      checkReadDeadline(deadlineAtMs)
+    }
+    return result
+  }
+
   fun nextMessage(): RtmpMessage {
     while (true) {
-      val first = input.read()
+      val first = readByte()
       if (first < 0) throw EOFException("RTMP disconnected")
+      val headerStartedAtMs = nowMs()
+      val headerDeadlineAtMs = headerStartedAtMs + messageDeadlineMs
       val fmt = first shr 6
       val rawId = first and 63
       val csid = when (rawId) {
-        0 -> 64 + input.readRequired(1)[0].toUByte().toInt()
-        1 -> { val ext = input.readRequired(2); 64 + (ext[0].toInt() and 255) + ((ext[1].toInt() and 255) shl 8) }
+        0 -> 64 + readRequiredBounded(1, headerDeadlineAtMs)[0].toUByte().toInt()
+        1 -> {
+          val ext = readRequiredBounded(2, headerDeadlineAtMs)
+          64 + (ext[0].toInt() and 255) + ((ext[1].toInt() and 255) shl 8)
+        }
         else -> rawId
       }
       if (csid < 2 || csid > 65599) throw IllegalArgumentException("Invalid chunk stream")
@@ -72,33 +164,35 @@ class RtmpChunkReader(private val input: InputStream) {
       if (fmt != 0 && !c.initialized) throw IllegalArgumentException("Missing RTMP prior chunk header")
       val continuing = c.buffer.size() > 0 && c.buffer.size() < c.length
       if (continuing && fmt != 3) throw IllegalArgumentException("RTMP interleaving error")
+      if (!continuing) c.messageStartedAtMs = headerStartedAtMs
+      val deadlineAtMs = (c.messageStartedAtMs ?: headerStartedAtMs) + messageDeadlineMs
       var stampField = 0
       when (fmt) {
         0 -> {
-          stampField = be24(input.readRequired(3), 0)
-          c.length = be24(input.readRequired(3), 0)
-          c.type = input.readRequired(1)[0].toInt() and 255
-          c.streamId = ByteBuffer.wrap(input.readRequired(4)).order(ByteOrder.LITTLE_ENDIAN).int
+          stampField = be24(readRequiredBounded(3, deadlineAtMs), 0)
+          c.length = be24(readRequiredBounded(3, deadlineAtMs), 0)
+          c.type = readRequiredBounded(1, deadlineAtMs)[0].toInt() and 255
+          c.streamId = ByteBuffer.wrap(readRequiredBounded(4, deadlineAtMs)).order(ByteOrder.LITTLE_ENDIAN).int
           c.extended = stampField == 0xffffff
           c.delta = 0
           c.buffer.reset()
         }
         1 -> {
-          stampField = be24(input.readRequired(3), 0)
-          c.length = be24(input.readRequired(3), 0)
-          c.type = input.readRequired(1)[0].toInt() and 255
+          stampField = be24(readRequiredBounded(3, deadlineAtMs), 0)
+          c.length = be24(readRequiredBounded(3, deadlineAtMs), 0)
+          c.type = readRequiredBounded(1, deadlineAtMs)[0].toInt() and 255
           c.extended = stampField == 0xffffff
           c.buffer.reset()
         }
         2 -> {
-          stampField = be24(input.readRequired(3), 0)
+          stampField = be24(readRequiredBounded(3, deadlineAtMs), 0)
           c.extended = stampField == 0xffffff
           c.buffer.reset()
         }
         3 -> if (!continuing) c.buffer.reset()
       }
       if (c.length < 0 || c.length > 2_097_152) throw IllegalArgumentException("RTMP payload too large")
-      val extendedValue = if (c.extended) be32(input.readRequired(4)).toLong() and 0xffffffffL else 0L
+      val extendedValue = if (c.extended) be32(readRequiredBounded(4, deadlineAtMs)).toLong() and 0xffffffffL else 0L
       if (fmt == 0) c.timestamp = if (c.extended) extendedValue else stampField.toLong()
       else if (fmt == 1 || fmt == 2) {
         c.delta = if (c.extended) extendedValue else stampField.toLong()
@@ -108,10 +202,18 @@ class RtmpChunkReader(private val input: InputStream) {
       c.lastFmt = fmt
       val needed = c.length - c.buffer.size()
       if (needed < 0) throw IllegalArgumentException("RTMP message overflow")
-      c.buffer.write(input.readRequired(minOf(chunkSize, needed)))
+      val incoming = minOf(chunkSize, needed)
+      val aggregateBefore = channels.values.sumOf { it.buffer.size().toLong() }
+      if (aggregateBefore + incoming > maxAggregateBufferedBytes.toLong()) {
+        throw IllegalArgumentException("RTMP aggregate buffered payload too large")
+      }
+      c.buffer.write(readRequiredBounded(incoming, deadlineAtMs))
       if (c.buffer.size() == c.length) {
         val message = RtmpMessage(c.type, c.timestamp, c.streamId, c.buffer.toByteArray())
-        c.buffer.reset()
+        // reset() retains a potentially multi-megabyte backing array per CSID.
+        // Replacing the buffer releases it as soon as the message is complete.
+        c.buffer = MessageBuffer()
+        c.messageStartedAtMs = null
         if (message.type == 1 && message.data.size >= 4) {
           val value = be32(message.data) and 0x7fffffff
           if (value !in 1..65536) throw IllegalArgumentException("Invalid RTMP chunk size")
@@ -121,6 +223,9 @@ class RtmpChunkReader(private val input: InputStream) {
       }
     }
   }
+
+  internal fun retainedBufferCapacityBytesForTest(): Long =
+    channels.values.sumOf { it.buffer.capacityBytes().toLong() }
 }
 
 fun amfString(value: String): ByteArray {
