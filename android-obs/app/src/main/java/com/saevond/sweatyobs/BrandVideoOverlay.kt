@@ -259,14 +259,24 @@ internal class BrandVideoOverlay(
   private fun configureHardwareEncoder(sourceWidth: Int, sourceHeight: Int, maxBitrate: Int): EncoderSetup {
     val constrained = maxBitrate < Int.MAX_VALUE
     val fpsTargets = if (constrained) listOf(30, 24, 20, 15, 60) else listOf(60, 30)
-    val hardwareEncoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
+    val avcEncoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
       runCatching {
-        info.isEncoder && info.isHardwareAccelerated && !info.isSoftwareOnly &&
-          info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
+        info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
       }.getOrDefault(false)
     }
+    val classifications = avcEncoders.map { info ->
+      val hardware = runCatching { info.isHardwareAccelerated }.getOrDefault(false)
+      val software = runCatching { info.isSoftwareOnly }.getOrDefault(true)
+      Triple(info, hardware, software)
+    }
+    val hardwareEncoders = classifications.filter { it.second && !it.third }.map { it.first }
+    val excludedEncoderSummary = classifications.filterNot { it.second && !it.third }.take(4).joinToString(",") {
+      it.first.name.take(10) + ":h" + (if (it.second) "1" else "0") + "s" + (if (it.third) "1" else "0")
+    }.take(56)
     if (hardwareEncoders.isEmpty()) {
-      throw IllegalStateException("No hardware H.264 encoder is exposed by Android")
+      throw IllegalStateException(
+        "No hardware AVC encoder reported (seen=" + avcEncoders.size + ", excluded=" + excludedEncoderSummary + ")"
+      )
     }
 
     var supportedSizeRates = 0
@@ -363,10 +373,11 @@ internal class BrandVideoOverlay(
     }
 
     val reason = if (lastFailure.isBlank()) "" else "; last " + lastFailure
+    val excluded = if (excludedEncoderSummary.isBlank()) "" else "; excluded=" + excludedEncoderSummary
     throw IllegalStateException(
-      "No hardware AVC profile ready (enc=" + hardwareEncoders.size +
+      "No hardware AVC profile (enc=" + hardwareEncoders.size +
         ", size/fps=" + supportedSizeRates + ", rate=" + bitrateFits +
-        ", CBR=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason
+        ", CBR=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason + excluded
     )
   }
 
