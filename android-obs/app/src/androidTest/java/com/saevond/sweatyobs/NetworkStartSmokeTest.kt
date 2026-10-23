@@ -53,9 +53,11 @@ class NetworkStartSmokeTest {
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
     val secrets = SecretStore(context)
     val syntheticKey = "sandbox-sleipnir-key-1234"
-    outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
+    outputPrefs.edit().remove("sleipnir_server").putBoolean("sleipnir_enabled", false).commit()
     activityRule.scenario.recreate()
 
+    onView(withId(R.id.sleipnir_server)).perform(scrollTo())
+      .check(matches(withText("rtmps://ingest.sleipnir.tv:1936/live")))
     onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
       .check(matches(allOf(
