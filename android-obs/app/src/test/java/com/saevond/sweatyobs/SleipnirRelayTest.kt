@@ -44,6 +44,7 @@ class SleipnirRelayTest {
     assertTrue(target < SleipnirRelay.YOUTUBE_720P30_RECOMMENDED_VIDEO_BPS)
     assertTrue(SleipnirRelay.youtube720p30BitrateNote(1280, 720, 30, target).contains("floor met"))
     assertTrue(SleipnirRelay.youtube720p30BitrateNote(960, 540, 30, 1_800_000).contains("still needs dashboard verification"))
+    assertTrue(SleipnirRelay.youtube720p30BitrateNote(1280, 960, 30, 3_200_000).contains("still needs dashboard verification"))
   }
   @Test fun relayUsesAdvertisedCappedModesAndOnlyProbesCbrWhenBothAreMissing() {
     assertEquals(
