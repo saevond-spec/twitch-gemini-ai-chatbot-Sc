@@ -20,11 +20,11 @@ class NetworkStartSmokeTest {
   @get:Rule val notificationPermissionRule = GrantPermissionRule.grant("android.permission.POST_NOTIFICATIONS")
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
-  @Test fun dev14DebugPackageInstallsAlongsideOlderBuild() {
+  @Test fun dev15DebugPackageInstallsAlongsideOlderBuild() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
-    assertEquals("com.saevond.sweatyobs.dev14sleipnir", context.packageName)
+    assertEquals("com.saevond.sweatyobs.dev15sleipnir", context.packageName)
     assertEquals(
-      "SweatyClanker OBS Lite (Dev14 test)",
+      "SweatyClanker OBS Lite (dev15 test)",
       context.packageManager.getApplicationLabel(context.applicationInfo).toString()
     )
   }
