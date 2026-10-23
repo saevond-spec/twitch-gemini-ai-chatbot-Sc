@@ -34,7 +34,7 @@ class SleipnirRelayTest {
     assertEquals(1_339_200L, SleipnirRelay.MAX_INGEST_BITRATE_BPS - SleipnirRelay.projectedIngestBitrate(3_200_000))
   }
 
-  @Test fun 720p30TargetMeetsTheYouTubeH264FloorAndFitsTheRelayEstimate() {
+  @Test fun youtube720p30TargetMeetsTheYouTubeH264FloorAndFitsTheRelayEstimate() {
     val target = SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS)
     val projected = SleipnirRelay.projectedIngestBitrate(target)
     assertEquals(3_200_000, target)

@@ -709,12 +709,15 @@ class Ps5LanService : Service() {
     val temperatureTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
     val batteryTemperature = if (temperatureTenths >= 0) "${temperatureTenths / 10.0}°C" else "unknown"
     val thermal = power?.currentThermalStatus?.let(::thermalStatusName) ?: "unknown"
+    val lowPowerStandby = if (Build.VERSION.SDK_INT >= 33)
+      power?.isLowPowerStandbyEnabled?.toString() ?: "unknown" else "unsupported"
     ConnectionTimeline.append(
       this,
       "Public session power snapshot · point=$point · battery ${percent?.let { "$it%" } ?: "unknown"}" +
         " · charging=$charging · batteryTemp=$batteryTemperature · thermal=$thermal" +
         " · screenOn=${power?.isInteractive == true}" +
         " · batterySaver=${power?.isPowerSaveMode == true}" +
+        " · lowPowerStandby=$lowPowerStandby" +
         " · deviceIdle=${Build.VERSION.SDK_INT >= 23 && power?.isDeviceIdleMode == true}"
     )
   }
