@@ -6,7 +6,9 @@ on:
       - 'android-obs/**'
       - '.github/workflows/android-obs.yml'
   push:
-    branches: [main]
+    branches:
+      - main
+      - codex/sleipnir-dev7-fulltimeline-20261023-r1
     paths:
       - 'android-obs/**'
       - '.github/workflows/android-obs.yml'
