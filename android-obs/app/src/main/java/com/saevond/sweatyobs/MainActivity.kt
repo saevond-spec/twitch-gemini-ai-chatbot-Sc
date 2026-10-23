@@ -834,7 +834,7 @@ class MainActivity : Activity() {
       recordButton.setOnClickListener {
         val destination = destinationPicker.selectedItem.toString()
         recordTimelineEvent(
-          "Manual viewer playback verified · \${destination} · video visible · audio/music audible · operator-confirmed"
+          "Manual viewer playback verified · ${destination} · video visible · audio/music audible · operator-confirmed"
         )
         dialog.dismiss()
       }
