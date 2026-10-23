@@ -79,7 +79,8 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
       .check(matches(allOf(
         withText(containsString("one RTMPS upload")),
-        withText(containsString("4.7 Mbps video"))
+        withText(containsString("3.8 Mbps target video")),
+        withText(containsString("4.32 Mbps with 10% transport overhead"))
       )))
     onView(withId(R.id.sleipnir_stream_key)).perform(scrollTo(), replaceText(syntheticKey), closeSoftKeyboard())
     onView(withId(R.id.save_sleipnir_key)).perform(scrollTo(), click())
