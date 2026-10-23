@@ -2,7 +2,7 @@ package com.saevond.sweatyobs
 
 /** Sleipnir's documented RTMPS ingest and conservative free-tier encode budget. */
 internal object SleipnirRelay {
-  const val DEFAULT_INGEST_URL = "rtmps://ingest.sleipnir.tv/live"
+  const val DEFAULT_INGEST_URL = "rtmps://ingest.sleipnir.tv:1936/live"
   const val MAX_VIDEO_BITRATE_BPS = 4_700_000
 
   fun videoBitrate(width: Int, height: Int, maxBitrate: Int = Int.MAX_VALUE): Int {
