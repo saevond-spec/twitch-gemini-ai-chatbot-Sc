@@ -7,6 +7,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SleipnirRelayTest {
+  @Test fun configuredSleipnirIngestDefaultUsesPort1936() {
+    assertEquals("rtmps://ingest.sleipnir.tv:1936/live", SleipnirRelay.DEFAULT_INGEST_URL)
+    assertTrue(RtmpDestination(
+      "sleipnir", "Sleipnir", SleipnirRelay.DEFAULT_INGEST_URL, "sandbox-sleipnir-key-1234"
+    ).isValid())
+  }
+
   @Test fun encoderVideoRateFitsAdvertisedFreeTierWithAudioHeadroom() {
     assertEquals(4_700_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(4_700_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
