@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?><resources><item name="connection_status" type="id"/><item name="ps5_ip_address" type="id"/><item name="start_network_test" type="id"/><item name="stop_network_test" type="id"/><item name="output_upload_budget" type="id"/>  <item name="game_volume" type="id"/>
+<?xml version="1.0" encoding="utf-8"?><resources><item name="connection_status" type="id"/><item name="connection_timeline" type="id"/><item name="ps5_ip_address" type="id"/><item name="start_network_test" type="id"/><item name="stop_network_test" type="id"/><item name="output_upload_budget" type="id"/>  <item name="game_volume" type="id"/>
   <item name="music_volume" type="id"/>
   <item name="music_mute" type="id"/>
   <item name="music_autoplay" type="id"/>

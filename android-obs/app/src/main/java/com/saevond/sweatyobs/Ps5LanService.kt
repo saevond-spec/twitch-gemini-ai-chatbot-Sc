@@ -472,6 +472,7 @@ class Ps5LanService : Service() {
     .build()
 
   private fun publishUiStatus(message: String) {
+    ConnectionTimeline.append(this, message)
     getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit().putString(PREF_STATUS_MESSAGE, message).apply()
     sendBroadcast(Intent(ACTION_STATUS).apply {
       setPackage(packageName)

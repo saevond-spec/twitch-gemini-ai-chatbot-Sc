@@ -9,9 +9,15 @@ android {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
     targetSdk = 35
-    versionCode = 14
-    versionName = "0.1.8-dev.6"
+    versionCode = 15
+    versionName = "0.1.8-dev.6-timeline"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+  buildTypes {
+    getByName("debug") {
+      // Keep test builds installable alongside the original app, preserving its data.
+      applicationIdSuffix = ".timeline"
+    }
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
   kotlinOptions { jvmTarget = "17" }

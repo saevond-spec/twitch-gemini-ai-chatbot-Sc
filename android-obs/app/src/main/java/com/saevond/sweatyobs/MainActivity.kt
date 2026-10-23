@@ -46,10 +46,12 @@ class MainActivity : Activity() {
     private const val PICK_POP_TRAP = 31419
   }
   private lateinit var status: TextView
+  private lateinit var timelineButton: Button
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val text = intent?.getStringExtra(Ps5LanService.EXTRA_STATUS_MESSAGE) ?: return
       status.text = text
+      refreshTimelineButton()
     }
   }
 
@@ -277,8 +279,13 @@ class MainActivity : Activity() {
     val goLive = Button(this).apply { text = "START MULTISTREAM (public broadcast)" }
     val startLan = Button(this).apply { id = R.id.start_network_test; text = "Start PS5 network connection test" }
     val stopLan = Button(this).apply { id = R.id.stop_network_test; text = "Stop receiver and all outputs" }
+    timelineButton = Button(this).apply {
+      id = R.id.connection_timeline
+      text = "View full connection timeline"
+      setOnClickListener { showConnectionTimeline() }
+    }
 
-    listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
+    listOf(phoneIp, timelineButton, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, youtubeKey, saveYouTube,
       enableKick, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
@@ -292,6 +299,8 @@ class MainActivity : Activity() {
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
+    recordTimelineEvent("App opened · SweatyClanker OBS Lite 0.1.8-dev.6")
+    refreshTimelineButton()
 
     stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -562,6 +571,7 @@ class MainActivity : Activity() {
     }
 
     goLive.setOnClickListener {
+      recordTimelineEvent("Public multistream requested")
       status.text = "Public multistream requested. Checking selected platforms, phone, and PS5 address…"
       val ip = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(ip)) {
@@ -599,6 +609,7 @@ class MainActivity : Activity() {
     }
 
     startLan.setOnClickListener {
+      recordTimelineEvent("PS5 receiver start requested")
       status.text = "Start button tapped — checking PS5 address…"
       val address = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(address)) {
@@ -619,9 +630,43 @@ class MainActivity : Activity() {
     }
 
     stopLan.setOnClickListener {
+      recordTimelineEvent("Stop requested for receiver and all outputs")
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 receiver and all streaming outputs stopped."
     }
+  }
+
+  private fun recordTimelineEvent(message: String) {
+    ConnectionTimeline.append(this, message)
+    refreshTimelineButton()
+  }
+
+  private fun refreshTimelineButton() {
+    if (!::timelineButton.isInitialized) return
+    val count = ConnectionTimeline.events(this).size
+    timelineButton.text = "View full connection timeline ($count events)"
+  }
+
+  private fun showConnectionTimeline() {
+    val events = ConnectionTimeline.events(this)
+    val timelineText = ConnectionTimeline.format(events).ifBlank { "No connection events recorded yet." }
+    val content = TextView(this).apply {
+      text = timelineText
+      textSize = 14f
+      setPadding(24, 16, 24, 16)
+      setTextIsSelectable(true)
+    }
+    val scroll = ScrollView(this).apply { addView(content) }
+    AlertDialog.Builder(this)
+      .setTitle("Full connection timeline · ${events.size} events")
+      .setView(scroll)
+      .setPositiveButton("Copy timeline") { _, _ ->
+        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
+          ClipData.newPlainText("SweatyClanker connection timeline", timelineText)
+        )
+      }
+      .setNegativeButton("Close", null)
+      .show()
   }
 
   private fun browseRemoteCatalog(genre: String) {
@@ -765,6 +810,7 @@ class MainActivity : Activity() {
     val saved = getSharedPreferences(Ps5LanService.STATUS_PREFS, MODE_PRIVATE)
       .getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
     if (!saved.isNullOrBlank()) status.text = saved
+    refreshTimelineButton()
   }
 
   override fun onStop() {
