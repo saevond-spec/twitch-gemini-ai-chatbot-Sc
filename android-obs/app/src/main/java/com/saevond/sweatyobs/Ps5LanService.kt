@@ -76,6 +76,7 @@ class Ps5LanService : Service() {
   private var wifiAddress: String? = null
   private var report: String? = null
   private var stopping = false
+  private var startupInProgress = false
   private var streamWakeLock: PowerManager.WakeLock? = null
   private var terminalReason = false
   @Volatile private var publicTest = false
@@ -204,10 +205,11 @@ class Ps5LanService : Service() {
       return START_NOT_STICKY
     }
     if ((intent?.action != ACTION_START && intent?.action != ACTION_START_TWITCH) || stopping) return START_NOT_STICKY
-    if (receiver != null) {
-      setNotification("Receiver already active. Stop current test before switching diagnostic/public mode.")
+    if (receiver != null || sessionForegroundActive || startupInProgress) {
+      setNotification("Receiver already active or starting. Stop the current session before switching diagnostic/public mode.")
       return START_NOT_STICKY
     }
+    startupInProgress = true
     publicTest = intent?.action == ACTION_START_TWITCH
 
     // Enter foreground immediately after the explicit user start, before codec or
@@ -413,6 +415,7 @@ class Ps5LanService : Service() {
       receiver = ingest
       ingest.start()
       receiverRunning = true
+      startupInProgress = false
       getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
         .putBoolean(PREF_SESSION_ACTIVE, true)
         .putBoolean(PREF_SESSION_PUBLIC, publicTest)
@@ -576,6 +579,7 @@ class Ps5LanService : Service() {
   override fun onDestroy() {
     receiverRunning = false
     sessionForegroundActive = false
+    startupInProgress = false
     stopping = true
     releaseStreamWakeLock()
     musicDecodeGeneration++
