@@ -172,7 +172,7 @@ internal class BrandVideoOverlay(
       val gl = try {
         atStage("initialize GLES compositor") {
           GlBrandCompositor(
-            setup.inputSurface, parsed.width, parsed.height, outputWidth, outputHeight,
+            setup.inputSurface, parsed.width, parsed.height, outputWidth, outputHeight, outputFps,
             overlayCanvas, handler,
             onFrame = {
               try { drainEncoder() }
@@ -364,7 +364,12 @@ internal class BrandVideoOverlay(
             candidate.fps, candidate.bitrate, candidate.bitrateMode
           )
         } catch (error: Exception) {
-          lastFailure = candidate.info.name.take(24) + ":" + error.javaClass.simpleName
+          val modeName = if (candidate.bitrateMode ==
+            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD) "FD" else "CBR"
+          val detail = error.message?.lineSequence()?.firstOrNull()?.take(28).orEmpty()
+          lastFailure = candidate.info.name.take(12) + " " + candidate.width + "x" +
+            candidate.height + "@" + candidate.fps + " " + modeName + " " +
+            error.javaClass.simpleName + (if (detail.isBlank()) "" else ":" + detail)
           runCatching { codec?.stop() }
           runCatching { codec?.release() }
           runCatching { inputSurface?.release() }
@@ -377,7 +382,7 @@ internal class BrandVideoOverlay(
     throw IllegalStateException(
       "No hardware AVC profile (enc=" + hardwareEncoders.size +
         ", size/fps=" + supportedSizeRates + ", rate=" + bitrateFits +
-        ", CBR=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason + excluded
+        ", modes=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason + excluded
     )
   }
 
@@ -554,6 +559,7 @@ private class GlBrandCompositor(
   private val inputHeight: Int,
   private val width: Int,
   private val height: Int,
+  private val maxFrameRate: Int,
   private val overlay: BrandOverlayCanvas,
   handler: Handler,
   private val onFrame: () -> Unit,
@@ -568,6 +574,7 @@ private class GlBrandCompositor(
   private val overlayProgram: Int
   private lateinit var videoSurfaceTexture: SurfaceTexture
   private val rendererClosed = AtomicBoolean(false)
+  private val framePacer = FrameTimestampPacer(maxFrameRate)
   val decoderSurface: Surface
   private val vertexData = floatBuffer(floatArrayOf(
     -1f,-1f, 0f,1f,  1f,-1f, 1f,1f,  -1f,1f, 0f,0f,  1f,1f, 1f,0f
@@ -618,6 +625,7 @@ private class GlBrandCompositor(
     try {
       makeCurrent()
       surfaceTexture.updateTexImage()
+      val pts = framePacer.nextTimestampNs(surfaceTexture.timestamp) ?: return
       if (overlay.redrawIfDue()) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,overlayTexture)
@@ -649,7 +657,6 @@ private class GlBrandCompositor(
       GLES20.glUniform1i(GLES20.glGetUniformLocation(overlayProgram,"uTexture"),1)
       GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4)
       GLES20.glDisable(GLES20.GL_BLEND)
-      val pts = surfaceTexture.timestamp.coerceAtLeast(1L)
       EGLExt.eglPresentationTimeANDROID(display,eglSurface,pts)
       check(EGL14.eglSwapBuffers(display,eglSurface)) { "Encoder surface rejected a composed frame" }
       onFrame()
