@@ -830,12 +830,13 @@ class MainActivity : Activity() {
     }
     val selected = linkedSetOf<Int>()
     val options = tracks.map { it.title + " — " + it.artist }.toTypedArray()
-    AlertDialog.Builder(this)
+    val dialog = AlertDialog.Builder(this)
       .setTitle("Remote NCS $label catalog")
       .setMultiChoiceItems(options, BooleanArray(options.size)) { _, which, checked ->
         if (checked) selected.add(which) else selected.remove(which)
       }
       .setNegativeButton("Cancel", null)
+      .setNeutralButton("Select all", null)
       .setPositiveButton("Add selected") { _, _ ->
         if (selected.isEmpty()) {
           status.text = "No remote songs selected."
@@ -861,7 +862,14 @@ class MainActivity : Activity() {
           "No new songs added. The tracks may already be saved or this genre has reached its 100-song limit."
         if (added > 0 && Ps5LanService.receiverRunning) refreshGenreService()
       }
-      .show()
+      .create()
+    dialog.setOnShowListener {
+      dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+        selected.addAll(tracks.indices)
+        tracks.indices.forEach { dialog.listView.setItemChecked(it, true) }
+      }
+    }
+    dialog.show()
   }
 
   private fun pickGenreTracks(requestCode: Int) {
