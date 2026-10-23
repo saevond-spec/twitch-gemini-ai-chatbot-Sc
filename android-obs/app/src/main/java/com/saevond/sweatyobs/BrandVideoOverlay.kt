@@ -354,7 +354,10 @@ internal class BrandVideoOverlay(
             if (candidate.baselineProfile) {
               setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             }
-            if (android.os.Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+              setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+              setInteger(MediaFormat.KEY_MAX_FPS_TO_ENCODER, candidate.fps)
+            }
           }
           codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
           inputSurface = codec.createInputSurface()
