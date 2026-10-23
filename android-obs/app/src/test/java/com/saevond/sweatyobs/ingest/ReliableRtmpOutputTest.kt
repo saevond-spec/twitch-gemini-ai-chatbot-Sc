@@ -26,7 +26,7 @@ class ReliableRtmpOutputTest {
       "sleipnir", "Sleipnir", "LIVE", 0, 0, 0, 11_875, 0, 0, null
     ).summary()
     assertTrue(summary.contains("sender queue Good"))
-    assertTrue(summary.contains("app payload send (about 2s sample) 95 kb/s"))
+    assertTrue(summary.contains("phone media-write sample (~2s; no relay ack) 95 kb/s"))
     assertFalse(summary.contains("health Good"))
   }
 
