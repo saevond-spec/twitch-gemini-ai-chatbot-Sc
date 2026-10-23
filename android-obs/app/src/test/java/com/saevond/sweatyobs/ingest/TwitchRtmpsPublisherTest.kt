@@ -63,4 +63,12 @@ class TwitchRtmpsPublisherTest {
    assertTrue(attempts.sumOf { it.second } <= 1_000)
  }
 
+ @Test fun rejectsSpecialPurposeAndUniqueLocalDnsAddresses() {
+   assertFalse(RtmpsPublisher.isPublicDestination(java.net.InetAddress.getByName("100.64.0.1")))
+   assertFalse(RtmpsPublisher.isPublicDestination(java.net.InetAddress.getByName("192.0.2.1")))
+   assertFalse(RtmpsPublisher.isPublicDestination(java.net.InetAddress.getByName("fc00::1")))
+   assertFalse(RtmpsPublisher.isPublicDestination(java.net.InetAddress.getByName("::ffff:192.168.1.10")))
+   assertTrue(RtmpsPublisher.isPublicDestination(java.net.InetAddress.getByName("2606:4700:4700::1111")))
+ }
+
 }
