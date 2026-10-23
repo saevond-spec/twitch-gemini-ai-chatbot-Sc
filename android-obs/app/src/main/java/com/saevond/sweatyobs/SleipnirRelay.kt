@@ -14,7 +14,7 @@ internal object SleipnirRelay {
 
   /**
    * Prefer rate-control modes the phone advertises. If it reports neither capped
-   * mode, probe CBR once as an OEM compatibility path. VBR is never a Sleipnir fallback.
+   * mode, add CBR-only compatibility candidates at 30 and 24 fps. VBR is never a Sleipnir fallback.
    */
   fun cappedRateControlRequests(cbrSupported: Boolean, cbrFdSupported: Boolean): List<RateControlRequest> =
     buildList {
