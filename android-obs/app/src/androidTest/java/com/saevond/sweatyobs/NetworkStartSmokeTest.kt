@@ -134,16 +134,19 @@ class NetworkStartSmokeTest {
     val activeBefore = prefs.getBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false)
     val hadPublic = prefs.contains(Ps5LanService.PREF_SESSION_PUBLIC)
     val publicBefore = prefs.getBoolean(Ps5LanService.PREF_SESSION_PUBLIC, false)
+    val hadPhase = prefs.contains(Ps5LanService.PREF_SESSION_PHASE)
+    val phaseBefore = prefs.getString(Ps5LanService.PREF_SESSION_PHASE, null)
     val hadMessage = prefs.contains(Ps5LanService.PREF_STATUS_MESSAGE)
     val messageBefore = prefs.getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
     prefs.edit().putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, true)
       .putBoolean(Ps5LanService.PREF_SESSION_PUBLIC, true)
+      .putString(Ps5LanService.PREF_SESSION_PHASE, Ps5LanService.SESSION_PHASE_PUBLISH_ACCEPTED)
       .putString(Ps5LanService.PREF_STATUS_MESSAGE, "Sleipnir LIVE · health Good").commit()
     activityRule.scenario.recreate()
 
     try {
       onView(withId(R.id.connection_status)).perform(scrollTo())
-        .check(matches(withText(containsString("Previous stream session ended before the app confirmed a clean stop"))))
+        .check(matches(withText(containsString("Previous stream session ended after an RTMPS destination accepted publishing"))))
       assertFalse(prefs.getBoolean(Ps5LanService.PREF_SESSION_ACTIVE, true))
       assertTrue(ConnectionTimeline.events(context).last().message.contains("Session recovery notice"))
     } finally {
@@ -152,6 +155,8 @@ class NetworkStartSmokeTest {
       else editor.remove(Ps5LanService.PREF_SESSION_ACTIVE)
       if (hadPublic) editor.putBoolean(Ps5LanService.PREF_SESSION_PUBLIC, publicBefore)
       else editor.remove(Ps5LanService.PREF_SESSION_PUBLIC)
+      if (hadPhase) editor.putString(Ps5LanService.PREF_SESSION_PHASE, phaseBefore)
+      else editor.remove(Ps5LanService.PREF_SESSION_PHASE)
       if (hadMessage) editor.putString(Ps5LanService.PREF_STATUS_MESSAGE, messageBefore)
       else editor.remove(Ps5LanService.PREF_STATUS_MESSAGE)
       editor.commit()
@@ -198,6 +203,32 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.kick_server)).perform(scrollTo(), replaceText("rtmps://kick.example.test/app"), closeSoftKeyboard())
     onView(withId(R.id.save_kick_server)).perform(scrollTo(), click())
     assertEquals("rtmps://kick.example.test/app", outputPrefs.getString("kick_server", null))
+  }
+
+  @Test fun terminalStartupFailureLeavesAVisibleNonOngoingNotification() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
+    notificationManager.cancel(734)
+    context.startForegroundService(android.content.Intent(context, Ps5LanService::class.java).apply {
+      action = Ps5LanService.ACTION_START
+      putExtra(Ps5LanService.EXTRA_PS5_IPV4, "invalid")
+    })
+
+    val deadline = SystemClock.uptimeMillis() + 5000
+    var terminal = notificationManager.activeNotifications.firstOrNull { it.id == 734 }
+    while ((terminal == null ||
+        (terminal.notification.flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0) &&
+      SystemClock.uptimeMillis() < deadline) {
+      SystemClock.sleep(100)
+      terminal = notificationManager.activeNotifications.firstOrNull { it.id == 734 }
+    }
+
+    assertNotNull("terminal notification should remain after the service stops", terminal)
+    assertEquals(0, terminal!!.notification.flags and android.app.Notification.FLAG_ONGOING_EVENT)
+    assertTrue(terminal.notification.extras
+      .getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+      .contains("Unavailable: use Wi-Fi"))
+    notificationManager.cancel(734)
   }
 
   @Test fun invalidAddressTapReportsVisibleFailure() {

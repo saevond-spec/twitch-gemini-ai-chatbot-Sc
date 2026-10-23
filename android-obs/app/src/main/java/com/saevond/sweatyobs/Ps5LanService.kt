@@ -51,6 +51,11 @@ class Ps5LanService : Service() {
     const val PREF_STATUS_MESSAGE = "latest_message"
     const val PREF_SESSION_ACTIVE = "session_active"
     const val PREF_SESSION_PUBLIC = "session_public"
+    const val PREF_SESSION_PHASE = "session_phase"
+    const val SESSION_PHASE_STARTING = "STARTING"
+    const val SESSION_PHASE_ARMED = "ARMED"
+    const val SESSION_PHASE_PUBLISH_ACCEPTED = "PUBLISH_ACCEPTED"
+    private const val WIFI_CHANGE_GRACE_MS = 15_000L
     private const val CHANNEL = "ps5_lan_ingest"
     private const val NOTIFICATION_ID = 734
     // Shared in-process gain settings are synchronized and visible immediately to audio worker.
@@ -78,6 +83,7 @@ class Ps5LanService : Service() {
   private var stopping = false
   private var startupInProgress = false
   private var streamWakeLock: PowerManager.WakeLock? = null
+  private var pendingWifiMismatchSinceMs: Long? = null
   private var terminalReason = false
   @Volatile private var publicTest = false
   @Volatile private var outputConnected = false
@@ -103,23 +109,28 @@ class Ps5LanService : Service() {
       val ingest = receiver ?: return
       val safety = phoneSafety.assess()
       if (safety.level == SafetyLevel.STOP) {
-        setNotification("Stopped for phone safety: " + safety.message)
-        terminalReason = true
-        stopSelf()
+        stopWithTerminalStatus("Stopped for phone safety: " + safety.message)
         return
       }
       val currentWifi = activeWifiIpv4()
       if (currentWifi != wifiAddress) {
-        val newAddress = currentWifi ?: "unavailable"
-        setNotification("Stopped: phone Wi-Fi address changed ($wifiAddress → $newAddress). Update the PS5 RTMP target and restart.")
-        terminalReason = true
-        stopSelf()
+        val now = android.os.SystemClock.elapsedRealtime()
+        val since = pendingWifiMismatchSinceMs ?: now.also { pendingWifiMismatchSinceMs = it }
+        val elapsed = now - since
+        if (elapsed >= WIFI_CHANGE_GRACE_MS) {
+          val newAddress = currentWifi ?: "unavailable"
+          stopWithTerminalStatus("Stopped: phone Wi-Fi address changed ($wifiAddress → $newAddress). Update the PS5 RTMP target and restart.")
+        } else {
+          if (elapsed == 0L) {
+            setNotification("Wi-Fi changed or is settling. Holding the stream for up to 15 seconds; if the phone gets a new address, update the PS5 RTMP target.")
+          }
+          handler.postDelayed(this, minOf(3000L, WIFI_CHANGE_GRACE_MS - elapsed))
+        }
         return
       }
+      pendingWifiMismatchSinceMs = null
       if (!ingest.active) {
-        setNotification("Stopped: PS5 receiver socket is unavailable on $wifiAddress:1935. Check Wi-Fi and restart the test.")
-        terminalReason = true
-        stopSelf()
+        stopWithTerminalStatus("Stopped: PS5 receiver socket is unavailable on $wifiAddress:1935. Check Wi-Fi and restart the test.")
         return
       }
       if (publicTest) {
@@ -226,11 +237,10 @@ class Ps5LanService : Service() {
       getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
         .putBoolean(PREF_SESSION_ACTIVE, true)
         .putBoolean(PREF_SESSION_PUBLIC, publicTest)
+        .putString(PREF_SESSION_PHASE, SESSION_PHASE_STARTING)
         .commit()
     } catch (error: RuntimeException) {
-      terminalReason = true
-      publishUiStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
-      stopSelf()
+      stopWithTerminalStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
       return START_NOT_STICKY
     }
 
@@ -245,9 +255,7 @@ class Ps5LanService : Service() {
       if (destinations.isEmpty() || invalid != null) {
         val message = if (destinations.isEmpty()) "Select at least one output and save its RTMPS server URL and key."
           else "${invalid!!.label} needs a valid RTMPS server URL and stream key."
-        terminalReason = true
-        publishUiStatus(message)
-        stopSelf()
+        stopWithTerminalStatus(message)
         return START_NOT_STICKY
       }
       outputPublishers.clear()
@@ -274,18 +282,14 @@ class Ps5LanService : Service() {
           handler.post {
             if (!stopping) {
               if (sleipnirRelayRequested) {
-                setNotification("Could not initialize the Sleipnir bitrate-limited encoder (${error.javaClass.simpleName}); stream stopped before publishing.")
-                terminalReason = true
-                stopSelf()
+                stopWithTerminalStatus("Could not initialize the Sleipnir bitrate-limited encoder (${error.javaClass.simpleName}); stream stopped before publishing.")
               } else setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.")
             }
           }
         }.getOrNull()
       } else null
       if (sleipnirRelayRequested && brandOverlay == null) {
-        terminalReason = true
-        publishUiStatus("Sleipnir needs the capped hardware video encoder. Startup failed before the PS5 receiver opened; no broadcast was sent.")
-        stopSelf()
+        stopWithTerminalStatus("Sleipnir needs the capped hardware video encoder. Startup failed before the PS5 receiver opened; no broadcast was sent.")
         return START_NOT_STICKY
       }
       musicTrack = MusicTrackLooper()
@@ -294,18 +298,14 @@ class Ps5LanService : Service() {
 
     val local = activeWifiIpv4()
     if (!privateIpv4(ps5Address) || local == null || local == ps5Address) {
-      setNotification("Unavailable: use Wi-Fi and enter the PS5's private IPv4")
-      terminalReason = true
-      stopSelf()
+      stopWithTerminalStatus("Unavailable: use Wi-Fi and enter the PS5's private IPv4")
       return START_NOT_STICKY
     }
 
     try {
       val safety = phoneSafety.assess()
       if (safety.level == SafetyLevel.STOP) {
-        setNotification("Not started: " + safety.message)
-        terminalReason = true
-        stopSelf()
+        stopWithTerminalStatus("Not started: " + safety.message)
         return START_NOT_STICKY
       }
       wifiAddress = local
@@ -345,9 +345,7 @@ class Ps5LanService : Service() {
   }
 
   private fun startFailed(error: Exception) {
-    terminalReason = true
-    setNotification("Receiver/music startup failed (" + error.javaClass.simpleName + "). Stopped; no broadcast.")
-    stopSelf()
+    stopWithTerminalStatus("Receiver/music startup failed (" + error.javaClass.simpleName + "). Stopped; no broadcast.")
   }
 
   private fun beginReceiver(local: String, ps5Address: String) {
@@ -388,11 +386,9 @@ class Ps5LanService : Service() {
             }
           } catch (error: Exception) {
             Log.w("SweatyOBS-PS5", "Media processing stopped: " + error.javaClass.simpleName)
-            terminalReason = true
             handler.post {
               if (!stopping) {
-                setNotification("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
-                stopSelf()
+                stopWithTerminalStatus("PS5 media processing failed (" + error.javaClass.simpleName + "). Stopped.")
               }
             }
             throw error
@@ -419,6 +415,7 @@ class Ps5LanService : Service() {
       getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
         .putBoolean(PREF_SESSION_ACTIVE, true)
         .putBoolean(PREF_SESSION_PUBLIC, publicTest)
+        .putString(PREF_SESSION_PHASE, SESSION_PHASE_ARMED)
         .commit()
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
@@ -527,7 +524,7 @@ class Ps5LanService : Service() {
       ?.address?.hostAddress
   }
 
-  private fun notification(message: String): Notification {
+  private fun notification(message: String, ongoing: Boolean = true): Notification {
     val immutable = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val openApp = PendingIntent.getActivity(
       this, NOTIFICATION_ID + 1,
@@ -540,16 +537,18 @@ class Ps5LanService : Service() {
       immutable)
     val builder = Notification.Builder(this, CHANNEL)
       .setSmallIcon(android.R.drawable.stat_sys_upload)
-      .setContentTitle(if (publicTest) "SweatyClanker · live session" else "SweatyClanker · PS5 receiver")
+      .setContentTitle(if (!ongoing) "SweatyClanker · session stopped"
+        else if (publicTest) "SweatyClanker · live session" else "SweatyClanker · PS5 receiver")
       .setContentText(message)
       .setContentIntent(openApp)
-      .setCategory(Notification.CATEGORY_SERVICE)
+      .setCategory(if (ongoing) Notification.CATEGORY_SERVICE else Notification.CATEGORY_STATUS)
       .setVisibility(Notification.VISIBILITY_PRIVATE)
       .setOnlyAlertOnce(true)
-      .setOngoing(true)
-      .addAction(Notification.Action.Builder(
-        android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopService).build())
-    if (publicTest) {
+      .setOngoing(ongoing)
+      .setAutoCancel(!ongoing)
+    if (ongoing) builder.addAction(Notification.Action.Builder(
+      android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopService).build())
+    if (ongoing && publicTest) {
       val reconnect = PendingIntent.getService(
         this, NOTIFICATION_ID + 3,
         Intent(this, Ps5LanService::class.java).setAction(ACTION_RECONNECT_OUTPUTS),
@@ -570,10 +569,17 @@ class Ps5LanService : Service() {
   }
 
   private fun setNotification(message: String) {
-    publishUiStatus(message)
     report = message
+    publishUiStatus(message)
     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
       .notify(NOTIFICATION_ID, notification(message))
+  }
+
+  private fun stopWithTerminalStatus(message: String) {
+    terminalReason = true
+    stopping = true
+    setNotification(message)
+    stopSelf()
   }
 
   override fun onDestroy() {
@@ -581,7 +587,6 @@ class Ps5LanService : Service() {
     sessionForegroundActive = false
     startupInProgress = false
     stopping = true
-    releaseStreamWakeLock()
     musicDecodeGeneration++
     decodingTrack = false
     genrePlaylist = null
@@ -599,11 +604,13 @@ class Ps5LanService : Service() {
     sleipnirRelayRequested = false
     outputPublishers.toList().forEach { it.close() }
     outputPublishers.clear()
+    releaseStreamWakeLock()
     liveGate = null
     outputConnected = false
     receiver = null
     getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
       .putBoolean(PREF_SESSION_ACTIVE, false)
+      .remove(PREF_SESSION_PHASE)
       .commit()
     if (!terminalReason) {
       val stoppedMessage = when {
@@ -613,7 +620,16 @@ class Ps5LanService : Service() {
       }
       publishUiStatus(stoppedMessage)
     }
-    stopForeground(STOP_FOREGROUND_REMOVE)
+    if (terminalReason) {
+      val finalMessage = report ?: getSharedPreferences(STATUS_PREFS, MODE_PRIVATE)
+        .getString(PREF_STATUS_MESSAGE, "Session stopped. Open the app for details.")
+        .orEmpty()
+      stopForeground(STOP_FOREGROUND_DETACH)
+      (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+        .notify(NOTIFICATION_ID, notification(finalMessage, ongoing = false))
+    } else {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    }
     super.onDestroy()
   }
 
@@ -673,6 +689,9 @@ class Ps5LanService : Service() {
     outputConnected = current.any { it.state == "LIVE" }
     outputStatus = withRouteStatus(current.joinToString(" | ") { it.summary() })
     if (outputConnected && musicStartedOnOutput.compareAndSet(false, true)) {
+      getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
+        .putString(PREF_SESSION_PHASE, SESSION_PHASE_PUBLISH_ACCEPTED)
+        .commit()
       val musicStarted = musicTrack?.onBroadcastStarted() == true
       handler.post {
         if (!stopping) {
@@ -694,9 +713,7 @@ class Ps5LanService : Service() {
 
   private fun disableBrandOverlay(reason: String) {
     if (sleipnirRelayRequested) {
-      terminalReason = true
-      setNotification("$reason · stopped because Sleipnir mode requires the bitrate-limited hardware encoder")
-      stopSelf()
+      stopWithTerminalStatus("$reason · stopped because Sleipnir mode requires the bitrate-limited hardware encoder")
       return
     }
     brandOverlayRequested = false

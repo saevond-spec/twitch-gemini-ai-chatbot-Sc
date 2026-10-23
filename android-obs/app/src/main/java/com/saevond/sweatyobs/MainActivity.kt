@@ -94,7 +94,7 @@ class MainActivity : Activity() {
     }
     val rotateSleipnir180 = CheckBox(this).apply {
       id = R.id.sleipnir_rotate_180
-      text = "Rotate the whole Sleipnir picture 180° (upside-down correction)"
+      text = "Rotate the whole Sleipnir picture 180° (takes effect next stream)"
       isChecked = outputPrefs.getBoolean("sleipnir_rotate_180", true)
     }
     val sleipnirServer = EditText(this).apply {
@@ -1111,10 +1111,17 @@ class MainActivity : Activity() {
       !Ps5LanService.sessionForegroundActive
     if (interrupted) {
       val wasPublic = statusPrefs.getBoolean(Ps5LanService.PREF_SESSION_PUBLIC, false)
-      val message = if (wasPublic)
-        "Previous stream session ended before the app confirmed a clean stop. It was not auto-restarted; tap Go live to start a new session."
-      else
+      val previousPhase = statusPrefs.getString(Ps5LanService.PREF_SESSION_PHASE, "")
+      val message = if (!wasPublic)
         "Previous diagnostic test ended before the app confirmed a clean stop. Tap Start network test to reconnect."
+      else when (previousPhase) {
+        Ps5LanService.SESSION_PHASE_PUBLISH_ACCEPTED ->
+          "Previous stream session ended after an RTMPS destination accepted publishing. Viewer playback was not verified; it was not auto-restarted."
+        Ps5LanService.SESSION_PHASE_ARMED ->
+          "Previous stream session ended before an RTMPS destination accepted publishing. It was not auto-restarted; tap Go live to start a new session."
+        else ->
+          "Previous stream startup ended before the PS5 receiver was armed. It was not auto-restarted; tap Go live to start a new session."
+      }
       statusPrefs.edit().putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false)
         .putString(Ps5LanService.PREF_STATUS_MESSAGE, message).apply()
       ConnectionTimeline.append(this, "Session recovery notice · $message")
