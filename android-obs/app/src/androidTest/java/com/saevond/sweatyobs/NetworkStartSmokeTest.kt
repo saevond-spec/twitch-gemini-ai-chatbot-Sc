@@ -18,6 +18,23 @@ import org.junit.runner.RunWith
 class NetworkStartSmokeTest {
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
+  @Test fun viewerPlaybackConfirmationRequiresVideoAndAudioAndLogsManualEvent() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    onView(withId(R.id.viewer_playback_check)).perform(scrollTo(), click())
+    onView(withId(android.R.id.button1)).check(matches(not(isEnabled())))
+
+    onView(withId(R.id.viewer_video_visible)).perform(click())
+    onView(withId(android.R.id.button1)).check(matches(not(isEnabled())))
+    onView(withId(R.id.viewer_audio_audible)).perform(click())
+    onView(withId(android.R.id.button1)).check(matches(isEnabled()))
+    onView(withId(android.R.id.button1)).perform(click())
+
+    val confirmation = ConnectionTimeline.events(context).last().message
+    assertTrue(confirmation.contains(
+      "Manual viewer playback verified · Twitch · video visible · audio/music audible · operator-confirmed"
+    ))
+  }
+
   @Test fun remoteMusicCatalogCanSelectAllTracksInOneTap() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val musicPrefs = context.getSharedPreferences("ps5_music", 0)
