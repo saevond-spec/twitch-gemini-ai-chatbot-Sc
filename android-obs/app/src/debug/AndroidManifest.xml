@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:label="SweatyClanker OBS Lite (Dev14 test)" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:label="SweatyClanker OBS Lite (Dev14 test)"
+        tools:replace="android:label" />
 </manifest>
