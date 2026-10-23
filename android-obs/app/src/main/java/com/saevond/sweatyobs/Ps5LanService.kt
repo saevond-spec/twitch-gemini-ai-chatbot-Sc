@@ -104,6 +104,8 @@ class Ps5LanService : Service() {
   private var networkCallback: ConnectivityManager.NetworkCallback? = null
   private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
   private val networkDiagnosticsLock = Any()
+  private val defaultNetworkTracker = DefaultNetworkHandoffTracker<Network>()
+  private var lastDefaultBlockedStatus: Boolean? = null
   private var lastNetworkCapabilitiesSignature: String? = null
   private var lastLinkPropertiesSignature: String? = null
   private var lastWifiCapabilitiesSignature: String? = null
@@ -115,6 +117,12 @@ class Ps5LanService : Service() {
   private val outputPublishers = CopyOnWriteArrayList<ReliableRtmpOutput>()
   @Volatile private var outputStatus = "No RTMPS outputs configured"
   @Volatile private var reportedOutputStatus = ""
+  private val routeReconnectTask = Runnable {
+    if (!stopping && receiverRunning && publicTest && outputPublishers.isNotEmpty()) {
+      outputPublishers.forEach { it.reconnectNow() }
+      setNotification("Internet route changed; reconnecting RTMPS outputs and waiting for a clean video keyframe.")
+    }
+  }
   private val musicStartedOnOutput = AtomicBoolean(false)
   private var liveGate: MediaRelayGate? = null
   @Volatile private var brandOverlay: BrandVideoOverlay? = null
@@ -567,12 +575,16 @@ class Ps5LanService : Service() {
     }
     lastNetworkCapabilitiesSignature = null
     lastLinkPropertiesSignature = null
+    defaultNetworkTracker.reset()
+    lastDefaultBlockedStatus = null
     val callback = object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) {
+        if (defaultNetworkTracker.onAvailable(network)) scheduleRouteReconnect()
         appendNetworkEvent("Default network available")
       }
 
       override fun onLost(network: Network) {
+        if (defaultNetworkTracker.onLost(network)) scheduleRouteReconnect()
         appendNetworkEvent("Default network lost or no longer the default route")
       }
 
@@ -615,6 +627,12 @@ class Ps5LanService : Service() {
       }
 
       override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+        val changed = synchronized(networkDiagnosticsLock) {
+          val previous = lastDefaultBlockedStatus
+          lastDefaultBlockedStatus = blocked
+          previous != null && previous != blocked
+        }
+        if (changed) scheduleRouteReconnect()
         appendNetworkEvent("Android network access blocked=$blocked")
       }
     }
@@ -684,6 +702,15 @@ class Ps5LanService : Service() {
     }
   }
 
+  private fun scheduleRouteReconnect() {
+    handler.post {
+      if (stopping || !receiverRunning || !publicTest || outputPublishers.isEmpty()) return@post
+      // Collapse rapid Wi-Fi/cellular transitions into one reconnect after Android settles.
+      handler.removeCallbacks(routeReconnectTask)
+      handler.postDelayed(routeReconnectTask, 750L)
+    }
+  }
+
   private fun appendNetworkEvent(message: String) {
     handler.post {
       if (!stopping) ConnectionTimeline.append(this@Ps5LanService, "Network state · $message")
@@ -696,7 +723,10 @@ class Ps5LanService : Service() {
     wifiNetworkCallback?.let { runCatching { manager?.unregisterNetworkCallback(it) } }
     networkCallback = null
     wifiNetworkCallback = null
+    handler.removeCallbacks(routeReconnectTask)
+    defaultNetworkTracker.reset()
     synchronized(networkDiagnosticsLock) {
+      lastDefaultBlockedStatus = null
       lastNetworkCapabilitiesSignature = null
       lastLinkPropertiesSignature = null
       lastWifiCapabilitiesSignature = null
