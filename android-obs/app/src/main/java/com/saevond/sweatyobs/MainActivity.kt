@@ -864,6 +864,12 @@ class MainActivity : Activity() {
       }
       .create()
     dialog.setOnShowListener {
+      // Keep the bulk action visible when the catalog has many rows.
+      val displayHeight = resources.displayMetrics.heightPixels
+      dialog.listView.layoutParams = dialog.listView.layoutParams.apply {
+        height = (displayHeight * 0.38f).toInt()
+      }
+      dialog.listView.requestLayout()
       dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
         selected.addAll(tracks.indices)
         tracks.indices.forEach { dialog.listView.setItemChecked(it, true) }
