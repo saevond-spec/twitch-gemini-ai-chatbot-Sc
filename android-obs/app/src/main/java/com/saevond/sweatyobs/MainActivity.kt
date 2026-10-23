@@ -460,12 +460,12 @@ class MainActivity : Activity() {
       enableYouTube.isEnabled = !relay
       enableKick.isEnabled = !relay
       destinations.text = if (relay) {
-        "Sleipnir relay mode sends one RTMPS upload from the phone, with up to 4.7 Mbps video + 128 kbps AAC. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard."
+        "Sleipnir relay mode sends one RTMPS upload from the phone, with a 3.8 Mbps target video + 128 kb/s AAC; estimated total is 4.32 Mbps with 10% transport overhead. Device output peaks are not measured here. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard."
       } else {
         "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule."
       }
       videoModeNote.text = if (relay) {
-        "Sleipnir mode always hardware-transcodes PS5 video to stay under the free tier's advertised bitrate. The overlay checkbox only adds the simulated @saevond graphics; turning it off keeps the video plain but still encoded at up to 4.7 Mbps. If hardware processing fails, the stream stops instead of sending uncapped video. This is not a 4K output."
+        "Sleipnir uses hardware H.264 with a 3.8 Mbps video target plus 128 kb/s AAC (about 4.32 Mbps with 10% transport overhead). It prefers phone-advertised CBR/CBR-FD; if neither is reported, it probes CBR and stops if configuration fails. Android's bitrate is a target, not a packet-level cap, so actual output peaks depend on the phone. Turning off @saevond removes graphics only; video is still re-encoded. This is not a 4K output."
       } else {
         "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
       }
