@@ -213,12 +213,14 @@ internal class BrandVideoOverlay(
       lastOutputTimestampMs = -1L
 
       val mode = if (showBrandOverlay) "@saevond overlay" else "RTMPS relay bitrate cap"
-      val bitrateMode = if (setup.bitrateMode == MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD) "CBR-FD" else "CBR"
+      val bitrateMode = if (!setup.bitrateModeAdvertised) "CBR compatibility probe (not advertised)"
+        else setup.bitrateMode.name.replace('_', '-')
       val status = if (maxVideoBitrate < Int.MAX_VALUE) {
         val projected = SleipnirRelay.projectedIngestBitrate(setup.bitrate).toInt()
         "Sleipnir encoder ready · " + setup.codecName + " · " + outputWidth + "×" + outputHeight +
           "@" + outputFps + " · " + bitrateMode + " · " + (setup.bitrate / 1_000) +
-          " kb/s video · est " + (projected / 1_000) + " kb/s total"
+          " kb/s target video · est " + (projected / 1_000) +
+          " kb/s total with AAC/overhead · output peak unverified"
       } else {
         mode + " active · " + outputWidth + "×" + outputHeight + " · up to " + outputFps +
           " fps · H.264 hardware encode · " + setup.codecName
@@ -241,7 +243,8 @@ internal class BrandVideoOverlay(
     val height: Int,
     val fps: Int,
     val bitrate: Int,
-    val bitrateMode: Int
+    val bitrateMode: SleipnirRelay.RateControl,
+    val bitrateModeAdvertised: Boolean
   )
 
   private data class EncoderCandidate(
@@ -250,7 +253,8 @@ internal class BrandVideoOverlay(
     val height: Int,
     val fps: Int,
     val bitrate: Int,
-    val bitrateMode: Int,
+    val bitrateMode: SleipnirRelay.RateControl,
+    val bitrateModeAdvertised: Boolean,
     val sizeRank: Int,
     val codecRank: Int
   )
@@ -280,8 +284,12 @@ internal class BrandVideoOverlay(
 
     var supportedSizeRates = 0
     var bitrateFits = 0
-    var bitrateModeFits = 0
-    var setupAttempts = 0
+    var advertisedModeCandidates = 0
+    var cbrProbeCandidates = 0
+    var configureAttempts = 0
+    var advertisedCbrEncoders = 0
+    var advertisedCbrFdEncoders = 0
+    var advertisedVbrEncoders = 0
     var lastFailure = ""
     for (fps in fpsTargets) {
       val candidates = mutableListOf<EncoderCandidate>()
@@ -289,19 +297,36 @@ internal class BrandVideoOverlay(
         try {
           val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
           val video = caps.videoCapabilities
+          val encoderCaps = caps.encoderCapabilities
+          val cbrSupported = encoderCaps.isBitrateModeSupported(
+            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+          )
+          val cbrFdSupported = android.os.Build.VERSION.SDK_INT >= 31 &&
+            encoderCaps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD)
+          val vbrSupported = encoderCaps.isBitrateModeSupported(
+            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+          )
+          if (fps == fpsTargets.first()) {
+            if (cbrSupported) advertisedCbrEncoders++
+            if (cbrFdSupported) advertisedCbrFdEncoders++
+            if (vbrSupported) advertisedVbrEncoders++
+          }
+          val modes = if (constrained) {
+            SleipnirRelay.cappedRateControlRequests(cbrSupported, cbrFdSupported)
+          } else {
+            buildList {
+              if (cbrSupported) add(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR, true))
+              if (cbrFdSupported) add(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR_FD, true))
+            }
+          }
+          // CBR compatibility probes are limited to the first two frame-rate targets.
+          // This avoids repeating a vendor capability mismatch at every lower frame rate.
+          val modesForFps = if (constrained && fps !in fpsTargets.take(2)) {
+            modes.filter { it.advertised }
+          } else modes
           val sizes = SleipnirRelay.candidateSizes(
             sourceWidth, sourceHeight, video.widthAlignment, video.heightAlignment
           ).let { if (constrained) it else it.take(2) }
-          val modes = buildList {
-            if (caps.encoderCapabilities.isBitrateModeSupported(
-                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-              )) add(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            if (android.os.Build.VERSION.SDK_INT >= 31 &&
-              caps.encoderCapabilities.isBitrateModeSupported(
-                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD
-              )
-            ) add(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD)
-          }
           for ((sizeRank, size) in sizes.withIndex()) {
             val width = size.first
             val height = size.second
@@ -312,11 +337,12 @@ internal class BrandVideoOverlay(
               target, video.bitrateRange.lower, video.bitrateRange.upper, maxBitrate
             ) ?: continue
             bitrateFits++
-            for (mode in modes) {
-              bitrateModeFits++
+            for (request in modesForFps) {
+              if (request.advertised) advertisedModeCandidates++ else cbrProbeCandidates++
               candidates.add(
                 EncoderCandidate(
-                  info, width, height, fps, bitrate, mode, sizeRank, codecRank
+                  info, width, height, fps, bitrate, request.mode, request.advertised,
+                  sizeRank, codecRank
                 )
               )
             }
@@ -327,18 +353,23 @@ internal class BrandVideoOverlay(
       }
 
       val rankedCandidates = candidates.sortedWith(
-        compareBy<EncoderCandidate> { it.sizeRank }
+        compareBy<EncoderCandidate> { if (it.bitrateModeAdvertised) 0 else 1 }
+          .thenBy { it.sizeRank }
+          .thenBy { if (it.bitrateMode == SleipnirRelay.RateControl.CBR) 0 else 1 }
           .thenBy { it.codecRank }
-          .thenBy {
-            if (it.bitrateMode == MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR) 0 else 1
-          }
       )
       for (candidate in rankedCandidates) {
-        setupAttempts++
+        configureAttempts++
         var codec: MediaCodec? = null
         var inputSurface: Surface? = null
         try {
           codec = MediaCodec.createByCodecName(candidate.info.name)
+          val platformMode = when (candidate.bitrateMode) {
+            SleipnirRelay.RateControl.CBR ->
+              MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            SleipnirRelay.RateControl.CBR_FD ->
+              MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD
+          }
           val format = MediaFormat.createVideoFormat(
             MediaFormat.MIMETYPE_VIDEO_AVC, candidate.width, candidate.height
           ).apply {
@@ -346,7 +377,7 @@ internal class BrandVideoOverlay(
             setInteger(MediaFormat.KEY_BIT_RATE, candidate.bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, candidate.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            setInteger(MediaFormat.KEY_BITRATE_MODE, candidate.bitrateMode)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, platformMode)
             if (android.os.Build.VERSION.SDK_INT >= 29) {
               setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
               setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, candidate.fps.toFloat())
@@ -357,11 +388,11 @@ internal class BrandVideoOverlay(
           codec.start()
           return EncoderSetup(
             codec, inputSurface, candidate.info.name, candidate.width, candidate.height,
-            candidate.fps, candidate.bitrate, candidate.bitrateMode
+            candidate.fps, candidate.bitrate, candidate.bitrateMode, candidate.bitrateModeAdvertised
           )
         } catch (error: Exception) {
-          val modeName = if (candidate.bitrateMode ==
-            MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD) "FD" else "CBR"
+          val modeName = if (!candidate.bitrateModeAdvertised) "CBR-PROBE"
+            else candidate.bitrateMode.name.replace('_', '-')
           val detail = error.message?.lineSequence()?.firstOrNull()?.take(28).orEmpty()
           lastFailure = candidate.info.name.take(12) + " " + candidate.width + "x" +
             candidate.height + "@" + candidate.fps + " " + modeName + " " +
@@ -376,9 +407,13 @@ internal class BrandVideoOverlay(
     val reason = if (lastFailure.isBlank()) "" else "; last " + lastFailure
     val excluded = if (excludedEncoderSummary.isBlank()) "" else "; excluded=" + excludedEncoderSummary
     throw IllegalStateException(
-      "No hardware AVC profile (enc=" + hardwareEncoders.size +
+      "No capped hardware AVC setup succeeded (enc=" + hardwareEncoders.size +
         ", size/fps=" + supportedSizeRates + ", rate=" + bitrateFits +
-        ", modes=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason + excluded
+        ", advertised CBR/CBR-FD/VBR=" + advertisedCbrEncoders + "/" +
+        advertisedCbrFdEncoders + "/" + advertisedVbrEncoders +
+        ", capped candidates=" + advertisedModeCandidates +
+        ", CBR probes=" + cbrProbeCandidates + ", configure=" + configureAttempts + ")" +
+        reason + excluded
     )
   }
 
