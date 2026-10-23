@@ -87,7 +87,7 @@ internal object SleipnirRelay {
 
   /** YouTube's 720p30 H.264 bitrate floor is a bitrate check, not proof of platform acceptance. */
   fun youtube720p30BitrateNote(width: Int, height: Int, fps: Int, videoBps: Int): String {
-    val profileMatches = width >= 1_280 && height >= 720 && fps == 30
+    val profileMatches = width == 1_280 && height == 720 && fps == 30
     return when {
       !profileMatches -> "YouTube downstream profile still needs dashboard verification"
       videoBps >= YOUTUBE_720P30_MIN_VIDEO_BPS ->
