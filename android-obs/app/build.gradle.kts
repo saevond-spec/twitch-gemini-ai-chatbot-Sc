@@ -10,8 +10,8 @@ android {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
     targetSdk = 35
-    versionCode = 18
-    versionName = "0.1.8-dev.9-timeline"
+    versionCode = 19
+    versionName = "0.1.8-dev.10-viewer"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
   buildTypes {
