@@ -16,15 +16,31 @@ class SleipnirRelayTest {
   }
 
   @Test fun encoderVideoRateLadderLeavesAudioAndNetworkHeadroom() {
-    assertEquals(4_200_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(3_800_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(2_800_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_800_000, SleipnirRelay.videoBitrate(960, 540, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_400_000, SleipnirRelay.videoBitrate(854, 480, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(900_000, SleipnirRelay.videoBitrate(640, 360, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(500_000, SleipnirRelay.videoBitrate(426, 240, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(8_000_000, SleipnirRelay.videoBitrate(1920, 1080))
-    assertEquals(4_760_800L, SleipnirRelay.projectedIngestBitrate(4_200_000))
-    assertTrue(SleipnirRelay.projectedIngestBitrate(4_200_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
+    assertEquals(4_320_800L, SleipnirRelay.projectedIngestBitrate(3_800_000))
+    assertEquals(679_200L, SleipnirRelay.MAX_INGEST_BITRATE_BPS - SleipnirRelay.projectedIngestBitrate(3_800_000))
+    assertTrue(SleipnirRelay.projectedIngestBitrate(3_800_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
+  }
+
+  @Test fun relayUsesAdvertisedCappedModesAndOnlyProbesCbrWhenBothAreMissing() {
+    assertEquals(
+      listOf(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR, advertised = false)),
+      SleipnirRelay.cappedRateControlRequests(cbrSupported = false, cbrFdSupported = false)
+    )
+    assertEquals(
+      listOf(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR_FD, advertised = true)),
+      SleipnirRelay.cappedRateControlRequests(cbrSupported = false, cbrFdSupported = true)
+    )
+    assertEquals(
+      listOf(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR, advertised = true)),
+      SleipnirRelay.cappedRateControlRequests(cbrSupported = true, cbrFdSupported = false)
+    )
   }
 
   @Test fun sizeCandidatesFollowAspectRatioAndNeverUpscale() {
