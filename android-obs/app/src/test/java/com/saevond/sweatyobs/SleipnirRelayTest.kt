@@ -29,7 +29,7 @@ class SleipnirRelayTest {
 
   @Test fun sizeCandidatesFollowAspectRatioAndNeverUpscale() {
     assertEquals(
-      listOf(1920 to 1080, 1280 to 720, 960 to 540, 854 to 480, 640 to 360, 426 to 240),
+      listOf(1920 to 1080, 1280 to 720, 960 to 540, 852 to 480, 640 to 360, 426 to 240),
       SleipnirRelay.candidateSizes(1920, 1080)
     )
     val smallerSource = SleipnirRelay.candidateSizes(1280, 720)
