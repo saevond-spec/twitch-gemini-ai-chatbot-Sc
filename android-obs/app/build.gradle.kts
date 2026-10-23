@@ -16,8 +16,8 @@ android {
   }
   buildTypes {
     getByName("debug") {
-      // Use a fresh ID so this build installs alongside either older app build.
-      applicationIdSuffix = ".dev13sleipnir"
+      // Keep this debug build separate from earlier beta installs and their signing keys.
+      applicationIdSuffix = ".dev14sleipnir"
     }
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

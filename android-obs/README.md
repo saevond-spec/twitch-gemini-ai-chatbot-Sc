@@ -22,6 +22,8 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 
 ## Set up and test
 
+- The Dev14 test APK installs alongside earlier beta builds under a separate app identity. Its settings and Keystore-protected stream keys are separate; enter destination keys again in Dev14. Keep the older app installed until the new copy is configured.
+
 1. Put the phone and PS5 on the same private Wi-Fi network. Enter the PS5's private IPv4 address in the app.
 2. For direct streaming, select each platform and save its key and RTMPS URL. For Sleipnir, select **Use Sleipnir cloud relay**, leave the default secure ingest URL unless your dashboard specifies another, save the Sleipnir ingest key from its dashboard, and configure Twitch / YouTube / Kick destinations in Sleipnir. Do not send keys in chat.
 3. In **Stream title**, **Game name**, and **Search phrases / tags**, enter your metadata and choose **Generate and copy stream description**. Paste the copied text into each platform's stream setup.
