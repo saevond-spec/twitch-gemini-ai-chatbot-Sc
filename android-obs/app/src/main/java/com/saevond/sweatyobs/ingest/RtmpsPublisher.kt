@@ -91,7 +91,7 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     check(destinations.isNotEmpty() && destinations.all(::isPublicDestination)) {
       "Streaming server DNS points to a private address"
     }
-    val plain = connectFirstWorkingAddress(destinations, 10_000) { address, timeout ->
+    val plain = connectFirstWorkingAddress(destinations.toList(), 10_000) { address, timeout ->
       val attempt = Socket()
       try {
         attempt.tcpNoDelay = true
