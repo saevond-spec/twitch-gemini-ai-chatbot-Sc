@@ -32,7 +32,7 @@ data class OutputSnapshot(
 
   fun summary(): String {
     val speed = if (bytesPerSecond > 0)
-      " · app payload send (about 2s sample) ${(bytesPerSecond * 8 / 1000)} kb/s" else ""
+      " · phone media-write sample (~2s; no relay ack) ${(bytesPerSecond * 8 / 1000)} kb/s" else ""
     val queue = if (queueMediaMs > 0) " · queued ${queueMediaMs} ms" else ""
     val retry = if (reconnects > 0) " · reconnects $reconnects" else ""
     val dropped = if (droppedPackets > 0) " · skipped $droppedPackets stale packets" else ""
