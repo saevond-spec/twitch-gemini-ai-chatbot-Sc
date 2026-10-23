@@ -19,6 +19,11 @@ data class RtmpDestination(val id: String, val label: String, val serverUrl: Str
     label.length in 1..40 && RtmpsPublisher.endpointValid(serverUrl) && RtmpsPublisher.keyValid(key)
 }
 
+/** Secure default from Twitch's current Get Ingest Servers endpoint list. */
+object TwitchIngest {
+  const val DEFAULT_RTMPS_SERVER = "rtmps://ingest.global-contribute.live-video.net/app"
+}
+
 
 /**
  * Tries each DNS answer that has already passed the public-address policy, sharing
@@ -248,11 +253,10 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
 /** Compatibility wrapper retained for the existing Twitch settings and tests. */
 class TwitchRtmpsPublisher(private val key: String) : AutoCloseable {
   companion object {
-    private const val TWITCH_SERVER = "rtmps://live.twitch.tv:443/app"
     fun isPublicDestination(address: InetAddress) = RtmpsPublisher.isPublicDestination(address)
     fun keyValid(value: String) = value.length in 15..160 && RtmpsPublisher.keyValid(value)
   }
-  private val delegate = RtmpsPublisher(TWITCH_SERVER, key)
+  private val delegate = RtmpsPublisher(TwitchIngest.DEFAULT_RTMPS_SERVER, key)
   fun connect() = delegate.connect()
   fun publish(media: RtmpMessage) = delegate.publish(media)
   override fun close() = delegate.close()

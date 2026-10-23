@@ -5,7 +5,7 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 ## What this build adds
 
 - Twitch, YouTube, and Kick can be configured as separate RTMPS outputs. Each selected destination has its own queue, connection state, backoff retry loop, and sender-queue summary.
-- [Sleipnir's Free tier](https://sleipnir.tv/) can be selected as a single RTMPS output. Enter the Sleipnir ingest key from its dashboard; link Twitch, YouTube, and Kick in Sleipnir itself. When Sleipnir mode is selected, this app ignores the direct-output checkboxes and publishes only to the relay. Sleipnir's LIVE status in this app confirms only the phone-to-relay publish; downstream Twitch/YouTube/Kick connection status must be checked in Sleipnir's dashboard. A 180° whole-frame rotation is enabled by default in Sleipnir mode; it rotates gameplay and overlay together. The setting takes effect when the next stream starts; stop the current stream before changing it. The encoder prefers 1280×720 at 30 fps and targets 3.2 Mbps video plus 128 kbps AAC, with a 3.8 Mbps video ceiling. Android's configured bitrate is an encoder target, not a hard network cap. The app's older 10% transport allowance is only an estimate; the actual TLS/TCP wire rate and peak still need a capture on the target phone. [YouTube's current encoder guidance](https://support.google.com/youtube/answer/2853702?hl=en) lists 3 Mbps minimum and 8 Mbps recommended for H.264 720p30; the nominal target clears the minimum but remains below the recommendation. When the phone omits both capped bitrate modes, the app probes CBR and stops if setup fails; it does not substitute VBR.
+- [Sleipnir's Free tier](https://sleipnir.tv/) can be selected as a single RTMPS output. Enter the Sleipnir ingest key from its dashboard; link Twitch, YouTube, and Kick in Sleipnir itself. When Sleipnir mode is selected, this app ignores the direct-output checkboxes and publishes only to the relay. Sleipnir's LIVE status in this app confirms only the phone-to-relay publish; downstream Twitch/YouTube/Kick connection status must be checked in Sleipnir's dashboard. An optional 180° correction rotates only the PS5 video; the HUD stays upright. It defaults off and takes effect on the next stream. The setting takes effect when the next stream starts; stop the current stream before changing it. The encoder prefers 1280×720 at 30 fps and targets 3.2 Mbps video plus 128 kbps AAC, with a 3.8 Mbps video ceiling. Android's configured bitrate is an encoder target, not a hard network cap. The app's older 10% transport allowance is only an estimate; the actual TLS/TCP wire rate and peak still need a capture on the target phone. [YouTube's current encoder guidance](https://support.google.com/youtube/answer/2853702?hl=en) lists 3 Mbps minimum and 8 Mbps recommended for H.264 720p30; the nominal target clears the minimum but remains below the recommendation. When the phone omits both capped bitrate modes, the app probes CBR and stops if setup fails; it does not substitute VBR.
 - In Sleipnir mode, video still enters and is encoded by the phone. The app uploads one stream from the phone to Sleipnir, which then fans out server-side. This does not make the phone a remote-only controller.
 - The optional @saevond cyber-samurai overlay defaults on. It adds a transparent 1920×1080 HUD with red/cyan scanlines, particles, sword accents, session panels, and social footer, then sends one shared H.264/AAC feed to selected platforms.
 - The overlay's stats, AI lines, chat preview, follower/subscriber names, and donation alerts are simulated demo data. They are marked on-screen and do not come from Twitch, YouTube, Kick, or real viewers.
@@ -20,6 +20,11 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 
 - The full connection timeline records timestamped app actions and receiver/output status messages in this app's private storage. Open **View full connection timeline** to inspect or copy it. It keeps the newest rows in four rotating 1 MiB segments (about 4 MiB maximum); older rows are pruned automatically.
 
+## Dev16 Twitch and overlay corrections
+
+- Direct Twitch mode now uses the secure default endpoint in Twitch's current ingest list. Sleipnir mode still sends only to Sleipnir; check its dashboard for downstream Twitch and Kick state.
+- A 180° correction applies to the PS5 video layer only. The graphics overlay remains upright; rotation now defaults off.
+
 ## Dev15 reliability and security changes
 
 - RTMP media is serialized exactly as before, then coalesced in a 32 KiB buffer at the TLS output and flushed at each media-message boundary. This reduces tiny TLS writes without changing frame timestamps or adding a multi-frame delay.
@@ -33,7 +38,7 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 
 ## Set up and test
 
-- The Dev15 test APK installs alongside earlier beta builds under a separate app identity. Its settings and Keystore-protected stream keys are separate; enter destination keys again in Dev15. Keep the older app installed until the new copy is configured.
+- The Dev16 test APK installs alongside earlier beta builds under a separate app identity. Its settings and Keystore-protected stream keys are separate; enter destination keys again in Dev15. Keep the older app installed until the new copy is configured.
 
 1. Put the phone and PS5 on the same private Wi-Fi network. Enter the PS5's private IPv4 address in the app.
 2. For direct streaming, select each platform and save its key and RTMPS URL. For Sleipnir, select **Use Sleipnir cloud relay**, leave the default secure ingest URL unless your dashboard specifies another, save the Sleipnir ingest key from its dashboard, and configure Twitch / YouTube / Kick destinations in Sleipnir. Do not send keys in chat.

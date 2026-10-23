@@ -18,6 +18,12 @@ class TwitchRtmpsPublisherTest {
    assertFalse(RtmpsPublisher.endpointValid("rtmps://ingest.example.com/app?key=secret"))
    assertFalse(RtmpsPublisher.endpointValid("rtmps://ingest.example.com/../admin"))
  }
+ @Test fun twitchDefaultUsesSecureBaseFromTheCurrentOfficialIngestList() {
+   val endpoint = java.net.URI(TwitchIngest.DEFAULT_RTMPS_SERVER)
+   assertTrue(RtmpsPublisher.endpointValid(TwitchIngest.DEFAULT_RTMPS_SERVER))
+   assertEquals("ingest.global-contribute.live-video.net", endpoint.host)
+   assertEquals("/app", endpoint.path)
+ }
  @Test fun roundTripChunkedAvcAndAac() {
    for(type in listOf(8,9)) {
      val bytes = ByteArray(500){ (it and 255).toByte() }

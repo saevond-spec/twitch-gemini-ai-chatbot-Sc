@@ -35,6 +35,7 @@ import android.widget.ArrayAdapter
 import android.widget.AdapterView
 import java.util.Locale
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
+import com.saevond.sweatyobs.ingest.TwitchIngest
 
 /**
  * Controls a background *network receiver*, never a display or audio recorder.
@@ -101,10 +102,10 @@ class MainActivity : Activity() {
       text = "Use Sleipnir cloud relay (configure Twitch / YouTube / Kick in Sleipnir)"
       isChecked = outputPrefs.getBoolean("sleipnir_enabled", false)
     }
-    val rotateSleipnir180 = CheckBox(this).apply {
+    val rotateSleipnirVideo180 = CheckBox(this).apply {
       id = R.id.sleipnir_rotate_180
-      text = "Rotate the whole Sleipnir picture 180° (takes effect next stream)"
-      isChecked = outputPrefs.getBoolean("sleipnir_rotate_180", true)
+      text = "Rotate PS5 video 180° for Sleipnir (HUD stays upright; next stream)"
+      isChecked = outputPrefs.getBoolean("sleipnir_rotate_180", false)
     }
     val sleipnirServer = EditText(this).apply {
       id = R.id.sleipnir_server
@@ -373,7 +374,7 @@ class MainActivity : Activity() {
       setOnClickListener { showViewerPlaybackConfirmation() }
     }
 
-    listOf(status, backgroundNote, appSettingsButton, phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, rotateSleipnir180, sleipnirServer, saveSleipnirServer,
+    listOf(status, backgroundNote, appSettingsButton, phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, rotateSleipnirVideo180, sleipnirServer, saveSleipnirServer,
       sleipnirKey, saveSleipnirKey, sleipnirOutputStatus, sleipnirNote,
       enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
@@ -482,14 +483,14 @@ class MainActivity : Activity() {
       enableTwitch.isEnabled = !relay
       enableYouTube.isEnabled = !relay
       enableKick.isEnabled = !relay
-      rotateSleipnir180.isEnabled = relay
+      rotateSleipnirVideo180.isEnabled = relay
       destinations.text = if (relay) {
         "Sleipnir sends one 720p30 RTMPS upload from the phone at a nominal 3.2 Mbps H.264 video target + 128 kb/s AAC. A device codec may raise the configured video rate to its supported minimum, up to the 3.8 Mbps cap. With an assumed 10% transport allowance, estimated total is 3.66–4.32 Mbps, leaving about 0.68 Mbps below the app's 5 Mbps relay budget. These are estimates; actual output peak is unverified. YouTube's H.264 720p30 bitrate floor is 3 Mbps and its recommendation is 8 Mbps, so the nominal target clears the floor but is below the recommendation. Android's target is not a packet-level cap. Sleipnir fans out to the destinations enabled in its dashboard. LIVE here confirms only phone-to-relay; check downstream status in that dashboard."
       } else {
         "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule."
       }
       videoModeNote.text = if (relay) {
-        "Sleipnir prefers a whole-frame 1280×720@30 H.264 encode with a 3.2 Mbps nominal video target plus 128 kb/s AAC. A device codec may raise the configured target to its supported minimum, up to the 3.8 Mbps cap; with an assumed 10% transport allowance the estimated total is 3.66–4.32 Mbps, leaving about 0.68 Mbps below the listed 5 Mbps relay budget. These are estimates; actual output peaks remain unverified. YouTube's documented 720p30 H.264 minimum is 3 Mbps and its recommendation is 8 Mbps, so the nominal target clears the minimum but is below the recommendation. 1080p30 would require at least 5 Mbps video before audio and overhead, above this route budget. The encoder prefers phone-advertised CBR/CBR-FD and probes CBR only when unadvertised. The full picture, gameplay and overlay together, rotates 180° by default. Lower hardware fallbacks may not meet YouTube's 720p minimum. Turning off @saevond removes graphics only; video is still re-encoded."
+        "Sleipnir prefers a whole-frame 1280×720@30 H.264 encode with a 3.2 Mbps nominal video target plus 128 kb/s AAC. A device codec may raise the configured target to its supported minimum, up to the 3.8 Mbps cap; with an assumed 10% transport allowance the estimated total is 3.66–4.32 Mbps, leaving about 0.68 Mbps below the listed 5 Mbps relay budget. These are estimates; actual output peaks remain unverified. YouTube's documented 720p30 H.264 minimum is 3 Mbps and its recommendation is 8 Mbps, so the nominal target clears the minimum but is below the recommendation. 1080p30 would require at least 5 Mbps video before audio and overhead, above this route budget. The encoder prefers phone-advertised CBR/CBR-FD and probes CBR only when unadvertised. An optional 180° correction rotates only PS5 gameplay; the overlay stays upright and the option defaults off. Lower hardware fallbacks may not meet YouTube's 720p minimum. Turning off @saevond removes graphics only; video is still re-encoded."
       } else {
         "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
       }
@@ -511,7 +512,7 @@ class MainActivity : Activity() {
       outputPrefs.edit().putBoolean("sleipnir_enabled", checked).apply()
       refreshOutputRoute()
     }
-    rotateSleipnir180.setOnCheckedChangeListener { _, checked ->
+    rotateSleipnirVideo180.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("sleipnir_rotate_180", checked).apply()
     }
     refreshOutputRoute()
@@ -738,7 +739,7 @@ class MainActivity : Activity() {
       val secrets = SecretStore(this)
       val directDestinations = buildList {
         if (enableTwitch.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
-          "twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
+          "twitch", "Twitch", TwitchIngest.DEFAULT_RTMPS_SERVER, secrets.get("rtmps")))
         if (enableYouTube.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
           "youtube", "YouTube", outputPrefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
         if (enableKick.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(

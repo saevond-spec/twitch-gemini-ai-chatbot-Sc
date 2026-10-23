@@ -28,6 +28,7 @@ import com.saevond.sweatyobs.ingest.ReliableRtmpOutput
 import com.saevond.sweatyobs.ingest.RtmpMessage
 import com.saevond.sweatyobs.ingest.RtmpDestination
 import com.saevond.sweatyobs.ingest.RtmpsPublisher
+import com.saevond.sweatyobs.ingest.TwitchIngest
 import java.net.Inet4Address
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -287,7 +288,7 @@ class Ps5LanService : Service() {
       val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
       brandOverlayRequested = outputPrefs.getBoolean("brand_overlay", true)
       sleipnirRelayRequested = outputPrefs.getBoolean("sleipnir_enabled", false)
-      val rotateSleipnir180 = sleipnirRelayRequested && outputPrefs.getBoolean("sleipnir_rotate_180", true)
+      val rotateSleipnirVideo180 = sleipnirRelayRequested && outputPrefs.getBoolean("sleipnir_rotate_180", true)
       val destinations = selectedDestinations()
       val invalid = destinations.firstOrNull { !it.isValid() }
       if (destinations.isEmpty() || invalid != null) {
@@ -314,7 +315,7 @@ class Ps5LanService : Service() {
             onFailure = { message -> handler.post { if (!stopping) disableBrandOverlay(message) } },
             showBrandOverlay = brandOverlayRequested,
             maxVideoBitrate = if (sleipnirRelayRequested) SleipnirRelay.MAX_VIDEO_BITRATE_BPS else Int.MAX_VALUE,
-            rotateWholeFrame180 = rotateSleipnir180)
+            rotateVideo180 = rotateSleipnirVideo180)
         }.onFailure { error ->
           if (!sleipnirRelayRequested) brandOverlayRequested = false
           handler.post {
@@ -927,7 +928,7 @@ class Ps5LanService : Service() {
     val secrets = SecretStore(this)
     val direct = buildList {
       if (prefs.getBoolean("twitch_enabled", true)) {
-        add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
+        add(RtmpDestination("twitch", "Twitch", TwitchIngest.DEFAULT_RTMPS_SERVER, secrets.get("rtmps")))
       }
       if (prefs.getBoolean("youtube_enabled", false)) {
         add(RtmpDestination("youtube", "YouTube", prefs.getString("youtube_server", "").orEmpty(), secrets.get("youtube_key")))
