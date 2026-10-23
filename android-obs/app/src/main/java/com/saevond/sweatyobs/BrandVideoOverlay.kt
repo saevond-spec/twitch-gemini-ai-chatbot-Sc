@@ -158,43 +158,21 @@ internal class BrandVideoOverlay(
     atStage("release previous codec state") { releaseCodecs() }
     val parsed = atStage("parse input H.264 configuration") { AvcFlv.parseConfig(message) }
     val decoderInfo = atStage("select hardware H.264 decoder") { findDecoder(parsed.width, parsed.height) }
-    val profile = atStage("select bitrate-limited H.264 profile") {
-      chooseEncoderProfile(parsed.width, parsed.height, maxVideoBitrate)
+    val setup = atStage("select and configure supported hardware H.264 profile") {
+      configureHardwareEncoder(parsed.width, parsed.height, maxVideoBitrate)
     }
-    outputWidth = profile.first
-    outputHeight = profile.second
-    outputFps = profile.third
-    val outputBitrate = SleipnirRelay.videoBitrate(outputWidth, outputHeight, maxVideoBitrate)
-
-    val encoderInfo = atStage("select hardware H.264 encoder") {
-      findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
-    }
-    val videoEncoder = atStage("create encoder ${encoderInfo.name}") {
-      MediaCodec.createByCodecName(encoderInfo.name)
-    }
-    var createdInputSurface: Surface? = null
+    outputWidth = setup.width
+    outputHeight = setup.height
+    outputFps = setup.fps
+    val videoEncoder = setup.codec
+    var createdInputSurface: Surface? = setup.inputSurface
     var createdCompositor: GlBrandCompositor? = null
     try {
-      val encodeFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outputWidth, outputHeight).apply {
-        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-        setInteger(MediaFormat.KEY_BIT_RATE, outputBitrate)
-        setInteger(MediaFormat.KEY_FRAME_RATE, outputFps)
-        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-        setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-        if (android.os.Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-      }
-      atStage("configure encoder ${encoderInfo.name}") {
-        videoEncoder.configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-      }
-      val encoderSurface = atStage("create encoder input Surface ${encoderInfo.name}") {
-        videoEncoder.createInputSurface()
-      }
-      createdInputSurface = encoderSurface
       val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight, showBrandOverlay)
       val gl = try {
         atStage("initialize GLES compositor") {
           GlBrandCompositor(
-            encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
+            setup.inputSurface, parsed.width, parsed.height, outputWidth, outputHeight,
             overlayCanvas, handler,
             onFrame = {
               try { drainEncoder() }
@@ -208,18 +186,17 @@ internal class BrandVideoOverlay(
         throw error
       }
       createdCompositor = gl
-      val videoDecoder = atStage("create decoder ${decoderInfo.name}") {
+      val videoDecoder = atStage("create decoder " + decoderInfo.name) {
         MediaCodec.createByCodecName(decoderInfo.name)
       }
       try {
         val decodeFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, parsed.width, parsed.height)
         decodeFormat.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.sps))
         decodeFormat.setByteBuffer("csd-1", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.pps))
-        atStage("configure decoder ${decoderInfo.name}") {
+        atStage("configure decoder " + decoderInfo.name) {
           videoDecoder.configure(decodeFormat, gl.decoderSurface, null, 0)
         }
-        atStage("start encoder ${encoderInfo.name}") { videoEncoder.start() }
-        atStage("start decoder ${decoderInfo.name}") { videoDecoder.start() }
+        atStage("start decoder " + decoderInfo.name) { videoDecoder.start() }
       } catch (error: Exception) {
         runCatching { videoDecoder.stop() }
         videoDecoder.release()
@@ -227,15 +204,26 @@ internal class BrandVideoOverlay(
       }
       decoder = videoDecoder
       encoder = videoEncoder
-      encoderInputSurface = encoderSurface
+      encoderInputSurface = setup.inputSurface
       createdInputSurface = null
       compositor = gl
       createdCompositor = null
       config = parsed
       announcedConfig = false
       lastOutputTimestampMs = -1L
-    val mode = if (showBrandOverlay) "@saevond overlay" else "RTMPS relay bitrate cap"
-    runCatching { onStatus("$mode active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode") }
+
+      val mode = if (showBrandOverlay) "@saevond overlay" else "RTMPS relay bitrate cap"
+      val bitrateMode = if (setup.bitrateMode == MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD) "CBR-FD" else "CBR"
+      val status = if (maxVideoBitrate < Int.MAX_VALUE) {
+        val projected = SleipnirRelay.projectedIngestBitrate(setup.bitrate).toInt()
+        "Sleipnir encoder ready · " + setup.codecName + " · " + outputWidth + "×" + outputHeight +
+          "@" + outputFps + " · " + bitrateMode + " · " + (setup.bitrate / 1_000) +
+          " kb/s video · est " + (projected / 1_000) + " kb/s total"
+      } else {
+        mode + " active · " + outputWidth + "×" + outputHeight + " · up to " + outputFps +
+          " fps · H.264 hardware encode · " + setup.codecName
+      }
+      runCatching { onStatus(status) }
     } catch (error: Exception) {
       runCatching { createdCompositor?.close() }
       runCatching { videoEncoder.stop() }
@@ -243,6 +231,143 @@ internal class BrandVideoOverlay(
       runCatching { createdInputSurface?.release() }
       throw error
     }
+  }
+
+  private data class EncoderSetup(
+    val codec: MediaCodec,
+    val inputSurface: Surface,
+    val codecName: String,
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val bitrate: Int,
+    val bitrateMode: Int
+  )
+
+  private data class EncoderCandidate(
+    val info: MediaCodecInfo,
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val bitrate: Int,
+    val bitrateMode: Int,
+    val baselineProfile: Boolean,
+    val sizeRank: Int,
+    val codecRank: Int
+  )
+
+  private fun configureHardwareEncoder(sourceWidth: Int, sourceHeight: Int, maxBitrate: Int): EncoderSetup {
+    val constrained = maxBitrate < Int.MAX_VALUE
+    val fpsTargets = if (constrained) listOf(30, 24, 20, 15, 60) else listOf(60, 30)
+    val hardwareEncoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
+      runCatching {
+        info.isEncoder && info.isHardwareAccelerated && !info.isSoftwareOnly &&
+          info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
+      }.getOrDefault(false)
+    }
+    if (hardwareEncoders.isEmpty()) {
+      throw IllegalStateException("No hardware H.264 encoder is exposed by Android")
+    }
+
+    var supportedSizeRates = 0
+    var bitrateFits = 0
+    var bitrateModeFits = 0
+    var setupAttempts = 0
+    var lastFailure = ""
+    for (fps in fpsTargets) {
+      val candidates = mutableListOf<EncoderCandidate>()
+      for ((codecRank, info) in hardwareEncoders.withIndex()) {
+        try {
+          val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+          val video = caps.videoCapabilities
+          val sizes = SleipnirRelay.candidateSizes(
+            sourceWidth, sourceHeight, video.widthAlignment, video.heightAlignment
+          ).let { if (constrained) it else it.take(2) }
+          val modes = buildList {
+            if (caps.encoderCapabilities.isBitrateModeSupported(
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+              )) add(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            if (android.os.Build.VERSION.SDK_INT >= 31 &&
+              caps.encoderCapabilities.isBitrateModeSupported(
+                MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD
+              )
+            ) add(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD)
+          }
+          val baselineSupported = caps.profileLevels.any {
+            it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
+          }
+          for ((sizeRank, size) in sizes.withIndex()) {
+            val width = size.first
+            val height = size.second
+            if (!video.areSizeAndRateSupported(width, height, fps.toDouble())) continue
+            supportedSizeRates++
+            val target = SleipnirRelay.videoBitrate(width, height, maxBitrate)
+            val bitrate = SleipnirRelay.fitCodecBitrate(
+              target, video.bitrateRange.lower, video.bitrateRange.upper, maxBitrate
+            ) ?: continue
+            bitrateFits++
+            for (mode in modes) {
+              bitrateModeFits++
+              candidates.add(
+                EncoderCandidate(
+                  info, width, height, fps, bitrate, mode, baselineSupported, sizeRank, codecRank
+                )
+              )
+            }
+          }
+        } catch (_: Exception) {
+          // An advertised codec can still expose incomplete or inconsistent capability data.
+        }
+      }
+
+      val rankedCandidates = candidates.sortedWith(
+        compareBy<EncoderCandidate> { it.sizeRank }
+          .thenBy { it.codecRank }
+          .thenBy {
+            if (it.bitrateMode == MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR) 0 else 1
+          }
+      )
+      for (candidate in rankedCandidates) {
+        setupAttempts++
+        var codec: MediaCodec? = null
+        var inputSurface: Surface? = null
+        try {
+          codec = MediaCodec.createByCodecName(candidate.info.name)
+          val format = MediaFormat.createVideoFormat(
+            MediaFormat.MIMETYPE_VIDEO_AVC, candidate.width, candidate.height
+          ).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, candidate.bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, candidate.fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, candidate.bitrateMode)
+            if (candidate.baselineProfile) {
+              setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+          }
+          codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+          inputSurface = codec.createInputSurface()
+          codec.start()
+          return EncoderSetup(
+            codec, inputSurface, candidate.info.name, candidate.width, candidate.height,
+            candidate.fps, candidate.bitrate, candidate.bitrateMode
+          )
+        } catch (error: Exception) {
+          lastFailure = candidate.info.name.take(24) + ":" + error.javaClass.simpleName
+          runCatching { codec?.stop() }
+          runCatching { codec?.release() }
+          runCatching { inputSurface?.release() }
+        }
+      }
+    }
+
+    val reason = if (lastFailure.isBlank()) "" else "; last " + lastFailure
+    throw IllegalStateException(
+      "No hardware AVC profile ready (enc=" + hardwareEncoders.size +
+        ", size/fps=" + supportedSizeRates + ", rate=" + bitrateFits +
+        ", CBR=" + bitrateModeFits + ", setup=" + setupAttempts + ")" + reason
+    )
   }
 
   private fun feedDecoder(work: Work): Boolean {
@@ -340,43 +465,6 @@ internal class BrandVideoOverlay(
           .let { it.areSizeAndRateSupported(width, height, 60.0) || it.areSizeAndRateSupported(width, height, 30.0) } }
           .getOrDefault(false)
     } ?: throw IllegalStateException("This phone has no hardware H.264 decoder for ${width}×${height}")
-
-  private fun chooseEncoderProfile(sourceWidth: Int, sourceHeight: Int, maxBitrate: Int): Triple<Int, Int, Int> {
-    val scale = minOf(1.0, 1920.0 / sourceWidth, 1080.0 / sourceHeight)
-    var width = maxOf(16, (sourceWidth * scale).toInt() and -2)
-    var height = maxOf(16, (sourceHeight * scale).toInt() and -2)
-    val scale720 = minOf(1.0, 1280.0 / sourceWidth, 720.0 / sourceHeight)
-    val width720 = maxOf(16, (sourceWidth * scale720).toInt() and -2)
-    val height720 = maxOf(16, (sourceHeight * scale720).toInt() and -2)
-    val candidates = listOf(width to height, width720 to height720).distinct()
-    val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
-      info.isEncoder && !info.isSoftwareOnly && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
-    }
-    for ((w, h) in candidates) {
-      val bitrate = SleipnirRelay.videoBitrate(w, h, maxBitrate)
-      for (fps in listOf(60, 30)) {
-        if (w > width || h > height) continue
-        if (codecs.any { info -> runCatching {
-            val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            caps.videoCapabilities.areSizeAndRateSupported(w, h, fps.toDouble()) &&
-              bitrate in caps.videoCapabilities.bitrateRange &&
-              caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-          }.getOrDefault(false) }) return Triple(w, h, fps)
-      }
-    }
-    throw IllegalStateException("This phone has no supported H.264 hardware encoder profile at or below 1080p")
-  }
-
-  private fun findEncoder(width: Int, height: Int, fps: Int, bitrate: Int): MediaCodecInfo =
-    MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
-      info.isEncoder && !info.isSoftwareOnly && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
-        runCatching {
-          val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
-          caps.videoCapabilities.areSizeAndRateSupported(width, height, fps.toDouble()) &&
-            bitrate in caps.videoCapabilities.bitrateRange &&
-            caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-        }.getOrDefault(false)
-    } ?: throw IllegalStateException("H.264 hardware encoder is unavailable for this profile")
 
   private fun findNal(buffer: ByteBuffer?, kind: Int): ByteArray? {
     if (buffer == null) return null
