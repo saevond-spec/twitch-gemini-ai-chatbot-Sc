@@ -3,6 +3,7 @@ package com.saevond.sweatyobs
 import com.saevond.sweatyobs.ingest.RtmpDestination
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,11 +15,39 @@ class SleipnirRelayTest {
     ).isValid())
   }
 
-  @Test fun encoderVideoRateFitsAdvertisedFreeTierWithAudioHeadroom() {
-    assertEquals(4_700_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
-    assertEquals(4_700_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
-    assertEquals(4_000_000, SleipnirRelay.videoBitrate(854, 480, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+  @Test fun encoderVideoRateLadderLeavesAudioAndNetworkHeadroom() {
+    assertEquals(4_500_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(2_800_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(1_800_000, SleipnirRelay.videoBitrate(960, 540, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(1_400_000, SleipnirRelay.videoBitrate(854, 480, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(900_000, SleipnirRelay.videoBitrate(640, 360, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(500_000, SleipnirRelay.videoBitrate(426, 240, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(8_000_000, SleipnirRelay.videoBitrate(1920, 1080))
+    assertEquals(4_859_400L, SleipnirRelay.projectedIngestBitrate(4_500_000))
+    assertTrue(SleipnirRelay.projectedIngestBitrate(4_500_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
+  }
+
+  @Test fun sizeCandidatesFollowAspectRatioAndNeverUpscale() {
+    assertEquals(
+      listOf(1920 to 1080, 1280 to 720, 960 to 540, 854 to 480, 640 to 360, 426 to 240),
+      SleipnirRelay.candidateSizes(1920, 1080)
+    )
+    val smallerSource = SleipnirRelay.candidateSizes(1280, 720)
+    assertEquals(1280 to 720, smallerSource.first())
+    assertTrue(smallerSource.all { (width, height) -> width <= 1280 && height <= 720 })
+    assertEquals(1080 to 1920, SleipnirRelay.candidateSizes(1080, 1920).first())
+  }
+
+  @Test fun codecBitrateFittingHonorsCodecAndRouteBounds() {
+    assertEquals(
+      4_000_000,
+      SleipnirRelay.fitCodecBitrate(4_500_000, 100_000, 4_000_000, 4_500_000)
+    )
+    assertEquals(
+      800_000,
+      SleipnirRelay.fitCodecBitrate(500_000, 800_000, 2_000_000, 4_500_000)
+    )
+    assertNull(SleipnirRelay.fitCodecBitrate(4_500_000, 4_600_000, 8_000_000, 4_500_000))
   }
 
   @Test fun sleipnirOutputRequiresSecureIngestAndAValidSyntheticKey() {
