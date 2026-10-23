@@ -830,13 +830,37 @@ class MainActivity : Activity() {
     }
     val selected = linkedSetOf<Int>()
     val options = tracks.map { it.title + " — " + it.artist }.toTypedArray()
+    val selectAllButton = Button(this).apply {
+      text = "Select all"
+      isAllCaps = false
+    }
+    val trackList = android.widget.ListView(this).apply {
+      choiceMode = android.widget.ListView.CHOICE_MODE_MULTIPLE
+      adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_multiple_choice, options)
+    }
+    trackList.setOnItemClickListener { _, _, position, _ ->
+      if (trackList.isItemChecked(position)) selected.add(position) else selected.remove(position)
+      selectAllButton.text = if (selected.size == tracks.size) "Deselect all" else "Select all"
+    }
+    selectAllButton.setOnClickListener {
+      val selectEverything = selected.size != tracks.size
+      selected.clear()
+      if (selectEverything) selected.addAll(tracks.indices)
+      tracks.indices.forEach { trackList.setItemChecked(it, selectEverything) }
+      selectAllButton.text = if (selectEverything) "Deselect all" else "Select all"
+    }
+    val content = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(12, 0, 12, 0)
+      addView(selectAllButton, LinearLayout.LayoutParams(
+        android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+      addView(trackList, LinearLayout.LayoutParams(
+        android.view.ViewGroup.LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.42f).toInt()))
+    }
     val dialog = AlertDialog.Builder(this)
       .setTitle("Remote NCS $label catalog")
-      .setMultiChoiceItems(options, BooleanArray(options.size)) { _, which, checked ->
-        if (checked) selected.add(which) else selected.remove(which)
-      }
+      .setView(content)
       .setNegativeButton("Cancel", null)
-      .setNeutralButton("Select all", null)
       .setPositiveButton("Add selected") { _, _ ->
         if (selected.isEmpty()) {
           status.text = "No remote songs selected."
@@ -863,18 +887,6 @@ class MainActivity : Activity() {
         if (added > 0 && Ps5LanService.receiverRunning) refreshGenreService()
       }
       .create()
-    dialog.setOnShowListener {
-      // Keep the bulk action visible when the catalog has many rows.
-      val displayHeight = resources.displayMetrics.heightPixels
-      dialog.listView.layoutParams = dialog.listView.layoutParams.apply {
-        height = (displayHeight * 0.38f).toInt()
-      }
-      dialog.listView.requestLayout()
-      dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-        selected.addAll(tracks.indices)
-        tracks.indices.forEach { dialog.listView.setItemChecked(it, true) }
-      }
-    }
     dialog.show()
   }
 
