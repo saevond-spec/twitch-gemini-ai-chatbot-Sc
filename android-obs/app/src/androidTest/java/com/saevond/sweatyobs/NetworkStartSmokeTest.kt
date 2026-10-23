@@ -125,6 +125,7 @@ class NetworkStartSmokeTest {
     // Clear the live view before changing the preference; ActivityScenario recreation restores view state.
     activityRule.scenario.onActivity { activity ->
       activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_rotate_180).isChecked = true
     }
     prefs.edit().putBoolean("sleipnir_enabled", false).remove("sleipnir_rotate_180").commit()
     activityRule.scenario.recreate()
