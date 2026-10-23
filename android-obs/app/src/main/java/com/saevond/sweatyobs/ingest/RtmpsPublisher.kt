@@ -3,6 +3,8 @@ package com.saevond.sweatyobs.ingest
 import java.io.BufferedOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -50,9 +52,43 @@ internal fun <T> connectFirstWorkingAddress(
 /** RTMPS publisher shared by Twitch, YouTube, and Kick. */
 class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublisher {
   companion object {
-    fun isPublicDestination(address: InetAddress): Boolean =
-      !address.isSiteLocalAddress && !address.isLoopbackAddress &&
-        !address.isLinkLocalAddress && !address.isAnyLocalAddress && !address.isMulticastAddress
+    fun isPublicDestination(address: InetAddress): Boolean {
+      if (address.isSiteLocalAddress || address.isLoopbackAddress ||
+        address.isLinkLocalAddress || address.isAnyLocalAddress || address.isMulticastAddress) return false
+      val bytes = address.address
+      if (address is Inet4Address) {
+        val first = bytes[0].toInt() and 255
+        val second = bytes[1].toInt() and 255
+        val third = bytes[2].toInt() and 255
+        // Reject non-global and documentation blocks that the platform's
+        // site-local helper does not include.
+        return first != 0 && first < 224 &&
+          !(first == 100 && second in 64..127) &&
+          !(first == 192 && second == 0) &&
+          !(first == 192 && second == 88 && third == 99) &&
+          !(first == 192 && second == 0 && third == 2) &&
+          !(first == 198 && second in 18..19) &&
+          !(first == 198 && second == 51 && third == 100) &&
+          !(first == 203 && second == 0 && third == 113)
+      }
+      if (address is Inet6Address) {
+        val first = bytes[0].toInt() and 255
+        val second = bytes[1].toInt() and 255
+        // RFC 4193 ULA (fc00::/7) is local-scope, not a public ingest.
+        if ((first and 0xfe) == 0xfc) return false
+        // Reject the IPv6 documentation prefix.
+        if (first == 0x20 && second == 0x01 &&
+          (bytes[2].toInt() and 255) == 0x0d && (bytes[3].toInt() and 255) == 0xb8) return false
+        // Treat IPv4-mapped IPv6 using the same IPv4 checks.
+        if ((0..9).all { bytes[it] == 0.toByte() } &&
+          bytes[10] == 0xff.toByte() && bytes[11] == 0xff.toByte()) {
+          return isPublicDestination(InetAddress.getByAddress(bytes.copyOfRange(12, 16)))
+        }
+        // Deprecated IPv4-compatible addresses are not accepted as public.
+        if ((0..11).all { bytes[it] == 0.toByte() }) return false
+      }
+      return true
+    }
 
     fun keyValid(value: String): Boolean =
       value.length in 8..256 && value.all { it.isLetterOrDigit() || it == '_' || it == '-' }
