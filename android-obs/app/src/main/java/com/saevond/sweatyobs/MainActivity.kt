@@ -109,7 +109,7 @@ class MainActivity : Activity() {
       text = "Save Sleipnir key securely"
     }
     val sleipnirNote = TextView(this).apply {
-      text = "Relay mode sends one RTMPS feed from this phone to Sleipnir; configure destination accounts in its dashboard. The PS5 feed still passes through the phone. Free tier is advertised at 5 Mbps, so relay mode hardware-encodes video at up to 4.7 Mbps even when the overlay is off."
+      text = "Relay mode sends one RTMPS feed from this phone to Sleipnir; configure destination accounts in its dashboard. The PS5 feed still passes through the phone. Sleipnir Free advertises 5 Mbps. The app targets 3.8 Mbps video plus 128 kb/s AAC, estimated at 4.32 Mbps including 10% transport overhead. This is a target estimate; phone output peaks are not measured."
     }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
@@ -737,7 +737,7 @@ class MainActivity : Activity() {
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
         status.text = if (enableSleipnirRelay.isChecked)
-          "Waiting for PS5 H.264/AAC RTMP feed. Sleipnir receives one capped RTMPS feed; its enabled dashboard destinations fan out from there."
+          "Waiting for PS5 H.264/AAC RTMP feed. Sleipnir receives one RTMPS feed using the app's CBR target; its enabled dashboard destinations fan out from there."
         else "Waiting for PS5 H.264/AAC RTMP feed. Selected outputs publish independently and retry if a connection drops."
       } catch (error: RuntimeException) {
         status.text = "Android could not start public test: " + error.javaClass.simpleName
