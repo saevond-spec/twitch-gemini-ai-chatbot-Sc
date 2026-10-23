@@ -251,7 +251,6 @@ internal class BrandVideoOverlay(
     val fps: Int,
     val bitrate: Int,
     val bitrateMode: Int,
-    val baselineProfile: Boolean,
     val sizeRank: Int,
     val codecRank: Int
   )
@@ -303,9 +302,6 @@ internal class BrandVideoOverlay(
               )
             ) add(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR_FD)
           }
-          val baselineSupported = caps.profileLevels.any {
-            it.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
-          }
           for ((sizeRank, size) in sizes.withIndex()) {
             val width = size.first
             val height = size.second
@@ -320,7 +316,7 @@ internal class BrandVideoOverlay(
               bitrateModeFits++
               candidates.add(
                 EncoderCandidate(
-                  info, width, height, fps, bitrate, mode, baselineSupported, sizeRank, codecRank
+                  info, width, height, fps, bitrate, mode, sizeRank, codecRank
                 )
               )
             }
@@ -351,12 +347,9 @@ internal class BrandVideoOverlay(
             setInteger(MediaFormat.KEY_FRAME_RATE, candidate.fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(MediaFormat.KEY_BITRATE_MODE, candidate.bitrateMode)
-            if (candidate.baselineProfile) {
-              setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            }
             if (android.os.Build.VERSION.SDK_INT >= 29) {
               setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-              setInteger(MediaFormat.KEY_MAX_FPS_TO_ENCODER, candidate.fps)
+              setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, candidate.fps.toFloat())
             }
           }
           codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
