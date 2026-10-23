@@ -21,7 +21,7 @@ class NetworkStartSmokeTest {
   @Test fun remoteMusicCatalogCanSelectAllTracksInOneTap() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val musicPrefs = context.getSharedPreferences("ps5_music", 0)
-    musicPrefs.edit().remove("library_\${GenrePlaylist.CLUB}").commit()
+    musicPrefs.edit().remove("library_${GenrePlaylist.CLUB}").commit()
     activityRule.scenario.recreate()
 
     try {
@@ -29,10 +29,10 @@ class NetworkStartSmokeTest {
       onView(withText("Select all")).perform(click())
       onView(withText("Add selected")).perform(click())
       onView(withId(R.id.genre_library_status)).check(
-        matches(withText(containsString("Club \${RemoteMusicCatalog.forGenre(GenrePlaylist.CLUB).size}")))
+        matches(withText(containsString("Club ${RemoteMusicCatalog.forGenre(GenrePlaylist.CLUB).size}")))
       )
     } finally {
-      musicPrefs.edit().remove("library_\${GenrePlaylist.CLUB}").commit()
+      musicPrefs.edit().remove("library_${GenrePlaylist.CLUB}").commit()
     }
   }
 
