@@ -15,8 +15,8 @@ android {
   }
   buildTypes {
     getByName("debug") {
-      // Keep this tested build alongside the original app and preserve its data.
-      applicationIdSuffix = ".timeline"
+      // Use a fresh ID so this build installs alongside either older app build.
+      applicationIdSuffix = ".dev7timeline"
     }
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
