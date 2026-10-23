@@ -64,6 +64,10 @@ class NetworkStartSmokeTest {
   @Test fun uploadBudgetMatchesTheEncodedMultiOutputBitrate() {
     val prefs = InstrumentationRegistry.getInstrumentation().targetContext
       .getSharedPreferences("encoder_outputs", 0)
+    // Explicitly clear the live checkbox before recreation so a prior test's saved view state cannot re-enable relay mode.
+    activityRule.scenario.onActivity { activity ->
+      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+    }
     prefs.edit().putBoolean("sleipnir_enabled", false).commit()
     activityRule.scenario.recreate()
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
@@ -86,9 +90,9 @@ class NetworkStartSmokeTest {
     onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
     onView(withId(R.id.output_upload_budget)).perform(scrollTo())
       .check(matches(allOf(
-        withText(containsString("one RTMPS upload")),
-        withText(containsString("3.8 Mbps target video")),
-        withText(containsString("4.32 Mbps with 10% transport overhead"))
+        withText(containsString("one 720p30 RTMPS upload")),
+        withText(containsString("up to the 3.8 Mbps cap")),
+        withText(containsString("3.66–4.32 Mbps"))
       )))
     onView(withId(R.id.sleipnir_stream_key)).perform(scrollTo(), replaceText(syntheticKey), closeSoftKeyboard())
     onView(withId(R.id.save_sleipnir_key)).perform(scrollTo(), click())
