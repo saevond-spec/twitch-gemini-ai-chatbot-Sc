@@ -24,7 +24,7 @@ class NetworkStartSmokeTest {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     assertEquals("com.saevond.sweatyobs.dev15sleipnir", context.packageName)
     assertEquals(
-      "SweatyClanker OBS Lite (dev15 test)",
+      "SweatyClanker OBS Lite (Dev15 test)",
       context.packageManager.getApplicationLabel(context.applicationInfo).toString()
     )
   }
