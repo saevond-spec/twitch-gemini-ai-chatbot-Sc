@@ -1,8 +1,10 @@
 package com.saevond.sweatyobs
 
 import android.app.Activity
+import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import android.content.BroadcastReceiver
@@ -44,10 +46,13 @@ class MainActivity : Activity() {
     private const val PICK_CLUB = 31417
     private const val PICK_DUBSTEP = 31418
     private const val PICK_POP_TRAP = 31419
+    private const val REQUEST_POST_NOTIFICATIONS = 31420
   }
   private lateinit var status: TextView
   private lateinit var timelineButton: Button
   private lateinit var viewerPlaybackButton: Button
+  private var pendingNotificationStartButton: Button? = null
+  private var skipNotificationPermissionGateOnce = false
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val text = intent?.getStringExtra(Ps5LanService.EXTRA_STATUS_MESSAGE) ?: return
@@ -69,6 +74,10 @@ class MainActivity : Activity() {
       setPadding(12, 16, 12, 24)
       accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
+    val backgroundNote = TextView(this).apply {
+      text = "Background streaming: allow notifications for live status and Stop/Reconnect controls. Go Live holds a partial CPU wake lock for the session so media processing can continue with the screen off; battery use and heat may increase. If Android stops the app or Wi-Fi changes, open the app and start again; live sessions are never auto-restarted."
+      setPadding(12, 0, 12, 20)
+    }
     val phoneIp = TextView(this).apply {
       val ip = wifiIpv4()
       text = "PHONE Wi-Fi IP (NextDNS rewrite destination): " + (ip ?: "Not on home Wi-Fi") + "\nPS5 IPv4 is entered separately below."
@@ -82,6 +91,11 @@ class MainActivity : Activity() {
       id = R.id.sleipnir_enabled
       text = "Use Sleipnir cloud relay (configure Twitch / YouTube / Kick in Sleipnir)"
       isChecked = outputPrefs.getBoolean("sleipnir_enabled", false)
+    }
+    val rotateSleipnir180 = CheckBox(this).apply {
+      id = R.id.sleipnir_rotate_180
+      text = "Rotate the whole Sleipnir picture 180° (upside-down correction)"
+      isChecked = outputPrefs.getBoolean("sleipnir_rotate_180", true)
     }
     val sleipnirServer = EditText(this).apply {
       id = R.id.sleipnir_server
@@ -109,7 +123,7 @@ class MainActivity : Activity() {
       text = "Save Sleipnir key securely"
     }
     val sleipnirNote = TextView(this).apply {
-      text = "Relay mode sends one RTMPS feed from this phone to Sleipnir; configure destination accounts in its dashboard. The PS5 feed still passes through the phone. Sleipnir Free advertises 5 Mbps. The app targets 3.8 Mbps video plus 128 kb/s AAC, estimated at 4.32 Mbps including 10% transport overhead. This is a target estimate; phone output peaks are not measured."
+      text = "Relay mode sends one RTMPS feed from this phone to Sleipnir; configure destination accounts in its dashboard. The PS5 feed still passes through the phone. Sleipnir Free advertises 5 Mbps. The app targets 3.8 Mbps video plus 128 kb/s AAC, estimated at 4.32 Mbps including 10% transport overhead. This is a target estimate; phone output peaks are not measured. Sleipnir LIVE in this app confirms the phone-to-relay link only; downstream platform status is in Sleipnir's dashboard."
     }
     val enableTwitch = CheckBox(this).apply {
       text = "Stream to Twitch"
@@ -350,7 +364,7 @@ class MainActivity : Activity() {
       setOnClickListener { showViewerPlaybackConfirmation() }
     }
 
-    listOf(phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, sleipnirServer, saveSleipnirServer,
+    listOf(status, backgroundNote, phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, rotateSleipnir180, sleipnirServer, saveSleipnirServer,
       sleipnirKey, saveSleipnirKey, sleipnirOutputStatus, sleipnirNote,
       enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
@@ -364,7 +378,7 @@ class MainActivity : Activity() {
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard,
-      startLan, goLive, stopLan, status)
+      startLan, goLive, stopLan)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
     recordTimelineEvent("App opened · SweatyClanker OBS Lite ${BuildConfig.VERSION_NAME}")
@@ -459,13 +473,14 @@ class MainActivity : Activity() {
       enableTwitch.isEnabled = !relay
       enableYouTube.isEnabled = !relay
       enableKick.isEnabled = !relay
+      rotateSleipnir180.isEnabled = relay
       destinations.text = if (relay) {
-        "Sleipnir relay mode sends one RTMPS upload from the phone, with a 3.8 Mbps target video + 128 kb/s AAC; estimated total is 4.32 Mbps with 10% transport overhead. Device output peaks are not measured here. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard."
+        "Sleipnir relay mode sends one RTMPS upload from the phone, with a 3.8 Mbps target video + 128 kb/s AAC; estimated total is 4.32 Mbps with 10% transport overhead. Device output peaks are not measured here. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard. Its LIVE status here means phone-to-relay only; downstream Twitch/YouTube/Kick status must be checked in that dashboard."
       } else {
         "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule."
       }
       videoModeNote.text = if (relay) {
-        "Sleipnir uses hardware H.264 with a 3.8 Mbps video target plus 128 kb/s AAC (about 4.32 Mbps with 10% transport overhead). It prefers phone-advertised CBR/CBR-FD; if neither is reported, it probes CBR and stops if configuration fails. Android's bitrate is a target, not a packet-level cap, so actual output peaks depend on the phone. Turning off @saevond removes graphics only; video is still re-encoded. This is not a 4K output."
+        "Sleipnir uses hardware H.264 with a 3.8 Mbps video target plus 128 kb/s AAC (about 4.32 Mbps with 10% transport overhead). It prefers phone-advertised CBR/CBR-FD; if neither is reported, it probes CBR and stops if configuration fails. The whole composed picture, including gameplay and overlay, rotates 180° by default; use the checkbox to turn that correction off. Android's bitrate is a target, not a packet-level cap, so actual output peaks depend on the phone. Turning off @saevond removes graphics only; video is still re-encoded. This is not a 4K output."
       } else {
         "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
       }
@@ -486,6 +501,9 @@ class MainActivity : Activity() {
     enableSleipnirRelay.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("sleipnir_enabled", checked).apply()
       refreshOutputRoute()
+    }
+    rotateSleipnir180.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("sleipnir_rotate_180", checked).apply()
     }
     refreshOutputRoute()
     saveSleipnirServer.setOnClickListener {
@@ -700,6 +718,7 @@ class MainActivity : Activity() {
     }
 
     goLive.setOnClickListener {
+      if (!ensureNotificationPermission(goLive)) return@setOnClickListener
       recordTimelineEvent("Public multistream requested")
       status.text = "Public multistream requested. Checking selected platforms, phone, and PS5 address…"
       val ip = ps5Ip.text.toString().trim()
@@ -745,6 +764,7 @@ class MainActivity : Activity() {
     }
 
     startLan.setOnClickListener {
+      if (!ensureNotificationPermission(startLan)) return@setOnClickListener
       recordTimelineEvent("PS5 receiver start requested")
       status.text = "Start button tapped — checking PS5 address…"
       val address = ps5Ip.text.toString().trim()
@@ -1033,6 +1053,47 @@ class MainActivity : Activity() {
       ?.address?.hostAddress
   }
 
+
+  private fun ensureNotificationPermission(button: Button): Boolean {
+    if (Build.VERSION.SDK_INT < 33 ||
+      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+      skipNotificationPermissionGateOnce = false
+      return true
+    }
+    if (skipNotificationPermissionGateOnce) {
+      skipNotificationPermissionGateOnce = false
+      return true
+    }
+    pendingNotificationStartButton = button
+    status.text = "Allow notifications to keep live status and Stop controls visible while this app is in the background."
+    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_POST_NOTIFICATIONS)
+    return false
+  }
+
+  @Suppress("DEPRECATION")
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode != REQUEST_POST_NOTIFICATIONS) return
+    val button = pendingNotificationStartButton
+    pendingNotificationStartButton = null
+    if (button == null) return
+    if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+      button.performClick()
+      return
+    }
+    AlertDialog.Builder(this)
+      .setTitle("Background notification unavailable")
+      .setMessage("Android may hide the live status and notification Stop/Reconnect controls. You can still continue, but use the Stop button in the app.")
+      .setNegativeButton("Cancel") { _, _ ->
+        status.text = "Streaming was not started. Allow notifications for background status and controls."
+      }
+      .setPositiveButton("Continue") { _, _ ->
+        skipNotificationPermissionGateOnce = true
+        button.performClick()
+      }
+      .show()
+  }
+
   override fun onStart() {
     super.onStart()
     val filter = IntentFilter(Ps5LanService.ACTION_STATUS)
@@ -1045,9 +1106,23 @@ class MainActivity : Activity() {
     findViewById<SeekBar>(R.id.music_volume)?.let {
       if (it.progress != remoteMusic) it.progress = remoteMusic
     }
-    val saved = getSharedPreferences(Ps5LanService.STATUS_PREFS, MODE_PRIVATE)
-      .getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
-    if (!saved.isNullOrBlank()) status.text = saved
+    val statusPrefs = getSharedPreferences(Ps5LanService.STATUS_PREFS, MODE_PRIVATE)
+    val interrupted = statusPrefs.getBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false) &&
+      !Ps5LanService.sessionForegroundActive
+    if (interrupted) {
+      val wasPublic = statusPrefs.getBoolean(Ps5LanService.PREF_SESSION_PUBLIC, false)
+      val message = if (wasPublic)
+        "Previous stream session ended before the app confirmed a clean stop. It was not auto-restarted; tap Go live to start a new session."
+      else
+        "Previous diagnostic test ended before the app confirmed a clean stop. Tap Start network test to reconnect."
+      statusPrefs.edit().putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false)
+        .putString(Ps5LanService.PREF_STATUS_MESSAGE, message).apply()
+      ConnectionTimeline.append(this, "Session recovery notice · $message")
+      status.text = message
+    } else {
+      val saved = statusPrefs.getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
+      if (!saved.isNullOrBlank()) status.text = saved
+    }
     refreshTimelineButton()
   }
 

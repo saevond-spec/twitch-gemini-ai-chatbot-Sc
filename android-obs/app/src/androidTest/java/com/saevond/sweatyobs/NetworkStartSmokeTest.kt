@@ -5,6 +5,7 @@ import androidx.test.espresso.action.ViewActions.*
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.ext.junit.rules.ActivityScenarioRule
+import androidx.test.rule.GrantPermissionRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import android.os.SystemClock
@@ -16,6 +17,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NetworkStartSmokeTest {
+  @get:Rule val notificationPermissionRule = GrantPermissionRule.grant("android.permission.POST_NOTIFICATIONS")
   @get:Rule val activityRule = ActivityScenarioRule(MainActivity::class.java)
 
   @Test fun viewerPlaybackConfirmationRequiresVideoAndAudioAndLogsManualEvent() {
@@ -94,6 +96,66 @@ class NetworkStartSmokeTest {
 
     // Keep the disposable emulator's following tests in direct-output mode.
     outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
+  }
+
+  @Test fun sleipnirUpsideDownCorrectionDefaultsOnAndCanBeDisabled() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val prefs = context.getSharedPreferences("encoder_outputs", 0)
+    val hadEnabled = prefs.contains("sleipnir_enabled")
+    val enabledBefore = prefs.getBoolean("sleipnir_enabled", false)
+    val hadRotation = prefs.contains("sleipnir_rotate_180")
+    val rotationBefore = prefs.getBoolean("sleipnir_rotate_180", true)
+    prefs.edit().putBoolean("sleipnir_enabled", false).remove("sleipnir_rotate_180").commit()
+    activityRule.scenario.recreate()
+
+    try {
+      onView(withId(R.id.sleipnir_rotate_180)).perform(scrollTo())
+        .check(matches(not(isEnabled())))
+      onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
+      onView(withId(R.id.sleipnir_rotate_180)).perform(scrollTo())
+        .check(matches(allOf(isChecked(), isEnabled())))
+      onView(withId(R.id.sleipnir_rotate_180)).perform(click())
+      assertFalse(prefs.getBoolean("sleipnir_rotate_180", true))
+      activityRule.scenario.recreate()
+      onView(withId(R.id.sleipnir_rotate_180)).perform(scrollTo())
+        .check(matches(not(isChecked())))
+    } finally {
+      val editor = prefs.edit()
+      if (hadEnabled) editor.putBoolean("sleipnir_enabled", enabledBefore) else editor.remove("sleipnir_enabled")
+      if (hadRotation) editor.putBoolean("sleipnir_rotate_180", rotationBefore) else editor.remove("sleipnir_rotate_180")
+      editor.commit()
+    }
+  }
+
+  @Test fun staleLiveSessionIsReportedAsInterruptedInsteadOfStillLive() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val prefs = context.getSharedPreferences(Ps5LanService.STATUS_PREFS, 0)
+    val hadActive = prefs.contains(Ps5LanService.PREF_SESSION_ACTIVE)
+    val activeBefore = prefs.getBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false)
+    val hadPublic = prefs.contains(Ps5LanService.PREF_SESSION_PUBLIC)
+    val publicBefore = prefs.getBoolean(Ps5LanService.PREF_SESSION_PUBLIC, false)
+    val hadMessage = prefs.contains(Ps5LanService.PREF_STATUS_MESSAGE)
+    val messageBefore = prefs.getString(Ps5LanService.PREF_STATUS_MESSAGE, null)
+    prefs.edit().putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, true)
+      .putBoolean(Ps5LanService.PREF_SESSION_PUBLIC, true)
+      .putString(Ps5LanService.PREF_STATUS_MESSAGE, "Sleipnir LIVE · health Good").commit()
+    activityRule.scenario.recreate()
+
+    try {
+      onView(withId(R.id.connection_status)).perform(scrollTo())
+        .check(matches(withText(containsString("Previous stream session ended before the app confirmed a clean stop"))))
+      assertFalse(prefs.getBoolean(Ps5LanService.PREF_SESSION_ACTIVE, true))
+      assertTrue(ConnectionTimeline.events(context).last().message.contains("Session recovery notice"))
+    } finally {
+      val editor = prefs.edit()
+      if (hadActive) editor.putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, activeBefore)
+      else editor.remove(Ps5LanService.PREF_SESSION_ACTIVE)
+      if (hadPublic) editor.putBoolean(Ps5LanService.PREF_SESSION_PUBLIC, publicBefore)
+      else editor.remove(Ps5LanService.PREF_SESSION_PUBLIC)
+      if (hadMessage) editor.putString(Ps5LanService.PREF_STATUS_MESSAGE, messageBefore)
+      else editor.remove(Ps5LanService.PREF_STATUS_MESSAGE)
+      editor.commit()
+    }
   }
 
   @Test fun youtubeAndKickKeysSaveSecurelyWithoutAnRtmpsServerUrl() {
@@ -199,6 +261,16 @@ class NetworkStartSmokeTest {
     }
     assertNotNull("Service did not report back; Start button must never silently fail", result)
     assertTrue("No diagnostic result", result!!.isNotEmpty())
+    val enteredReceiver = Ps5LanService.receiverRunning
     onView(withId(R.id.stop_network_test)).perform(scrollTo(), click())
+    val stopDeadline = SystemClock.uptimeMillis() + 5000
+    while (Ps5LanService.sessionForegroundActive && SystemClock.uptimeMillis() < stopDeadline) {
+      SystemClock.sleep(100)
+    }
+    assertFalse("Stop must release the foreground session", Ps5LanService.sessionForegroundActive)
+    if (enteredReceiver) {
+      assertTrue(prefs.getString(Ps5LanService.PREF_STATUS_MESSAGE, "").orEmpty()
+        .contains("Diagnostic only; no broadcast was sent."))
+    }
   }
 }

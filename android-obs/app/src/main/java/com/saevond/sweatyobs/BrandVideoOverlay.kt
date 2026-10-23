@@ -37,7 +37,8 @@ internal class BrandVideoOverlay(
   private val onStatus: (String) -> Unit,
   private val onFailure: (String) -> Unit,
   private val showBrandOverlay: Boolean = true,
-  private val maxVideoBitrate: Int = Int.MAX_VALUE
+  private val maxVideoBitrate: Int = Int.MAX_VALUE,
+  private val rotateWholeFrame180: Boolean = false
 ) : Closeable {
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private class StageFailure(val operation: String, cause: Exception) : Exception(cause.message, cause)
@@ -173,7 +174,7 @@ internal class BrandVideoOverlay(
         atStage("initialize GLES compositor") {
           GlBrandCompositor(
             setup.inputSurface, parsed.width, parsed.height, outputWidth, outputHeight, outputFps,
-            overlayCanvas, handler,
+            rotateWholeFrame180, overlayCanvas, handler,
             onFrame = {
               try { drainEncoder() }
               catch (error: Exception) { fail(processingFailure("encoder output after GLES render", error)) }
@@ -220,7 +221,8 @@ internal class BrandVideoOverlay(
         "Sleipnir encoder ready · " + setup.codecName + " · " + outputWidth + "×" + outputHeight +
           "@" + outputFps + " · " + bitrateMode + " · " + (setup.bitrate / 1_000) +
           " kb/s target video · est " + (projected / 1_000) +
-          " kb/s total with AAC/overhead · output peak unverified"
+          " kb/s total with AAC/overhead · output peak unverified" +
+          (if (rotateWholeFrame180) " · whole frame rotated 180°" else "")
       } else {
         mode + " active · " + outputWidth + "×" + outputHeight + " · up to " + outputFps +
           " fps · H.264 hardware encode · " + setup.codecName
@@ -591,6 +593,7 @@ private class GlBrandCompositor(
   private val width: Int,
   private val height: Int,
   private val maxFrameRate: Int,
+  rotateWholeFrame180: Boolean,
   private val overlay: BrandOverlayCanvas,
   handler: Handler,
   private val onFrame: () -> Unit,
@@ -606,6 +609,7 @@ private class GlBrandCompositor(
   private lateinit var videoSurfaceTexture: SurfaceTexture
   private val rendererClosed = AtomicBoolean(false)
   private val framePacer = FrameTimestampPacer(maxFrameRate)
+  private val outputTransform = OutputFrameTransform.glMatrix(rotateWholeFrame180)
   val decoderSurface: Surface
   private val vertexData = floatBuffer(floatArrayOf(
     -1f,-1f, 0f,1f,  1f,-1f, 1f,1f,  -1f,1f, 0f,0f,  1f,1f, 1f,0f
@@ -673,6 +677,7 @@ private class GlBrandCompositor(
       val textureLocation = GLES20.glGetUniformLocation(program,"uTexture")
       bindAttributes(vertexData,position,texCoord)
       GLES20.glUniformMatrix4fv(textureMatrixLocation,1,false,textureMatrix,0)
+      GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program,"uOutputMatrix"),1,false,outputTransform,0)
       GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
       GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,externalTexture)
       GLES20.glUniform1i(textureLocation,0)
@@ -683,6 +688,7 @@ private class GlBrandCompositor(
       val overlayPosition = GLES20.glGetAttribLocation(overlayProgram,"aPosition")
       val overlayTexCoord = GLES20.glGetAttribLocation(overlayProgram,"aTexCoord")
       bindAttributes(overlayData,overlayPosition,overlayTexCoord)
+      GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(overlayProgram,"uOutputMatrix"),1,false,outputTransform,0)
       GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
       GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,overlayTexture)
       GLES20.glUniform1i(GLES20.glGetUniformLocation(overlayProgram,"uTexture"),1)
@@ -736,8 +742,8 @@ private class GlBrandCompositor(
     private const val EGL_RECORDABLE_ANDROID = 0x3142
     private const val VIDEO_VERTEX = """
       attribute vec4 aPosition; attribute vec4 aTexCoord;
-      uniform mat4 uTextureMatrix; varying vec2 vTexCoord;
-      void main(){ gl_Position=aPosition; vTexCoord=(uTextureMatrix*aTexCoord).xy; }
+      uniform mat4 uTextureMatrix; uniform mat4 uOutputMatrix; varying vec2 vTexCoord;
+      void main(){ gl_Position=uOutputMatrix*aPosition; vTexCoord=(uTextureMatrix*aTexCoord).xy; }
     """
     private const val VIDEO_FRAGMENT = """
       #extension GL_OES_EGL_image_external : require
@@ -745,8 +751,8 @@ private class GlBrandCompositor(
       void main(){ gl_FragColor=texture2D(uTexture,vTexCoord); }
     """
     private const val OVERLAY_VERTEX = """
-      attribute vec4 aPosition; attribute vec2 aTexCoord; varying vec2 vTexCoord;
-      void main(){ gl_Position=aPosition; vTexCoord=aTexCoord; }
+      attribute vec4 aPosition; attribute vec2 aTexCoord; uniform mat4 uOutputMatrix; varying vec2 vTexCoord;
+      void main(){ gl_Position=uOutputMatrix*aPosition; vTexCoord=aTexCoord; }
     """
     private const val OVERLAY_FRAGMENT = """
       precision mediump float; uniform sampler2D uTexture; varying vec2 vTexCoord;
