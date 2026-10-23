@@ -18,6 +18,8 @@ This app accepts one authorized PS5 RTMP source over a private Wi-Fi network and
 - NCS use is conditional on its current creator policy and correct credit. Use **Copy NCS live-stream credit** for a stream description and **Copy selected NCS track credits for VODs** for exact song credits. Check the current terms for each destination before multistreaming. Drake and Taylor Swift commercial recordings are not included as free tracks; only add a local file when you hold the streaming/VOD rights.
 - A network-only diagnostic remains available and does not broadcast.
 
+- The full connection timeline records timestamped app actions and receiver/output status messages in this app's private storage. Open **View full connection timeline** to inspect or copy it. History begins after this build is installed; it cannot recover earlier `.6` events.
+
 ## Set up and test
 
 1. Put the phone and PS5 on the same private Wi-Fi network. Enter the PS5's private IPv4 address in the app.
