@@ -117,13 +117,16 @@ internal class BrandVideoOverlay(
     if (closed.get()) return
     var submittedInput = false
     var moreDecoderOutput = false
+    var stage = "configuration"
     try {
       val nextConfig = synchronized(lock) { configMessage.also { configMessage = null } }
       if (nextConfig != null) configure(nextConfig)
       val shouldFlush = synchronized(lock) { flushDecoder.also { flushDecoder = false } }
       if (shouldFlush) {
+        stage = "decoder reset"
         decoder?.flush()
       }
+      stage = "decoder input"
       for (index in 0 until MAX_FEED_PER_PUMP) {
         val next = synchronized(lock) {
           pending.pollFirst()?.also { pendingBytes -= it.message.data.size }
@@ -134,10 +137,12 @@ internal class BrandVideoOverlay(
         }
         submittedInput = true
       }
+      stage = "decoder output"
       moreDecoderOutput = drainDecoder()
+      stage = "encoder output"
       drainEncoder()
     } catch (error: Exception) {
-      fail("Brand overlay video processing failed (${error.javaClass.simpleName})")
+      fail(processingFailure(stage, error))
       return
     }
     synchronized(lock) { scheduled = false }
@@ -180,7 +185,7 @@ internal class BrandVideoOverlay(
           encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
           overlayCanvas, handler,
           onFrame = { drainEncoder() },
-          onFailure = { error -> fail("Brand overlay compositor failed (${error.javaClass.simpleName})") }
+          onFailure = { error -> fail(processingFailure("GLES compositor", error)) }
         )
       } catch (error: Exception) {
         overlayCanvas.close()
@@ -365,6 +370,21 @@ internal class BrandVideoOverlay(
     val value = ((data[offset].toInt() and 255) shl 16) or ((data[offset + 1].toInt() and 255) shl 8) or
       (data[offset + 2].toInt() and 255)
     return if ((value and 0x800000) != 0) (value - 0x1000000).toLong() else value.toLong()
+  }
+
+  private fun processingFailure(stage: String, error: Exception): String {
+    val detail = error.message?.lineSequence()?.firstOrNull()?.take(180).orEmpty()
+    val codecError = (error as? MediaCodec.CodecException)?.let {
+      " · diagnostic ${it.diagnosticInfo} · recoverable ${it.isRecoverable} · transient ${it.isTransient}"
+    }.orEmpty()
+    val codecs = listOfNotNull(
+      runCatching { decoder?.name?.let { "decoder=$it" } }.getOrNull(),
+      runCatching { encoder?.name?.let { "encoder=$it" } }.getOrNull()
+    ).joinToString(" ")
+    return "Video processing failed at $stage (${error.javaClass.simpleName})" +
+      (if (detail.isBlank()) "" else ": $detail") +
+      codecError +
+      (if (codecs.isBlank()) "" else " · $codecs")
   }
 
   private fun throttledStatus(message: String) {
