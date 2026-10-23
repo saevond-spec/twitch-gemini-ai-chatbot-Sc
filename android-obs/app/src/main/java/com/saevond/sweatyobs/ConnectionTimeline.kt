@@ -19,16 +19,17 @@ internal fun rotateConnectionTimeline(
   incomingBytes: Int,
   maxBytes: Long = CONNECTION_TIMELINE_MAX_FILE_BYTES,
   backupCount: Int = CONNECTION_TIMELINE_BACKUP_COUNT
-) {
+): Boolean {
   require(incomingBytes >= 0 && maxBytes > 0 && backupCount >= 1)
   val active = File(directory, CONNECTION_TIMELINE_FILE_NAME)
-  if (!active.exists() || active.length() + incomingBytes <= maxBytes) return
+  if (!active.exists() || active.length() + incomingBytes <= maxBytes) return false
   for (index in backupCount downTo 1) {
     val source = if (index == 1) active else File(directory, "$CONNECTION_TIMELINE_FILE_NAME.${index - 1}")
     val target = File(directory, "$CONNECTION_TIMELINE_FILE_NAME.$index")
     if (target.exists() && !target.delete()) throw IOException("Unable to prune old connection timeline")
     if (source.exists() && !source.renameTo(target)) throw IOException("Unable to rotate connection timeline")
   }
+  return true
 }
 
 /** Persists connection and receiver status events in app-private storage. */
@@ -48,7 +49,8 @@ internal object ConnectionTimeline {
         .put("timestampMs", System.currentTimeMillis())
         .put("message", cleanMessage.take(4_000))
       val bytes = (row.toString() + "\n").toByteArray(Charsets.UTF_8)
-      rotateConnectionTimeline(context.filesDir, bytes.size)
+      val rotated = rotateConnectionTimeline(context.filesDir, bytes.size)
+      if (rotated) cachedCount = null
       context.openFileOutput(FILE_NAME, Context.MODE_APPEND).use { output -> output.write(bytes) }
       cachedCount = cachedCount?.plus(1)
     } catch (error: Exception) {
