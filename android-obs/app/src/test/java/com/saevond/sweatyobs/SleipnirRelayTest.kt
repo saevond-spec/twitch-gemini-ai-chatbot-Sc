@@ -16,15 +16,15 @@ class SleipnirRelayTest {
   }
 
   @Test fun encoderVideoRateLadderLeavesAudioAndNetworkHeadroom() {
-    assertEquals(4_500_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(4_200_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(2_800_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_800_000, SleipnirRelay.videoBitrate(960, 540, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_400_000, SleipnirRelay.videoBitrate(854, 480, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(900_000, SleipnirRelay.videoBitrate(640, 360, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(500_000, SleipnirRelay.videoBitrate(426, 240, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(8_000_000, SleipnirRelay.videoBitrate(1920, 1080))
-    assertEquals(4_859_400L, SleipnirRelay.projectedIngestBitrate(4_500_000))
-    assertTrue(SleipnirRelay.projectedIngestBitrate(4_500_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
+    assertEquals(4_760_800L, SleipnirRelay.projectedIngestBitrate(4_200_000))
+    assertTrue(SleipnirRelay.projectedIngestBitrate(4_200_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
   }
 
   @Test fun sizeCandidatesFollowAspectRatioAndNeverUpscale() {
