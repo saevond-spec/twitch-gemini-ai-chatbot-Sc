@@ -484,12 +484,12 @@ class MainActivity : Activity() {
       enableKick.isEnabled = !relay
       rotateSleipnir180.isEnabled = relay
       destinations.text = if (relay) {
-        "Sleipnir relay mode sends one RTMPS upload from the phone, with a 3.8 Mbps target video + 128 kb/s AAC; estimated total is 4.32 Mbps with 10% transport overhead. Device output peaks are not measured here. Sleipnir fans out to the destinations enabled in your Sleipnir dashboard. Its LIVE status here means phone-to-relay only; downstream Twitch/YouTube/Kick status must be checked in that dashboard."
+        "Sleipnir sends one 720p30 RTMPS upload from the phone at a 3.2 Mbps video target + 128 kb/s AAC; estimated total is 3.66 Mbps with 10% transport allowance, leaving 1.34 Mbps below the app's 5 Mbps relay budget. YouTube's H.264 720p30 bitrate floor is 3 Mbps and its recommendation is 8 Mbps, so this target clears the floor but is below the recommendation. Android's target is not a packet-level cap. Sleipnir fans out to the destinations enabled in its dashboard. LIVE here confirms only phone-to-relay; check downstream status in that dashboard."
       } else {
         "Direct RTMPS outputs each use their own retry loop. At 1080p, this encoder targets 8 Mbps video + 128 kbps AAC per destination. Aim for more than 16.3 Mbps sustained upload per destination (more than 48.8 Mbps for three), using Kick's less-than-half-upload guidance as a conservative planning rule."
       }
       videoModeNote.text = if (relay) {
-        "Sleipnir uses hardware H.264 with a 3.8 Mbps video target plus 128 kb/s AAC (about 4.32 Mbps with 10% transport overhead). It prefers phone-advertised CBR/CBR-FD; if neither is reported, it probes CBR and stops if configuration fails. The whole composed picture, including gameplay and overlay, rotates 180° by default; use the checkbox to turn that correction off. Android's bitrate is a target, not a packet-level cap, so actual output peaks depend on the phone. Turning off @saevond removes graphics only; video is still re-encoded. This is not a 4K output."
+        "Sleipnir now targets a whole-frame 720p30 H.264 encode at 3.2 Mbps plus 128 kb/s AAC (about 3.66 Mbps with 10% transport allowance). This meets YouTube's documented 720p30 H.264 minimum of 3 Mbps but is below its 8 Mbps recommendation; 1080p30 would require at least 5 Mbps video before audio and overhead, above this route's budget. The encoder prefers phone-advertised CBR/CBR-FD and probes CBR only when unadvertised; actual output peaks remain unverified. The full picture, gameplay and overlay together, rotates 180° by default. Lower hardware fallbacks may not meet YouTube's 720p minimum. Turning off @saevond removes graphics only; video is still re-encoded."
       } else {
         "The overlay includes simulated stats, chat, and alerts; it does not read real Twitch chat or viewer activity. Hardware video processing re-encodes up to 1080p (not 4K). Turn it off for original-video pass-through. If processing fails, outputs reconnect with the original PS5 video. This setting applies the next time you start streaming."
       }
@@ -1121,7 +1121,15 @@ class MainActivity : Activity() {
     if (interrupted) {
       val wasPublic = statusPrefs.getBoolean(Ps5LanService.PREF_SESSION_PUBLIC, false)
       val previousPhase = statusPrefs.getString(Ps5LanService.PREF_SESSION_PHASE, "")
-      val message = if (!wasPublic)
+      val exitDiagnostic = ProcessExitDiagnostics.describeLastExit(
+        this,
+        statusPrefs.getInt(Ps5LanService.PREF_SESSION_PID, 0),
+        statusPrefs.getLong(Ps5LanService.PREF_SESSION_STARTED_AT, 0L)
+      )
+      if (exitDiagnostic.isNotBlank()) {
+        ConnectionTimeline.append(this, "Session recovery diagnostic · $exitDiagnostic")
+      }
+      val baseMessage = if (!wasPublic)
         "Previous diagnostic test ended before the app confirmed a clean stop. Tap Start network test to reconnect."
       else when (previousPhase) {
         Ps5LanService.SESSION_PHASE_PUBLISH_ACCEPTED ->
@@ -1131,8 +1139,12 @@ class MainActivity : Activity() {
         else ->
           "Previous stream startup ended before the PS5 receiver was armed. It was not auto-restarted; tap Go live to start a new session."
       }
+      val message = baseMessage + (exitDiagnostic.takeIf { it.isNotBlank() }?.let { " Android exit diagnostic: $it." }.orEmpty())
       statusPrefs.edit().putBoolean(Ps5LanService.PREF_SESSION_ACTIVE, false)
-        .putString(Ps5LanService.PREF_STATUS_MESSAGE, message).apply()
+        .remove(Ps5LanService.PREF_SESSION_PHASE)
+        .remove(Ps5LanService.PREF_SESSION_STARTED_AT)
+        .remove(Ps5LanService.PREF_SESSION_PID)
+        .putString(Ps5LanService.PREF_STATUS_MESSAGE, message).commit()
       ConnectionTimeline.append(this, "Session recovery notice · $message")
       status.text = message
     } else {

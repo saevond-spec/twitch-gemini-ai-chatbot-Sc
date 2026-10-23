@@ -21,6 +21,79 @@ class ReliableRtmpOutputTest {
   private fun sandboxDestination(id: String) = RtmpDestination(
     id, id.replaceFirstChar { it.uppercase() }, "rtmps://$id.example.test/app", "sandbox-key-12345")
 
+  @Test fun summarySeparatesQueueHealthFromTheAppSidePayloadSendRate() {
+    val summary = OutputSnapshot(
+      "sleipnir", "Sleipnir", "LIVE", 0, 0, 0, 11_875, 0, 0, null
+    ).summary()
+    assertTrue(summary.contains("sender queue Good"))
+    assertTrue(summary.contains("app payload send (about 2s sample) 95 kb/s"))
+    assertFalse(summary.contains("health Good"))
+  }
+
+  @Test fun failureSummaryKeepsUsefulCauseAndRedactsKeysAndUrls() {
+    val failure = IOException(
+      "publish failed at rtmps://relay.example.test/live/example_stream_key-12345",
+      IOException("Broken pipe"))
+    val summary = ReliableRtmpOutput(destination()).summarizeFailure(failure, "example_stream_key-12345")
+    assertTrue(summary.contains("IOException: publish failed"))
+    assertTrue(summary.contains("Broken pipe"))
+    assertTrue(summary.contains("[server]"))
+    assertFalse(summary.contains("example_stream_key-12345"))
+    assertFalse(summary.contains("rtmps://"))
+  }
+
+  @Test fun reconnectResetsTheAppPayloadRateSampleWindow() {
+    val nowMs = AtomicLong(1_000)
+    val publishers = CopyOnWriteArrayList<TestPublisher>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = { TestPublisher().also { publishers += it } },
+      retryDelaysMs = longArrayOf(200),
+      clockMs = { nowMs.get() },
+      waitMs = { Thread.sleep(it) }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue(pollUntil(2_000) { publishers.size == 1 && output.snapshot().packetsSent >= 3 })
+
+      nowMs.set(3_000)
+      output.offer(RtmpMessage(9, 100, 1, byteArrayOf(0x27, 1, 0, 0, 0, 1)))
+      assertTrue(pollUntil(2_000) { output.snapshot().packetsSent >= 4 && output.snapshot().bytesPerSecond > 0 })
+      output.reconnectNow()
+      assertEquals("manual reconnect starts a fresh measurement window", 0L, output.snapshot().bytesPerSecond)
+    } finally { output.close() }
+  }
+  @Test fun shortLivedAcceptedConnectionsDoNotResetRetryBackoff() {
+    val attempts = AtomicInteger()
+    val waits = CopyOnWriteArrayList<Long>()
+    val output = ReliableRtmpOutput(
+      destination(),
+      publisherFactory = {
+        attempts.incrementAndGet()
+        object : MediaPublisher {
+          override fun connect() {}
+          override fun publish(media: RtmpMessage) { throw IOException("synthetic socket reset") }
+          override fun close() {}
+        }
+      },
+      retryDelaysMs = longArrayOf(1_000, 2_000, 4_000),
+      waitMs = { waits += it }
+    )
+    try {
+      output.start()
+      output.offer(avcConfig())
+      output.offer(aacConfig())
+      output.offer(keyframe(0))
+      assertTrue(pollUntil(2_000) { waits.size >= 1 })
+      output.offer(keyframe(100))
+      assertTrue(pollUntil(2_000) { waits.size >= 2 })
+      assertTrue(waits[0] in 900L..1_000L)
+      assertTrue(waits[1] in 1_800L..2_000L)
+    } finally { output.close() }
+  }
   @Test fun outputWaitsForBothCodecHeadersAndAKeyframeThenSendsARebasedStart() {
     val connected = CountDownLatch(1)
     val firstPackets = CountDownLatch(3)
@@ -273,6 +346,7 @@ class ReliableRtmpOutputTest {
         sent.getValue("twitch").size >= 6 && sent.getValue("kick").size >= 6
       })
       assertEquals(1L, outputs[1].snapshot().reconnects)
+      assertTrue(outputs[1].snapshot().lastError.orEmpty().contains("synthetic destination failure"))
     } finally {
       releaseFailure.countDown()
       outputs.forEach { it.close() }

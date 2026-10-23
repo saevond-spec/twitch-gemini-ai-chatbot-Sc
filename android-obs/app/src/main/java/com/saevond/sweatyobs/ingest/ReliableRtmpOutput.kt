@@ -22,20 +22,22 @@ data class OutputSnapshot(
   val droppedPackets: Long,
   val lastError: String?
 ) {
-  val health: String get() = when {
+  val queueHealth: String get() = when {
     state != "LIVE" -> "Reconnecting"
     queueMediaMs >= 900 -> "Poor"
     queueMediaMs >= 300 -> "Fair"
     else -> "Good"
   }
+  val health: String get() = queueHealth
 
   fun summary(): String {
-    val speed = if (bytesPerSecond > 0) " · ${(bytesPerSecond * 8 / 1000)} kb/s" else ""
+    val speed = if (bytesPerSecond > 0)
+      " · app payload send (about 2s sample) ${(bytesPerSecond * 8 / 1000)} kb/s" else ""
     val queue = if (queueMediaMs > 0) " · queued ${queueMediaMs} ms" else ""
     val retry = if (reconnects > 0) " · reconnects $reconnects" else ""
     val dropped = if (droppedPackets > 0) " · skipped $droppedPackets stale packets" else ""
     val error = lastError?.let { " · last error $it" }.orEmpty()
-    return "$label $state · health $health$speed$queue$retry$dropped$error"
+    return "$label $state · sender queue $queueHealth$speed$queue$retry$dropped$error"
   }
 }
 
@@ -58,6 +60,8 @@ class ReliableRtmpOutput(
     const val DEFAULT_QUEUE_LIMIT_BYTES = 2_500_000
     const val DEFAULT_QUEUE_MEDIA_MS = 1_500L
     const val DEFAULT_QUEUE_AGE_MS = 2_000L
+    const val STABLE_CONNECTION_RESET_MS = 30_000L
+    const val RECENT_SEND_WINDOW_MS = 5_000L
     val DEFAULT_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
 
     fun retryDelayMs(failures: Int): Long {
@@ -153,6 +157,7 @@ class ReliableRtmpOutput(
         aacConfig = null
       }
       aligned = false
+      resetRateWindowLocked()
       state = "WAITING FOR KEYFRAME"
       lock.notifyAll()
     }
@@ -171,6 +176,7 @@ class ReliableRtmpOutput(
       running = false
       clearQueueLocked()
       aligned = false
+      resetRateWindowLocked()
       state = "STOPPED"
       lock.notifyAll()
     }
@@ -184,21 +190,32 @@ class ReliableRtmpOutput(
   private fun runWorker() {
     var failures = 0
     var everConnected = false
+    var connectionStartedAtMs: Long? = null
+    var lastSuccessfulSendAtMs: Long? = null
     while (isRunning()) {
       var active: MediaPublisher? = null
       try {
         if (!waitUntilAligned()) break
         if (!isRunning()) break
-        state = "CONNECTING"
+        val shouldConnect = synchronized(lock) {
+          if (!running) false
+          else {
+            resetRateWindowLocked()
+            state = "CONNECTING"
+            true
+          }
+        }
+        if (!shouldConnect) break
         notifySnapshot()
         active = publisherFactory(destination)
         publisher = active
         active.connect()
         if (!isRunning()) break
+        connectionStartedAtMs = clockMs()
+        lastSuccessfulSendAtMs = null
         if (everConnected) reconnects++
         everConnected = true
         synchronized(lock) { if (running) state = "LIVE" }
-        failures = 0
         notifySnapshot()
         var sessionBaseTimestamp: Long? = null
         while (isRunning()) {
@@ -206,15 +223,23 @@ class ReliableRtmpOutput(
           val base = sessionBaseTimestamp ?: pending.message.timestamp.also { sessionBaseTimestamp = it }
           active.publish(pending.message.copy(timestamp = (pending.message.timestamp - base).coerceAtLeast(0L)))
           recordSent(pending.message)
+          lastSuccessfulSendAtMs = clockMs()
         }
       } catch (error: Exception) {
         if (!isRunning()) break
-        lastError = error.javaClass.simpleName
+        val connectedAt = connectionStartedAtMs
+        val lastSentAt = lastSuccessfulSendAtMs
+        if (connectedAt != null && lastSentAt != null &&
+          lastSentAt - connectedAt >= STABLE_CONNECTION_RESET_MS &&
+          clockMs() - lastSentAt <= RECENT_SEND_WINDOW_MS
+        ) failures = 0
+        lastError = summarizeFailure(error, destination.key)
         failures++
         synchronized(lock) {
           droppedPackets += queue.size.toLong()
           clearQueueLocked()
           aligned = false
+          resetRateWindowLocked()
           state = "RETRYING"
           lock.notifyAll()
         }
@@ -226,6 +251,8 @@ class ReliableRtmpOutput(
           else synchronized(lock) { if (running) lock.wait(wait) }
         } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
       } finally {
+        connectionStartedAtMs = null
+        lastSuccessfulSendAtMs = null
         active?.close()
         if (publisher === active) publisher = null
       }
@@ -303,6 +330,12 @@ class ReliableRtmpOutput(
 
   private fun isRunning() = synchronized(lock) { running }
 
+  private fun resetRateWindowLocked() {
+    rateWindowAt = 0L
+    rateWindowBytes = 0L
+    bytesPerSecond = 0L
+  }
+
   private fun recordSent(message: RtmpMessage) {
     val now = clockMs()
     packetsSent++
@@ -316,6 +349,25 @@ class ReliableRtmpOutput(
         rateWindowBytes = 0
       }
     }
+  }
+
+  internal fun summarizeFailure(error: Throwable, secret: String): String {
+    val parts = mutableListOf<String>()
+    var current: Throwable? = error
+    repeat(3) {
+      val cause = current ?: return@repeat
+      val type = cause.javaClass.simpleName.ifBlank { "Error" }
+      val rawMessage = cause.message?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+      var safeMessage = rawMessage
+      if (secret.isNotBlank()) safeMessage = safeMessage.replace(secret, "[redacted]")
+      safeMessage = safeMessage
+        .replace(Regex("(?i)rtmps?://\\S+"), "[server]")
+        .replace(Regex("[\\p{Cntrl}]"), " ")
+        .take(96)
+      parts += if (safeMessage.isBlank()) type else "$type: $safeMessage"
+      current = cause.cause?.takeIf { it !== cause }
+    }
+    return parts.distinct().joinToString(" <- ").take(180)
   }
 
   private fun notifySnapshot() = runCatching { onSnapshot(snapshot()) }

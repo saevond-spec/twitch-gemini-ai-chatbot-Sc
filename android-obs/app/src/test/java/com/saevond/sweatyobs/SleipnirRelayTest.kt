@@ -15,9 +15,13 @@ class SleipnirRelayTest {
     ).isValid())
   }
 
+  @Test fun cappedRelayStartsAt30FpsAndNeverFallsBackTo60() {
+    assertEquals(listOf(30, 24, 20, 15), SleipnirRelay.constrainedFrameRateTargets())
+  }
+
   @Test fun encoderVideoRateLadderLeavesAudioAndNetworkHeadroom() {
     assertEquals(3_800_000, SleipnirRelay.videoBitrate(1920, 1080, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
-    assertEquals(2_800_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
+    assertEquals(3_200_000, SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_800_000, SleipnirRelay.videoBitrate(960, 540, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(1_400_000, SleipnirRelay.videoBitrate(854, 480, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
     assertEquals(900_000, SleipnirRelay.videoBitrate(640, 360, SleipnirRelay.MAX_VIDEO_BITRATE_BPS))
@@ -26,8 +30,21 @@ class SleipnirRelayTest {
     assertEquals(4_320_800L, SleipnirRelay.projectedIngestBitrate(3_800_000))
     assertEquals(679_200L, SleipnirRelay.MAX_INGEST_BITRATE_BPS - SleipnirRelay.projectedIngestBitrate(3_800_000))
     assertTrue(SleipnirRelay.projectedIngestBitrate(3_800_000) < SleipnirRelay.MAX_INGEST_BITRATE_BPS)
+    assertEquals(3_660_800L, SleipnirRelay.projectedIngestBitrate(3_200_000))
+    assertEquals(1_339_200L, SleipnirRelay.MAX_INGEST_BITRATE_BPS - SleipnirRelay.projectedIngestBitrate(3_200_000))
   }
 
+  @Test fun 720p30TargetMeetsTheYouTubeH264FloorAndFitsTheRelayEstimate() {
+    val target = SleipnirRelay.videoBitrate(1280, 720, SleipnirRelay.MAX_VIDEO_BITRATE_BPS)
+    val projected = SleipnirRelay.projectedIngestBitrate(target)
+    assertEquals(3_200_000, target)
+    assertEquals(3_660_800L, projected)
+    assertEquals(1_339_200L, SleipnirRelay.MAX_INGEST_BITRATE_BPS - projected)
+    assertTrue(target >= SleipnirRelay.YOUTUBE_720P30_MIN_VIDEO_BPS)
+    assertTrue(target < SleipnirRelay.YOUTUBE_720P30_RECOMMENDED_VIDEO_BPS)
+    assertTrue(SleipnirRelay.youtube720p30BitrateNote(1280, 720, 30, target).contains("floor met"))
+    assertTrue(SleipnirRelay.youtube720p30BitrateNote(960, 540, 30, 1_800_000).contains("still needs dashboard verification"))
+  }
   @Test fun relayUsesAdvertisedCappedModesAndOnlyProbesCbrWhenBothAreMissing() {
     assertEquals(
       listOf(SleipnirRelay.RateControlRequest(SleipnirRelay.RateControl.CBR, advertised = false)),
@@ -48,6 +65,12 @@ class SleipnirRelayTest {
       listOf(1920 to 1080, 1280 to 720, 960 to 540, 852 to 480, 640 to 360, 426 to 238),
       SleipnirRelay.candidateSizes(1920, 1080)
     )
+    assertEquals(
+      listOf(1280 to 720, 960 to 540, 852 to 480, 640 to 360, 426 to 238),
+      SleipnirRelay.candidateSizes(1920, 1080, maxLongSide = SleipnirRelay.MAX_VIDEO_LONG_SIDE)
+    )
+    assertTrue(SleipnirRelay.youtube720p30BitrateNote(1280, 720, 30, 3_200_000).contains("floor met"))
+    assertTrue(SleipnirRelay.youtube720p30BitrateNote(1280, 720, 30, 2_800_000).contains("not met"))
     val smallerSource = SleipnirRelay.candidateSizes(1280, 720)
     assertEquals(1280 to 720, smallerSource.first())
     assertTrue(smallerSource.all { (width, height) -> width <= 1280 && height <= 720 })

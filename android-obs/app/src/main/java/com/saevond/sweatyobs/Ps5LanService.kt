@@ -6,10 +6,15 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.LinkProperties
 import android.os.Build
+import android.os.BatteryManager
 import android.net.Uri
 import kotlin.concurrent.thread
 import android.os.Handler
@@ -52,6 +57,8 @@ class Ps5LanService : Service() {
     const val PREF_SESSION_ACTIVE = "session_active"
     const val PREF_SESSION_PUBLIC = "session_public"
     const val PREF_SESSION_PHASE = "session_phase"
+    const val PREF_SESSION_STARTED_AT = "session_started_at"
+    const val PREF_SESSION_PID = "session_pid"
     const val SESSION_PHASE_STARTING = "STARTING"
     const val SESSION_PHASE_ARMED = "ARMED"
     const val SESSION_PHASE_PUBLISH_ACCEPTED = "PUBLISH_ACCEPTED"
@@ -84,6 +91,14 @@ class Ps5LanService : Service() {
   private var startupInProgress = false
   private var streamWakeLock: PowerManager.WakeLock? = null
   private var pendingWifiMismatchSinceMs: Long? = null
+  private var networkCallback: ConnectivityManager.NetworkCallback? = null
+  private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
+  private val networkDiagnosticsLock = Any()
+  private var lastNetworkCapabilitiesSignature: String? = null
+  private var lastLinkPropertiesSignature: String? = null
+  private var lastWifiCapabilitiesSignature: String? = null
+  private var lastWifiLinkPropertiesSignature: String? = null
+  private var lastWifiIpv4SetSignature: String? = null
   private var terminalReason = false
   @Volatile private var publicTest = false
   @Volatile private var outputConnected = false
@@ -238,11 +253,16 @@ class Ps5LanService : Service() {
         .putBoolean(PREF_SESSION_ACTIVE, true)
         .putBoolean(PREF_SESSION_PUBLIC, publicTest)
         .putString(PREF_SESSION_PHASE, SESSION_PHASE_STARTING)
+        .putLong(PREF_SESSION_STARTED_AT, System.currentTimeMillis())
+        .putInt(PREF_SESSION_PID, android.os.Process.myPid())
         .commit()
     } catch (error: RuntimeException) {
       stopWithTerminalStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
       return START_NOT_STICKY
     }
+
+    registerNetworkDiagnostics()
+    if (publicTest) recordPowerSnapshot("stream start")
 
     val ps5Address = intent.getStringExtra(EXTRA_PS5_IPV4)?.trim().orEmpty()
     if (publicTest) {
@@ -420,7 +440,7 @@ class Ps5LanService : Service() {
       if (publicTest && genrePlaylist?.hasTracks() == true) playNextLicensedTrack(manual = true)
       val trackReady = musicTrack?.ready == true
       val powerNote = if (!publicTest) "" else if (streamWakeLock?.isHeld == true)
-        " Screen-off CPU hold is active; battery use and heat may increase."
+        " Screen-off CPU hold is active; battery use and heat may increase, and Android power policy can still interrupt networking."
       else " Keep the screen awake for reliable streaming; CPU wake lock is unavailable."
       setNotification(if (publicTest) "Public stream armed. Awaiting PS5 RTMP on $local:1935. Music " +
         (if (trackReady) "ready to auto-start on RTMPS publish" else "not loaded") + powerNote
@@ -514,16 +534,201 @@ class Ps5LanService : Service() {
     }
   }
 
+  @Suppress("DEPRECATION")
   private fun activeWifiIpv4(): String? {
-    val manager = getSystemService(ConnectivityManager::class.java)
-    val network = manager.activeNetwork ?: return null
-    val capabilities = manager.getNetworkCapabilities(network) ?: return null
-    if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
-    return manager.getLinkProperties(network)?.linkAddresses
-      ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
-      ?.address?.hostAddress
+    val manager = getSystemService(ConnectivityManager::class.java) ?: return null
+    val networks = (listOfNotNull(manager.activeNetwork) + manager.allNetworks).distinct()
+    for (network in networks) {
+      val capabilities = manager.getNetworkCapabilities(network) ?: continue
+      if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
+      val address = manager.getLinkProperties(network)?.linkAddresses
+        ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
+        ?.address?.hostAddress
+      if (address != null) return address
+    }
+    return null
   }
 
+  private fun registerNetworkDiagnostics() {
+    if (networkCallback != null) return
+    val manager = getSystemService(ConnectivityManager::class.java) ?: run {
+      ConnectionTimeline.append(this, "Network diagnostics unavailable · ConnectivityManager missing")
+      return
+    }
+    lastNetworkCapabilitiesSignature = null
+    lastLinkPropertiesSignature = null
+    val callback = object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        appendNetworkEvent("Default network available")
+      }
+
+      override fun onLost(network: Network) {
+        appendNetworkEvent("Default network lost or no longer the default route")
+      }
+
+      override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+        val transports = buildList<String> {
+          if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("Wi-Fi")
+          if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("cellular")
+          if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("Ethernet")
+          if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("VPN")
+        }.ifEmpty { listOf("other") }.joinToString("/")
+        val signature = "$transports · validated=" +
+          capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) +
+          " · metered=" + !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        val changed = synchronized(networkDiagnosticsLock) {
+          if (signature == lastNetworkCapabilitiesSignature) false
+          else {
+            lastNetworkCapabilitiesSignature = signature
+            true
+          }
+        }
+        if (changed) appendNetworkEvent("Default route · $signature")
+      }
+
+      override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+        // Record route/interface changes without copying private IP addresses into the timeline.
+        val addresses = properties.linkAddresses.map { it.address.hostAddress.orEmpty() }.sorted()
+        val comparisonSignature = (properties.interfaceName ?: "unknown") + "|" +
+          addresses.joinToString("|") + "|" + properties.routes.hashCode()
+        val summary = (properties.interfaceName ?: "unknown") +
+          " · addresses=" + properties.linkAddresses.size +
+          " · routes=" + properties.routes.size
+        val changed = synchronized(networkDiagnosticsLock) {
+          if (comparisonSignature == lastLinkPropertiesSignature) false
+          else {
+            lastLinkPropertiesSignature = comparisonSignature
+            true
+          }
+        }
+        if (changed) appendNetworkEvent("Default route properties changed · $summary")
+      }
+
+      override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+        appendNetworkEvent("Android network access blocked=$blocked")
+      }
+    }
+    try {
+      manager.registerDefaultNetworkCallback(callback)
+      networkCallback = callback
+      ConnectionTimeline.append(this, "Internet default-route diagnostics armed")
+    } catch (error: RuntimeException) {
+      ConnectionTimeline.append(this, "Internet route diagnostics unavailable (" + error.javaClass.simpleName + ")")
+    }
+
+    val wifiRequest = NetworkRequest.Builder()
+      .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+      .build()
+    val wifiCallback = object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        appendNetworkEvent("Local Wi-Fi transport available for PS5 LAN")
+      }
+
+      override fun onLost(network: Network) {
+        appendNetworkEvent("Local Wi-Fi transport lost")
+      }
+
+      override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+        val signature = "validated=" + capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) +
+          " · metered=" + !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        val changed = synchronized(networkDiagnosticsLock) {
+          if (signature == lastWifiCapabilitiesSignature) false
+          else {
+            lastWifiCapabilitiesSignature = signature
+            true
+          }
+        }
+        if (changed) appendNetworkEvent("Local Wi-Fi state · $signature")
+      }
+
+      override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+        // Record LAN route changes without copying private IP addresses into the timeline.
+        val ipv4Addresses = properties.linkAddresses.mapNotNull { it.address as? Inet4Address }
+          .mapNotNull { it.hostAddress }.sorted()
+        val comparisonSignature = (properties.interfaceName ?: "unknown") + "|" +
+          properties.linkAddresses.map { it.address.hostAddress.orEmpty() }.sorted().joinToString("|") +
+          "|" + properties.routes.hashCode()
+        val summary = (properties.interfaceName ?: "unknown") +
+          " · addresses=" + properties.linkAddresses.size +
+          " · routes=" + properties.routes.size
+        val (changed, ipv4Changed) = synchronized(networkDiagnosticsLock) {
+          val priorIpv4 = lastWifiIpv4SetSignature
+          val changed = comparisonSignature != lastWifiLinkPropertiesSignature
+          val ipv4Changed = priorIpv4 != null && priorIpv4 != ipv4Addresses.joinToString("|")
+          if (changed) lastWifiLinkPropertiesSignature = comparisonSignature
+          lastWifiIpv4SetSignature = ipv4Addresses.joinToString("|")
+          changed to ipv4Changed
+        }
+        if (changed) appendNetworkEvent("Local Wi-Fi link properties changed · $summary")
+        if (ipv4Changed) appendNetworkEvent("Local Wi-Fi IPv4 address set changed")
+      }
+
+      override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+        appendNetworkEvent("Local Wi-Fi access blocked=$blocked")
+      }
+    }
+    try {
+      manager.registerNetworkCallback(wifiRequest, wifiCallback)
+      wifiNetworkCallback = wifiCallback
+      ConnectionTimeline.append(this, "Local Wi-Fi diagnostics armed for the PS5 LAN route")
+    } catch (error: RuntimeException) {
+      ConnectionTimeline.append(this, "Local Wi-Fi diagnostics unavailable (" + error.javaClass.simpleName + ")")
+    }
+  }
+
+  private fun appendNetworkEvent(message: String) {
+    handler.post {
+      if (!stopping) ConnectionTimeline.append(this@Ps5LanService, "Network state · $message")
+    }
+  }
+
+  private fun unregisterNetworkDiagnostics() {
+    val manager = getSystemService(ConnectivityManager::class.java)
+    networkCallback?.let { runCatching { manager?.unregisterNetworkCallback(it) } }
+    wifiNetworkCallback?.let { runCatching { manager?.unregisterNetworkCallback(it) } }
+    networkCallback = null
+    wifiNetworkCallback = null
+    synchronized(networkDiagnosticsLock) {
+      lastNetworkCapabilitiesSignature = null
+      lastLinkPropertiesSignature = null
+      lastWifiCapabilitiesSignature = null
+      lastWifiLinkPropertiesSignature = null
+      lastWifiIpv4SetSignature = null
+    }
+  }
+
+  private fun recordPowerSnapshot(point: String) {
+    val battery = runCatching {
+      registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }.getOrNull()
+    val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+    val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+    val percent = if (level >= 0 && scale > 0) (level * 100 / scale).coerceIn(0, 100) else null
+    val charging = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+    val power = getSystemService(PowerManager::class.java)
+    val temperatureTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+    val batteryTemperature = if (temperatureTenths >= 0) "${temperatureTenths / 10.0}°C" else "unknown"
+    val thermal = power?.currentThermalStatus?.let(::thermalStatusName) ?: "unknown"
+    ConnectionTimeline.append(
+      this,
+      "Public session power snapshot · point=$point · battery ${percent?.let { "$it%" } ?: "unknown"}" +
+        " · charging=$charging · batteryTemp=$batteryTemperature · thermal=$thermal" +
+        " · screenOn=${power?.isInteractive == true}" +
+        " · batterySaver=${power?.isPowerSaveMode == true}" +
+        " · deviceIdle=${Build.VERSION.SDK_INT >= 23 && power?.isDeviceIdleMode == true}"
+    )
+  }
+
+  private fun thermalStatusName(status: Int): String = when (status) {
+    PowerManager.THERMAL_STATUS_NONE -> "none"
+    PowerManager.THERMAL_STATUS_LIGHT -> "light"
+    PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+    PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+    PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+    PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+    PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+    else -> "unknown($status)"
+  }
   private fun notification(message: String, ongoing: Boolean = true): Notification {
     val immutable = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val openApp = PendingIntent.getActivity(
@@ -592,6 +797,7 @@ class Ps5LanService : Service() {
       decodingTrack = false
       genrePlaylist = null
       handler.removeCallbacks(updateTask)
+      unregisterNetworkDiagnostics()
       receiver?.let { ingest -> closeResource("PS5 receiver") { ingest.stop() } }
       musicBridge?.let { bridge -> closeResource("music bridge") { bridge.stop() } }
       musicBridge = null
@@ -613,6 +819,8 @@ class Ps5LanService : Service() {
       getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
         .putBoolean(PREF_SESSION_ACTIVE, false)
         .remove(PREF_SESSION_PHASE)
+        .remove(PREF_SESSION_STARTED_AT)
+        .remove(PREF_SESSION_PID)
         .commit()
       if (!terminalReason) {
         val stoppedMessage = when {
@@ -702,6 +910,11 @@ class Ps5LanService : Service() {
     val current = outputPublishers.map { it.snapshot() }
     outputConnected = current.any { it.state == "LIVE" }
     outputStatus = withRouteStatus(current.joinToString(" | ") { it.summary() })
+    val retryingOutputs = current.filter { it.state == "RETRYING" }.map { it.label }
+    if (publicTest && retryingOutputs.isNotEmpty()) {
+      val labels = retryingOutputs.distinct().joinToString("/")
+      handler.post { if (!stopping) recordPowerSnapshot("output retry · $labels") }
+    }
     if (outputConnected && musicStartedOnOutput.compareAndSet(false, true)) {
       getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
         .putString(PREF_SESSION_PHASE, SESSION_PHASE_PUBLISH_ACCEPTED)

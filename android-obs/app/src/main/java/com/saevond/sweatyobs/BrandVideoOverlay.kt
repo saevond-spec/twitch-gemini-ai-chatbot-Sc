@@ -221,7 +221,8 @@ internal class BrandVideoOverlay(
         "Sleipnir encoder ready · " + setup.codecName + " · " + outputWidth + "×" + outputHeight +
           "@" + outputFps + " · " + bitrateMode + " · " + (setup.bitrate / 1_000) +
           " kb/s target video · est " + (projected / 1_000) +
-          " kb/s total with AAC/overhead · output peak unverified" +
+          " kb/s total (AAC + assumed 10% overhead) · output peak unverified · " +
+          SleipnirRelay.youtube720p30BitrateNote(outputWidth, outputHeight, setup.fps, setup.bitrate) +
           (if (rotateWholeFrame180) " · whole frame rotated 180°" else "")
       } else {
         mode + " active · " + outputWidth + "×" + outputHeight + " · up to " + outputFps +
@@ -263,7 +264,7 @@ internal class BrandVideoOverlay(
 
   private fun configureHardwareEncoder(sourceWidth: Int, sourceHeight: Int, maxBitrate: Int): EncoderSetup {
     val constrained = maxBitrate < Int.MAX_VALUE
-    val fpsTargets = if (constrained) listOf(30, 24, 20, 15, 60) else listOf(60, 30)
+    val fpsTargets = if (constrained) SleipnirRelay.constrainedFrameRateTargets() else listOf(60, 30)
     val avcEncoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
       runCatching {
         info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
@@ -327,7 +328,8 @@ internal class BrandVideoOverlay(
             modes.filter { it.advertised }
           } else modes
           val sizes = SleipnirRelay.candidateSizes(
-            sourceWidth, sourceHeight, video.widthAlignment, video.heightAlignment
+            sourceWidth, sourceHeight, video.widthAlignment, video.heightAlignment,
+            maxLongSide = if (constrained) SleipnirRelay.MAX_VIDEO_LONG_SIDE else Int.MAX_VALUE
           ).let { if (constrained) it else it.take(2) }
           for ((sizeRank, size) in sizes.withIndex()) {
             val width = size.first
@@ -355,8 +357,8 @@ internal class BrandVideoOverlay(
       }
 
       val rankedCandidates = candidates.sortedWith(
-        compareBy<EncoderCandidate> { if (it.bitrateModeAdvertised) 0 else 1 }
-          .thenBy { it.sizeRank }
+        compareBy<EncoderCandidate> { it.sizeRank }
+          .thenBy { if (it.bitrateModeAdvertised) 0 else 1 }
           .thenBy { if (it.bitrateMode == SleipnirRelay.RateControl.CBR) 0 else 1 }
           .thenBy { it.codecRank }
       )

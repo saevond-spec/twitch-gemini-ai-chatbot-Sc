@@ -7,7 +7,9 @@ internal object SleipnirRelay {
   const val AUDIO_BITRATE_BPS = 128_000
   const val NETWORK_OVERHEAD_PERCENT = 10
   const val MAX_VIDEO_BITRATE_BPS = 3_800_000
-
+  const val MAX_VIDEO_LONG_SIDE = 1_280
+  const val YOUTUBE_720P30_MIN_VIDEO_BPS = 3_000_000
+  const val YOUTUBE_720P30_RECOMMENDED_VIDEO_BPS = 8_000_000
 
   enum class RateControl { CBR, CBR_FD }
   data class RateControlRequest(val mode: RateControl, val advertised: Boolean)
@@ -31,14 +33,17 @@ internal object SleipnirRelay {
    * Returns a descending aspect-preserving size ladder without upscaling.
    * Codec-specific alignment is applied by rounding dimensions down.
    */
+  fun constrainedFrameRateTargets(): List<Int> = listOf(30, 24, 20, 15)
+
   fun candidateSizes(
     sourceWidth: Int,
     sourceHeight: Int,
     widthAlignment: Int = 2,
-    heightAlignment: Int = 2
+    heightAlignment: Int = 2,
+    maxLongSide: Int = Int.MAX_VALUE
   ): List<Pair<Int, Int>> {
     require(sourceWidth > 0 && sourceHeight > 0)
-    require(widthAlignment > 0 && heightAlignment > 0)
+    require(widthAlignment > 0 && heightAlignment > 0 && maxLongSide > 0)
     val limits = if (sourceWidth >= sourceHeight) LANDSCAPE_SIZE_LIMITS
       else LANDSCAPE_SIZE_LIMITS.map { (width, height) -> height to width }
     return limits.mapNotNull { (maxWidth, maxHeight) ->
@@ -49,7 +54,8 @@ internal object SleipnirRelay {
       )
       val width = ((sourceWidth * scale).toInt() / widthAlignment) * widthAlignment
       val height = ((sourceHeight * scale).toInt() / heightAlignment) * heightAlignment
-      if (width <= 0 || height <= 0 || width > sourceWidth || height > sourceHeight) null
+      if (width <= 0 || height <= 0 || width > sourceWidth || height > sourceHeight ||
+        maxOf(width, height) > maxLongSide) null
       else width to height
     }.distinct()
   }
@@ -70,13 +76,24 @@ internal object SleipnirRelay {
     val longSide = maxOf(width, height)
     val relayTarget = when {
       longSide >= 1800 -> MAX_VIDEO_BITRATE_BPS
-      longSide >= 1200 -> 2_800_000
+      longSide >= 1200 -> 3_200_000
       longSide >= 900 -> 1_800_000
       longSide >= 800 -> 1_400_000
       longSide >= 600 -> 900_000
       else -> 500_000
     }
     return minOf(relayTarget, maxBitrate)
+  }
+
+  /** YouTube's 720p30 H.264 bitrate floor is a bitrate check, not proof of platform acceptance. */
+  fun youtube720p30BitrateNote(width: Int, height: Int, fps: Int, videoBps: Int): String {
+    val profileMatches = width >= 1_280 && height >= 720 && fps == 30
+    return when {
+      !profileMatches -> "YouTube downstream profile still needs dashboard verification"
+      videoBps >= YOUTUBE_720P30_MIN_VIDEO_BPS ->
+        "YouTube H.264 720p30 bitrate floor met; 8 Mb/s recommended"
+      else -> "YouTube H.264 720p30 bitrate floor 3 Mb/s not met"
+    }
   }
 
   /** Fits the requested target into the codec range and configured route target. */
