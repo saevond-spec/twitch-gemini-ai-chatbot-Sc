@@ -47,6 +47,7 @@ class MainActivity : Activity() {
   }
   private lateinit var status: TextView
   private lateinit var timelineButton: Button
+  private lateinit var viewerPlaybackButton: Button
   private val statusReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val text = intent?.getStringExtra(Ps5LanService.EXTRA_STATUS_MESSAGE) ?: return
@@ -343,8 +344,13 @@ class MainActivity : Activity() {
       text = "View full connection timeline"
       setOnClickListener { showConnectionTimeline() }
     }
+    viewerPlaybackButton = Button(this).apply {
+      id = R.id.viewer_playback_check
+      text = "Log viewer playback confirmation"
+      setOnClickListener { showViewerPlaybackConfirmation() }
+    }
 
-    listOf(phoneIp, timelineButton, destinations, enableSleipnirRelay, sleipnirServer, saveSleipnirServer,
+    listOf(phoneIp, timelineButton, viewerPlaybackButton, destinations, enableSleipnirRelay, sleipnirServer, saveSleipnirServer,
       sleipnirKey, saveSleipnirKey, sleipnirOutputStatus, sleipnirNote,
       enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, saveYouTubeServer, youtubeKey, saveYouTube, youtubeOutputStatus,
@@ -775,6 +781,65 @@ class MainActivity : Activity() {
     if (!::timelineButton.isInitialized) return
     val count = ConnectionTimeline.count(this)
     timelineButton.text = "View full connection timeline ($count events)"
+  }
+
+  private fun showViewerPlaybackConfirmation() {
+    val viewerDestinations = arrayOf("Twitch", "Sleipnir", "YouTube", "Kick")
+    val destinationPicker = Spinner(this).apply {
+      id = R.id.viewer_playback_destination
+      adapter = ArrayAdapter(
+        this@MainActivity,
+        android.R.layout.simple_spinner_item,
+        viewerDestinations
+      ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+    }
+    val videoVisible = CheckBox(this).apply {
+      id = R.id.viewer_video_visible
+      text = "I can see live video playing in the viewer"
+    }
+    val audioAudible = CheckBox(this).apply {
+      id = R.id.viewer_audio_audible
+      text = "I can hear the stream audio/music in the viewer"
+    }
+    val content = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(32, 12, 32, 0)
+      addView(TextView(this@MainActivity).apply {
+        text = "Check the public viewer/player first. This is a manual confirmation; the encoder cannot detect what viewers hear."
+        textSize = 14f
+        setPadding(0, 0, 0, 12)
+      })
+      addView(TextView(this@MainActivity).apply {
+        text = "Destination"
+        textSize = 14f
+      })
+      addView(destinationPicker)
+      addView(videoVisible)
+      addView(audioAudible)
+    }
+    val dialog = AlertDialog.Builder(this)
+      .setTitle("Confirm viewer playback")
+      .setView(content)
+      .setPositiveButton("Record confirmation", null)
+      .setNegativeButton("Cancel", null)
+      .create()
+    dialog.setOnShowListener {
+      val recordButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+      val updateEnabled = {
+        recordButton.isEnabled = videoVisible.isChecked && audioAudible.isChecked
+      }
+      recordButton.isEnabled = false
+      videoVisible.setOnCheckedChangeListener { _, _ -> updateEnabled() }
+      audioAudible.setOnCheckedChangeListener { _, _ -> updateEnabled() }
+      recordButton.setOnClickListener {
+        val destination = destinationPicker.selectedItem.toString()
+        recordTimelineEvent(
+          "Manual viewer playback verified · \${destination} · video visible · audio/music audible · operator-confirmed"
+        )
+        dialog.dismiss()
+      }
+    }
+    dialog.show()
   }
 
   private fun showConnectionTimeline() {
