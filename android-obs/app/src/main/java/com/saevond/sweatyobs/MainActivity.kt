@@ -285,7 +285,7 @@ class MainActivity : Activity() {
       setOnClickListener { showConnectionTimeline() }
     }
 
-    listOf(phoneIp, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
+    listOf(phoneIp, timelineButton, destinations, enableTwitch, twitchStatus, twitchKey, saveTwitchKey,
       enableYouTube, youtubeServer, youtubeKey, saveYouTube,
       enableKick, kickServer, kickKey, saveKick, enableBrandOverlay, reconnectOutputs, videoModeNote,
       metadataTitle, metadataGame, metadataKeywords, copyMetadata,
@@ -296,10 +296,10 @@ class MainActivity : Activity() {
       chooseMusic, musicNote, autoplayMusic, gameLabel, gameVolume, musicLabel, musicVolume,
       volumeHint, muteMusic, resetMix, playMusic, pauseMusic, botToken, saveBotToken, generateBotToken,
       testMusicBridge, bridgeStatus, openTwitchDashboard,
-      startLan, goLive, stopLan, timelineButton, status)
+      startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
-    ConnectionTimeline.append(this, "App opened · SweatyClanker OBS Lite 0.1.8-dev.6")
+    recordTimelineEvent("App opened · SweatyClanker OBS Lite 0.1.8-dev.6")
     refreshTimelineButton()
 
     stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -571,7 +571,7 @@ class MainActivity : Activity() {
     }
 
     goLive.setOnClickListener {
-      ConnectionTimeline.append(this, "Public multistream requested")
+      recordTimelineEvent("Public multistream requested")
       status.text = "Public multistream requested. Checking selected platforms, phone, and PS5 address…"
       val ip = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(ip)) {
@@ -609,7 +609,7 @@ class MainActivity : Activity() {
     }
 
     startLan.setOnClickListener {
-      ConnectionTimeline.append(this, "PS5 receiver start requested")
+      recordTimelineEvent("PS5 receiver start requested")
       status.text = "Start button tapped — checking PS5 address…"
       val address = ps5Ip.text.toString().trim()
       if (!Ps5LanService.privateIpv4(address)) {
@@ -630,10 +630,15 @@ class MainActivity : Activity() {
     }
 
     stopLan.setOnClickListener {
-      ConnectionTimeline.append(this, "Stop requested for receiver and all outputs")
+      recordTimelineEvent("Stop requested for receiver and all outputs")
       stopService(Intent(this, Ps5LanService::class.java))
       status.text = "PS5 receiver and all streaming outputs stopped."
     }
+  }
+
+  private fun recordTimelineEvent(message: String) {
+    ConnectionTimeline.append(this, message)
+    refreshTimelineButton()
   }
 
   private fun refreshTimelineButton() {
