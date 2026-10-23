@@ -82,39 +82,41 @@ class NetworkStartSmokeTest {
     val outputPrefs = context.getSharedPreferences("encoder_outputs", 0)
     val secrets = SecretStore(context)
     val syntheticKey = "sandbox-sleipnir-key-1234"
-    // Clear the live view before changing the preference; ActivityScenario recreation restores view state.
-    activityRule.scenario.onActivity { activity ->
-      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+
+    try {
+      // Clear the live view before changing the preference; ActivityScenario recreation restores view state.
+      activityRule.scenario.onActivity { activity ->
+        activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+      }
+      outputPrefs.edit().remove("sleipnir_server").putBoolean("sleipnir_enabled", false).commit()
+      activityRule.scenario.recreate()
+
+      onView(withId(R.id.sleipnir_server)).perform(scrollTo())
+        .check(matches(withText("rtmps://ingest.sleipnir.tv:1936/live")))
+      onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
+      onView(withId(R.id.output_upload_budget)).perform(scrollTo())
+        .check(matches(allOf(
+          withText(containsString("one 720p30 RTMPS upload")),
+          withText(containsString("up to the 3.8 Mbps cap")),
+          withText(containsString("3.66–4.32 Mbps"))
+        )))
+      onView(withId(R.id.sleipnir_stream_key)).perform(scrollTo(), replaceText(syntheticKey), closeSoftKeyboard())
+      onView(withId(R.id.save_sleipnir_key)).perform(scrollTo(), click())
+      onView(withId(R.id.sleipnir_output_status)).perform(scrollTo())
+        .check(matches(withText(containsString("key saved securely"))))
+
+      val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
+      assertNotEquals(syntheticKey, encryptedPrefs.getString("sleipnir_key", null))
+      assertEquals(syntheticKey, secrets.get("sleipnir_key"))
+      assertTrue(outputPrefs.getBoolean("sleipnir_enabled", false))
+    } finally {
+      // Keep later emulator tests in direct-output mode even if an assertion fails.
+      activityRule.scenario.onActivity { activity ->
+        activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
+      }
+      outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
     }
-    outputPrefs.edit().remove("sleipnir_server").putBoolean("sleipnir_enabled", false).commit()
-    activityRule.scenario.recreate()
-
-    onView(withId(R.id.sleipnir_server)).perform(scrollTo())
-      .check(matches(withText("rtmps://ingest.sleipnir.tv:1936/live")))
-    onView(withId(R.id.sleipnir_enabled)).perform(scrollTo(), click())
-    onView(withId(R.id.output_upload_budget)).perform(scrollTo())
-      .check(matches(allOf(
-        withText(containsString("one 720p30 RTMPS upload")),
-        withText(containsString("up to the 3.8 Mbps cap")),
-        withText(containsString("3.66–4.32 Mbps"))
-      )))
-    onView(withId(R.id.sleipnir_stream_key)).perform(scrollTo(), replaceText(syntheticKey), closeSoftKeyboard())
-    onView(withId(R.id.save_sleipnir_key)).perform(scrollTo(), click())
-    onView(withId(R.id.sleipnir_output_status)).perform(scrollTo())
-      .check(matches(withText(containsString("key saved securely"))))
-
-    val encryptedPrefs = context.getSharedPreferences("secure_encoder_secrets", 0)
-    assertNotEquals(syntheticKey, encryptedPrefs.getString("sleipnir_key", null))
-    assertEquals(syntheticKey, secrets.get("sleipnir_key"))
-    assertTrue(outputPrefs.getBoolean("sleipnir_enabled", false))
-
-    // Keep the disposable emulator's following tests in direct-output mode.
-    activityRule.scenario.onActivity { activity ->
-      activity.findViewById<android.widget.CheckBox>(R.id.sleipnir_enabled).isChecked = false
-    }
-    outputPrefs.edit().putBoolean("sleipnir_enabled", false).commit()
   }
-
   @Test fun sleipnirUpsideDownCorrectionDefaultsOnAndCanBeDisabled() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val prefs = context.getSharedPreferences("encoder_outputs", 0)
