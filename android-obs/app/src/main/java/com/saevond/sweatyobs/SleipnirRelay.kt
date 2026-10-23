@@ -1,12 +1,27 @@
 package com.saevond.sweatyobs
 
-/** Sleipnir's RTMPS route and conservative free-tier encoder budget. */
+/** Sleipnir's RTMPS route and conservative free-tier CBR target budget. */
 internal object SleipnirRelay {
   const val DEFAULT_INGEST_URL = "rtmps://ingest.sleipnir.tv:1936/live"
   const val MAX_INGEST_BITRATE_BPS = 5_000_000
   const val AUDIO_BITRATE_BPS = 128_000
   const val NETWORK_OVERHEAD_PERCENT = 10
-  const val MAX_VIDEO_BITRATE_BPS = 4_200_000
+  const val MAX_VIDEO_BITRATE_BPS = 3_800_000
+
+
+  enum class RateControl { CBR, CBR_FD }
+  data class RateControlRequest(val mode: RateControl, val advertised: Boolean)
+
+  /**
+   * Prefer rate-control modes the phone advertises. If it reports neither capped
+   * mode, probe CBR once as an OEM compatibility path. VBR is never a Sleipnir fallback.
+   */
+  fun cappedRateControlRequests(cbrSupported: Boolean, cbrFdSupported: Boolean): List<RateControlRequest> =
+    buildList {
+      if (cbrSupported) add(RateControlRequest(RateControl.CBR, advertised = true))
+      if (cbrFdSupported) add(RateControlRequest(RateControl.CBR_FD, advertised = true))
+      if (isEmpty()) add(RateControlRequest(RateControl.CBR, advertised = false))
+    }
 
   private val LANDSCAPE_SIZE_LIMITS = listOf(
     1920 to 1080, 1280 to 720, 960 to 540, 854 to 480, 640 to 360, 426 to 240
@@ -64,7 +79,7 @@ internal object SleipnirRelay {
     return minOf(relayTarget, maxBitrate)
   }
 
-  /** Fits a target into codec capabilities without crossing the route's hard cap. */
+  /** Fits the requested target into the codec range and configured route target. */
   fun fitCodecBitrate(
     targetBps: Int,
     supportedMinBps: Int,
