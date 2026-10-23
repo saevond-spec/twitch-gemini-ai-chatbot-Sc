@@ -40,6 +40,7 @@ internal class BrandVideoOverlay(
   private val maxVideoBitrate: Int = Int.MAX_VALUE
 ) : Closeable {
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
+  private class StageFailure(val operation: String, cause: Exception) : Exception(cause.message, cause)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
   private val handler = Handler(worker.looper)
   private val lock = Any()
@@ -154,17 +155,23 @@ internal class BrandVideoOverlay(
   }
 
   private fun configure(message: RtmpMessage) {
-    releaseCodecs()
-    val parsed = AvcFlv.parseConfig(message)
-    val decoderInfo = findDecoder(parsed.width, parsed.height)
-    val profile = chooseEncoderProfile(parsed.width, parsed.height, maxVideoBitrate)
+    atStage("release previous codec state") { releaseCodecs() }
+    val parsed = atStage("parse input H.264 configuration") { AvcFlv.parseConfig(message) }
+    val decoderInfo = atStage("select hardware H.264 decoder") { findDecoder(parsed.width, parsed.height) }
+    val profile = atStage("select bitrate-limited H.264 profile") {
+      chooseEncoderProfile(parsed.width, parsed.height, maxVideoBitrate)
+    }
     outputWidth = profile.first
     outputHeight = profile.second
     outputFps = profile.third
     val outputBitrate = SleipnirRelay.videoBitrate(outputWidth, outputHeight, maxVideoBitrate)
 
-    val encoderInfo = findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
-    val videoEncoder = MediaCodec.createByCodecName(encoderInfo.name)
+    val encoderInfo = atStage("select hardware H.264 encoder") {
+      findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
+    }
+    val videoEncoder = atStage("create encoder ${encoderInfo.name}") {
+      MediaCodec.createByCodecName(encoderInfo.name)
+    }
     var createdInputSurface: Surface? = null
     var createdCompositor: GlBrandCompositor? = null
     try {
@@ -176,30 +183,43 @@ internal class BrandVideoOverlay(
         setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
         if (android.os.Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
       }
-      videoEncoder.configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-      val encoderSurface = videoEncoder.createInputSurface()
+      atStage("configure encoder ${encoderInfo.name}") {
+        videoEncoder.configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+      }
+      val encoderSurface = atStage("create encoder input Surface ${encoderInfo.name}") {
+        videoEncoder.createInputSurface()
+      }
       createdInputSurface = encoderSurface
       val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight, showBrandOverlay)
       val gl = try {
-        GlBrandCompositor(
-          encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
-          overlayCanvas, handler,
-          onFrame = { drainEncoder() },
-          onFailure = { error -> fail(processingFailure("GLES compositor", error)) }
-        )
+        atStage("initialize GLES compositor") {
+          GlBrandCompositor(
+            encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
+            overlayCanvas, handler,
+            onFrame = {
+              try { drainEncoder() }
+              catch (error: Exception) { fail(processingFailure("encoder output after GLES render", error)) }
+            },
+            onFailure = { error -> fail(processingFailure("GLES compositor render", error)) }
+          )
+        }
       } catch (error: Exception) {
         overlayCanvas.close()
         throw error
       }
       createdCompositor = gl
-      val videoDecoder = MediaCodec.createByCodecName(decoderInfo.name)
+      val videoDecoder = atStage("create decoder ${decoderInfo.name}") {
+        MediaCodec.createByCodecName(decoderInfo.name)
+      }
       try {
         val decodeFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, parsed.width, parsed.height)
         decodeFormat.setByteBuffer("csd-0", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.sps))
         decodeFormat.setByteBuffer("csd-1", ByteBuffer.wrap(byteArrayOf(0, 0, 0, 1) + parsed.pps))
-        videoDecoder.configure(decodeFormat, gl.decoderSurface, null, 0)
-        videoEncoder.start()
-        videoDecoder.start()
+        atStage("configure decoder ${decoderInfo.name}") {
+          videoDecoder.configure(decodeFormat, gl.decoderSurface, null, 0)
+        }
+        atStage("start encoder ${encoderInfo.name}") { videoEncoder.start() }
+        atStage("start decoder ${decoderInfo.name}") { videoDecoder.start() }
       } catch (error: Exception) {
         runCatching { videoDecoder.stop() }
         videoDecoder.release()
@@ -372,16 +392,26 @@ internal class BrandVideoOverlay(
     return if ((value and 0x800000) != 0) (value - 0x1000000).toLong() else value.toLong()
   }
 
+  private inline fun <T> atStage(operation: String, action: () -> T): T = try {
+    action()
+  } catch (error: Exception) {
+    if (error is StageFailure) throw error
+    throw StageFailure(operation, error)
+  }
+
   private fun processingFailure(stage: String, error: Exception): String {
-    val detail = error.message?.lineSequence()?.firstOrNull()?.take(180).orEmpty()
-    val codecError = (error as? MediaCodec.CodecException)?.let {
+    val stageFailure = error as? StageFailure
+    val root = stageFailure?.cause as? Exception ?: error
+    val operation = stageFailure?.operation ?: stage
+    val detail = root.message?.lineSequence()?.firstOrNull()?.take(180).orEmpty()
+    val codecError = (root as? MediaCodec.CodecException)?.let {
       " · diagnostic ${it.diagnosticInfo} · recoverable ${it.isRecoverable} · transient ${it.isTransient}"
     }.orEmpty()
     val codecs = listOfNotNull(
       runCatching { decoder?.name?.let { "decoder=$it" } }.getOrNull(),
       runCatching { encoder?.name?.let { "encoder=$it" } }.getOrNull()
     ).joinToString(" ")
-    return "Video processing failed at $stage (${error.javaClass.simpleName})" +
+    return "Video processing failed at $operation (${root.javaClass.simpleName})" +
       (if (detail.isBlank()) "" else ": $detail") +
       codecError +
       (if (codecs.isBlank()) "" else " · $codecs")
