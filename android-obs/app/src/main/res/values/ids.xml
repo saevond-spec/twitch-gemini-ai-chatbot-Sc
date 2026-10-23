@@ -2,6 +2,10 @@
 <resources>
   <item name="connection_status" type="id"/>
   <item name="connection_timeline" type="id"/>
+  <item name="viewer_playback_check" type="id"/>
+  <item name="viewer_playback_destination" type="id"/>
+  <item name="viewer_video_visible" type="id"/>
+  <item name="viewer_audio_audible" type="id"/>
   <item name="ps5_ip_address" type="id"/>
   <item name="start_network_test" type="id"/>
   <item name="stop_network_test" type="id"/>
