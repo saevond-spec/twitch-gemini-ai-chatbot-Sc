@@ -10,14 +10,14 @@ android {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
     targetSdk = 35
-    versionCode = 23
-    versionName = "0.1.8-dev.14-sleipnir"
+    versionCode = 24
+    versionName = "0.1.8-dev.15-sleipnir"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
   buildTypes {
     getByName("debug") {
       // Keep this debug build separate from earlier beta installs and their signing keys.
-      applicationIdSuffix = ".dev14sleipnir"
+      applicationIdSuffix = ".dev15sleipnir"
     }
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
