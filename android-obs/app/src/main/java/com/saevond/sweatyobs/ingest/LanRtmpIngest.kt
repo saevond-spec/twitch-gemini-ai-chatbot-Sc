@@ -97,8 +97,8 @@ class LanRtmpIngest(
     socket.soTimeout = 12000
     val input = socket.getInputStream()
     val output = socket.getOutputStream()
-    rtmpHandshake(input, output)
-    val reader = RtmpChunkReader(input)
+    rtmpHandshake(input, output, readTimeoutMs = { socket.soTimeout = it })
+    val reader = RtmpChunkReader(input, readTimeoutMs = { socket.soTimeout = it })
     var conn = false
     var created = false
     var published = false
