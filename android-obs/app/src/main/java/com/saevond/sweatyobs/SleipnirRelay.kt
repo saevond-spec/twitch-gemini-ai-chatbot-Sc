@@ -5,8 +5,8 @@ internal object SleipnirRelay {
   const val DEFAULT_INGEST_URL = "rtmps://ingest.sleipnir.tv:1936/live"
   const val MAX_INGEST_BITRATE_BPS = 5_000_000
   const val AUDIO_BITRATE_BPS = 128_000
-  const val NETWORK_OVERHEAD_PERCENT = 5
-  const val MAX_VIDEO_BITRATE_BPS = 4_500_000
+  const val NETWORK_OVERHEAD_PERCENT = 10
+  const val MAX_VIDEO_BITRATE_BPS = 4_200_000
 
   private val LANDSCAPE_SIZE_LIMITS = listOf(
     1920 to 1080, 1280 to 720, 960 to 540, 854 to 480, 640 to 360, 426 to 240
