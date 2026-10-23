@@ -1,9 +1,12 @@
 package com.saevond.sweatyobs.ingest
 
+import java.io.BufferedOutputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URI
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -12,6 +15,36 @@ import javax.net.ssl.SSLSocketFactory
 data class RtmpDestination(val id: String, val label: String, val serverUrl: String, val key: String) {
   fun isValid(): Boolean = id in setOf("twitch", "youtube", "kick", "sleipnir") &&
     label.length in 1..40 && RtmpsPublisher.endpointValid(serverUrl) && RtmpsPublisher.keyValid(key)
+}
+
+
+/**
+ * Tries each DNS answer that has already passed the public-address policy, sharing
+ * one connection deadline across attempts. TLS still uses the endpoint hostname.
+ */
+internal fun <T> connectFirstWorkingAddress(
+  addresses: List<InetAddress>,
+  timeoutMs: Int,
+  nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
+  connect: (InetAddress, Int) -> T
+): T {
+  require(addresses.isNotEmpty())
+  require(timeoutMs > 0)
+  val deadline = nowMs() + timeoutMs
+  var lastError: IOException? = null
+  for (index in addresses.indices) {
+    val remainingMs = deadline - nowMs()
+    if (remainingMs <= 0L) break
+    val remainingAddresses = addresses.size - index
+    val attemptTimeout = (remainingMs / remainingAddresses).coerceAtLeast(1L)
+      .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    try {
+      return connect(addresses[index], attemptTimeout)
+    } catch (error: IOException) {
+      lastError = error
+    }
+  }
+  throw lastError ?: SocketTimeoutException("No RTMPS address connected before the shared deadline")
 }
 
 /** RTMPS publisher shared by Twitch, YouTube, and Kick. */
@@ -41,6 +74,7 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     }
 
     private data class Endpoint(val host: String, val port: Int, val path: String, val tcUrl: String)
+    private const val MEDIA_WRITE_BUFFER_BYTES = 32 * 1024
   }
 
   private val endpoint = parseEndpoint(serverUrl) ?: throw IllegalArgumentException("Use the RTMPS server URL from the streaming platform")
@@ -57,11 +91,21 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
     check(destinations.isNotEmpty() && destinations.all(::isPublicDestination)) {
       "Streaming server DNS points to a private address"
     }
-    val plain = Socket()
+    val plain = connectFirstWorkingAddress(destinations, 10_000) { address, timeout ->
+      val attempt = Socket()
+      try {
+        attempt.tcpNoDelay = true
+        attempt.keepAlive = true
+        attempt.connect(InetSocketAddress(address, endpoint.port), timeout)
+        attempt
+      } catch (error: IOException) {
+        runCatching { attempt.close() }
+        throw error
+      }
+    }
     try {
-      plain.tcpNoDelay = true
-      plain.keepAlive = true
-      plain.connect(InetSocketAddress(destinations.first(), endpoint.port), 10000)
+      // Preserve the RTMP wire format but coalesce its many tiny writes before
+      // they enter the TLS provider. Flush at message/command boundaries.
       val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory)
         .createSocket(plain, endpoint.host, endpoint.port, true) as SSLSocket
       socket = tls
@@ -69,18 +113,20 @@ class RtmpsPublisher(serverUrl: String, private val key: String) : MediaPublishe
       tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
       tls.startHandshake()
       val input = tls.inputStream
-      val out = tls.outputStream
+      val out = BufferedOutputStream(tls.outputStream, MEDIA_WRITE_BUFFER_BYTES)
       val c1 = ByteArray(1536)
       java.security.SecureRandom().nextBytes(c1)
       out.write(3)
       out.write(c1)
       out.flush()
-      require(input.read() == 3) { "Streaming server rejected RTMP handshake" }
-      val s1 = input.readRequired(1536)
-      input.readRequired(1536)
+      require(input.readRequiredWithin(1, 12000, { tls.soTimeout = it })[0].toInt() == 3) {
+        "Streaming server rejected RTMP handshake"
+      }
+      val s1 = input.readRequiredWithin(1536, 12000, { tls.soTimeout = it })
+      input.readRequiredWithin(1536, 12000, { tls.soTimeout = it })
       out.write(s1)
       out.flush()
-      val reader = RtmpChunkReader(input)
+      val reader = RtmpChunkReader(input, readTimeoutMs = { tls.soTimeout = it })
       val app = endpoint.path.removePrefix("/")
       val connect = amfString("connect") + amfNumber(1.0) +
         amfObject(
@@ -201,4 +247,7 @@ fun sendRtmpMedia(output: OutputStream, media: RtmpMessage) {
     output.write(media.data, offset, amount)
     offset += amount
   }
+  // A BufferedOutputStream at the TLS boundary turns the RTMP header/payload
+  // sequence into a small number of encrypted writes without delaying a frame.
+  output.flush()
 }
