@@ -361,7 +361,7 @@ class MainActivity : Activity() {
       startLan, goLive, stopLan, status)
       .forEach { layout.addView(it) }
     setContentView(ScrollView(this).apply { addView(layout) })
-    recordTimelineEvent("App opened · SweatyClanker OBS Lite 0.1.8-dev.7-timeline")
+    recordTimelineEvent("App opened · SweatyClanker OBS Lite 0.1.8-dev.8-timeline")
     refreshTimelineButton()
 
     stationPicker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
