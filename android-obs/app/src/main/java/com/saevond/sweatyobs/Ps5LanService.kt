@@ -378,13 +378,6 @@ class Ps5LanService : Service() {
           handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
         }.getOrNull()
       } else null
-      if (sleipnirRelayRequested && brandOverlay == null) {
-        outputPublishers.forEach { it.close() }
-        outputPublishers.clear()
-        publishUiStatus("Sleipnir needs a capped H.264 re-encode, but the encoder could not start. Select Low-load 540p or use a direct RTMPS route.")
-        stopSelf()
-        return START_NOT_STICKY
-      }
       startTwitchChatOverlay(outputPrefs)
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
@@ -404,6 +397,17 @@ class Ps5LanService : Service() {
         EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.PERMISSIONS,
         EncoderDiagnosticError.SERVICE_START_DENIED)
       publishUiStatus("Android rejected receiver start (" + error.javaClass.simpleName + "). Check Android app permissions.")
+      stopSelf()
+      return START_NOT_STICKY
+    }
+
+    if (publicTest && sleipnirRelayRequested && brandOverlay == null) {
+      val message = "Sleipnir needs a capped H.264 re-encode, but the encoder could not start. Select Low-load 540p or use a direct RTMPS route."
+      outputPublishers.forEach { it.close() }
+      outputPublishers.clear()
+      terminalReason = true
+      setNotification(message)
+      publishUiStatus(message)
       stopSelf()
       return START_NOT_STICKY
     }

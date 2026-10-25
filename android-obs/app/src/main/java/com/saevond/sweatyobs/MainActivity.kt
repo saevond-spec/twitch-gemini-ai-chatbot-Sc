@@ -1332,7 +1332,7 @@ class MainActivity : Activity() {
           action = Ps5LanService.ACTION_START_TWITCH
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
-        status.text = "Armed for $routeLabel · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media. RTMPS outputs retry independently."
+        status.text = "Armed for $routeLabel · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media. Each destination reconnects independently."
       } catch (error: RuntimeException) {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
           EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK,
