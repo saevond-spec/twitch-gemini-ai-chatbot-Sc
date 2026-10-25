@@ -14,6 +14,13 @@
   <item name="start_network_test" type="id"/>
   <item name="stop_network_test" type="id"/>
   <item name="output_upload_budget" type="id"/>
+  <item name="sleipnir_enabled" type="id"/>
+  <item name="sleipnir_rotate_180" type="id"/>
+  <item name="sleipnir_server" type="id"/>
+  <item name="save_sleipnir_server" type="id"/>
+  <item name="sleipnir_stream_key" type="id"/>
+  <item name="save_sleipnir_key" type="id"/>
+  <item name="sleipnir_output_status" type="id"/>
   <item name="open_youtube_dashboard" type="id"/>
   <item name="open_kick_dashboard" type="id"/>
   <item name="youtube_server" type="id"/>
