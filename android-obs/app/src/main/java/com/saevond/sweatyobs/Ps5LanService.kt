@@ -1,5 +1,6 @@
 package com.saevond.sweatyobs
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,7 +10,9 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.Debug
 import android.os.SystemClock
+import android.util.Log
 import android.net.Uri
 import kotlin.concurrent.thread
 import android.os.Handler
@@ -134,6 +137,12 @@ class Ps5LanService : Service() {
   private var liveGate: MediaRelayGate? = null
   @Volatile private var brandOverlay: BrandVideoOverlay? = null
   @Volatile private var brandOverlayRequested = false
+  @Volatile private var transcoderActive = false
+  @Volatile private var sleipnirRelayRequested = false
+  @Volatile private var rotateVideo180 = false
+  @Volatile private var selectedEncodingProfile = OverlayEncodingProfile.STABLE_720P
+  private var nextMemorySampleAtMs = 0L
+  private var lastLowMemoryNoticeAtMs = 0L
   @Volatile private var twitchChatClient: TwitchChatClient? = null
   @Volatile private var twitchChatGeneration = 0
   @Volatile private var sourceVideoConfig: RtmpMessage? = null
@@ -154,6 +163,7 @@ class Ps5LanService : Service() {
       if (stopping) return
       val ingest = receiver ?: return
       val safety = phoneSafety.assess()
+      val lowSystemMemory = sampleMemoryPressure()
       if (safety.level != lastDiagnosticSafetyLevel) {
         lastDiagnosticSafetyLevel = safety.level
         when (safety.level) {
@@ -203,7 +213,12 @@ class Ps5LanService : Service() {
       else if (ingest.lastFailure != null)
         "PS5 session ended (${ingest.lastFailure}); video ${ingest.videoPackets}, audio ${ingest.audioPackets}. Check DNS and broadcast."
       else "Waiting for PS5 on ${wifiAddress}:1935 · connections ${ingest.tcpConnections}, video ${ingest.videoPackets}, audio ${ingest.audioPackets}"
-      val display = if (safety.level == SafetyLevel.WARN) "Warning: " + safety.message else summary
+      val display = when {
+        safety.level == SafetyLevel.WARN -> "Warning: " + safety.message
+        lowSystemMemory && sleipnirRelayRequested && selectedEncodingProfile != OverlayEncodingProfile.LOW_LOAD_540P ->
+          "Android reports low system memory. Current Sleipnir encode may be interrupted; stop and restart with Low-load 540p. · $summary"
+        else -> summary
+      }
       if (display != report) setNotification(display)
       reportStateTransitions(ingest)
       maybeSubmitRemoteDiagnostics(ingest)
@@ -331,14 +346,18 @@ class Ps5LanService : Service() {
       sourceVideoConfig = null
       val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
       brandOverlayRequested = outputPrefs.getBoolean("brand_overlay", true)
-      val overlayProfile = OverlayEncodingProfile.fromPreference(outputPrefs.getString("overlay_profile", "stable_720"))
+      sleipnirRelayRequested = outputPrefs.getBoolean("sleipnir_enabled", false)
+      rotateVideo180 = sleipnirRelayRequested && outputPrefs.getBoolean("sleipnir_rotate_180", false)
+      selectedEncodingProfile = OverlayEncodingProfile.fromPreference(outputPrefs.getString("overlay_profile", "stable_720"))
+      val overlayProfile = if (sleipnirRelayRequested) selectedEncodingProfile.forSleipnir() else selectedEncodingProfile
+      transcoderActive = brandOverlayRequested || sleipnirRelayRequested
       brandOverlay?.close()
-      brandOverlay = if (brandOverlayRequested) {
+      brandOverlay = if (transcoderActive) {
         runCatching {
           BrandVideoOverlay(
             onOutput = { message -> outputPublishers.forEach { it.offer(message) } },
             onStatus = { message ->
-              if (message.startsWith("@saevond overlay active · ")) EncoderDiagnostics.record(this,
+              if (message.startsWith("@saevond overlay active · ") || message.startsWith("Sleipnir encoder ready · ")) EncoderDiagnostics.record(this,
                 EncoderDiagnosticEventName.OVERLAY_READY, EncoderDiagnosticResult.COMPLETED,
                 EncoderDiagnosticTarget.OVERLAY)
               handler.post { if (!stopping) setNotification(message) }
@@ -348,7 +367,9 @@ class Ps5LanService : Service() {
                 EncoderDiagnosticResult.FAILED, EncoderDiagnosticTarget.OVERLAY, EncoderDiagnosticError.MEDIA_CODEC)
               handler.post { if (!stopping) disableBrandOverlay(message) }
             },
-            encodingProfile = overlayProfile)
+            encodingProfile = overlayProfile,
+            showBrandOverlay = brandOverlayRequested,
+            rotateVideo180 = rotateVideo180)
         }.onFailure { error ->
           brandOverlayRequested = false
           EncoderDiagnostics.record(this, EncoderDiagnosticEventName.OVERLAY_FALLBACK,
@@ -357,6 +378,13 @@ class Ps5LanService : Service() {
           handler.post { if (!stopping) setNotification("@saevond overlay unavailable (${error.javaClass.simpleName}); using original PS5 video.") }
         }.getOrNull()
       } else null
+      if (sleipnirRelayRequested && brandOverlay == null) {
+        outputPublishers.forEach { it.close() }
+        outputPublishers.clear()
+        publishUiStatus("Sleipnir needs a capped H.264 re-encode, but the encoder could not start. Select Low-load 540p or use a direct RTMPS route.")
+        stopSelf()
+        return START_NOT_STICKY
+      }
       startTwitchChatOverlay(outputPrefs)
       musicTrack = MusicTrackLooper()
       genrePlaylist = MusicGenreSettings(this).playlist()
@@ -495,12 +523,16 @@ class Ps5LanService : Service() {
                   when {
                     ReliableRtmpOutput.isAvcConfig(media) -> {
                       sourceVideoConfig = media.copy(data = media.data.copyOf())
-                      mediaPhase = "overlay_config"
-                      brandOverlay?.setConfiguration(media)
-                      mediaPhase = "output_queue"
-                      outputPublishers.forEach { it.offer(media) }
+                      if (transcoderActive) {
+                        mediaPhase = "overlay_config"
+                        brandOverlay?.setConfiguration(media)
+                      }
+                      if (OutputRouteSelector.shouldForwardSourceAvcConfig(transcoderActive)) {
+                        mediaPhase = "output_queue"
+                        outputPublishers.forEach { it.offer(media) }
+                      }
                     }
-                    media.type == 9 && brandOverlayRequested && brandOverlay != null -> {
+                    media.type == 9 && transcoderActive && brandOverlay != null -> {
                       mediaPhase = "overlay_frame"
                       brandOverlay?.offer(media)
                     }
@@ -558,8 +590,10 @@ class Ps5LanService : Service() {
       val selectedPlatforms = outputPublishers.joinToString(" + ") { it.snapshot().label }
       val overlayStatus = when {
         !isPublic -> "diagnostic only; no overlay"
-        !brandOverlayRequested -> "original-video pass-through"
+        !transcoderActive -> "original-video pass-through"
+        brandOverlay == null && sleipnirRelayRequested -> "Sleipnir capped re-encode unavailable"
         brandOverlay == null -> "overlay unavailable; original-video pass-through"
+        !brandOverlayRequested && sleipnirRelayRequested -> "Sleipnir capped re-encode (HUD off)"
         else -> "@saevond overlay starting"
       }
       setNotification(if (isPublic) "Public stream armed · $selectedPlatforms · $overlayStatus · waiting for PS5 RTMP on $local:1935. Music " +
@@ -742,7 +776,7 @@ class Ps5LanService : Service() {
   private fun selectedDestinations(): List<RtmpDestination> {
     val prefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
     val secrets = SecretStore(this)
-    return buildList {
+    val direct = buildList {
       if (prefs.getBoolean("twitch_enabled", false)) {
         add(RtmpDestination("twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
       }
@@ -753,6 +787,12 @@ class Ps5LanService : Service() {
         add(RtmpDestination("kick", "Kick", prefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
     }
+    return OutputRouteSelector.select(
+      prefs.getBoolean("sleipnir_enabled", false),
+      prefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL).orEmpty(),
+      secrets.get("sleipnir_key"),
+      direct
+    )
   }
 
   private fun onOutputSnapshot() {
@@ -776,7 +816,19 @@ class Ps5LanService : Service() {
   }
 
   private fun disableBrandOverlay(reason: String) {
+    if (sleipnirRelayRequested) {
+      stopTwitchChatOverlay()
+      brandOverlay?.close()
+      brandOverlay = null
+      outputPublishers.forEach { it.close() }
+      outputPublishers.clear()
+      terminalReason = true
+      setNotification("$reason · Sleipnir relay stopped because its capped re-encode failed. Select Low-load 540p and restart.")
+      stopSelf()
+      return
+    }
     brandOverlayRequested = false
+    transcoderActive = false
     stopTwitchChatOverlay()
     brandOverlay?.close()
     brandOverlay = null
@@ -971,6 +1023,29 @@ class Ps5LanService : Service() {
     "twitch" -> EncoderDiagnosticTarget.TWITCH
     "youtube" -> EncoderDiagnosticTarget.YOUTUBE
     "kick" -> EncoderDiagnosticTarget.KICK
+    "sleipnir" -> EncoderDiagnosticTarget.MULTIPLE
     else -> EncoderDiagnosticTarget.MULTIPLE
+  }
+
+  private fun sampleMemoryPressure(): Boolean {
+    if (!publicTest) return false
+    val now = SystemClock.elapsedRealtime()
+    val manager = getSystemService(ActivityManager::class.java) ?: return false
+    val memory = ActivityManager.MemoryInfo()
+    manager.getMemoryInfo(memory)
+    if (now >= nextMemorySampleAtMs) {
+      nextMemorySampleAtMs = now + 10_000L
+      val pssMb = Debug.getPss() / 1_024L
+      val availableMb = memory.availMem / (1_024L * 1_024L)
+      val thresholdMb = memory.threshold / (1_024L * 1_024L)
+      val encoder = brandOverlay?.diagnosticsSummary() ?: "encoder=inactive"
+      Log.i("SweatyOBS-Memory", "lowMemory=${memory.lowMemory} available=${availableMb}MB threshold=${thresholdMb}MB appPss=${pssMb}MB relay=$sleipnirRelayRequested $encoder")
+    }
+    if (memory.lowMemory && sleipnirRelayRequested && selectedEncodingProfile != OverlayEncodingProfile.LOW_LOAD_540P &&
+      now - lastLowMemoryNoticeAtMs >= 30_000L) {
+      lastLowMemoryNoticeAtMs = now
+      Log.w("SweatyOBS-Memory", "System reports low memory during the Sleipnir stream; suggest restarting at the 540p low-load profile.")
+    }
+    return memory.lowMemory
   }
 }

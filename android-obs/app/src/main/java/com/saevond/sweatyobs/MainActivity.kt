@@ -63,6 +63,7 @@ class MainActivity : Activity() {
     "twitch" -> EncoderDiagnosticTarget.TWITCH
     "youtube" -> EncoderDiagnosticTarget.YOUTUBE
     "kick" -> EncoderDiagnosticTarget.KICK
+    "sleipnir" -> EncoderDiagnosticTarget.MULTIPLE
     else -> EncoderDiagnosticTarget.NONE
   }
 
@@ -245,6 +246,9 @@ class MainActivity : Activity() {
       text = "Upload budget is calculated from the selected quality and platform count. It is a planning estimate, not a speed test."
     }
     val outputPrefs = getSharedPreferences("encoder_outputs", MODE_PRIVATE)
+    if (outputPrefs.getString("sleipnir_server", "").orEmpty().isBlank()) {
+      outputPrefs.edit().putString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL).apply()
+    }
     val savedKickServer = outputPrefs.getString("kick_server", "").orEmpty()
     val repairedKickServer = RtmpsPublisher.normalizeKnownKickEndpoint(savedKickServer)
     if (savedKickServer.isBlank() || repairedKickServer != savedKickServer) {
@@ -260,6 +264,50 @@ class MainActivity : Activity() {
       }).apply()
     }
     val secretStore = SecretStore(this)
+    val enableSleipnir = CheckBox(this).apply {
+      id = R.id.sleipnir_enabled
+      text = "Send one upstream feed to Sleipnir (platform destinations are managed in Sleipnir)"
+      isChecked = outputPrefs.getBoolean("sleipnir_enabled", false)
+    }
+    val rotateSleipnirVideo180 = CheckBox(this).apply {
+      id = R.id.sleipnir_rotate_180
+      text = "Rotate PS5 gameplay 180° for Sleipnir (HUD stays upright; next stream)"
+      isChecked = outputPrefs.getBoolean("sleipnir_rotate_180", false)
+    }
+    val sleipnirServer = EditText(this).apply {
+      id = R.id.sleipnir_server
+      hint = "Sleipnir RTMPS ingest URL"
+      setSingleLine(true)
+      setText(outputPrefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL))
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+    }
+    val sleipnirServerStatus = TextView(this).apply {
+      text = if (RtmpsPublisher.endpointValid(outputPrefs.getString("sleipnir_server", "").orEmpty()))
+        "Sleipnir RTMPS URL saved on this phone ✓" else "Enter a secure Sleipnir RTMPS URL."
+      textSize = 13f
+    }
+    val saveSleipnirServer = Button(this).apply {
+      id = R.id.save_sleipnir_server
+      text = "Confirm / save Sleipnir URL"
+    }
+    val sleipnirKey = EditText(this).apply {
+      id = R.id.sleipnir_stream_key
+      hint = "Sleipnir ingest key from its dashboard (kept in Android Keystore)"
+      inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+      setSingleLine(true)
+    }
+    val sleipnirOutputStatus = TextView(this).apply {
+      id = R.id.sleipnir_output_status
+      text = outputCredentialStatus("Sleipnir", "sleipnir_key", "sleipnir_server")
+      textSize = 13f
+    }
+    val saveSleipnirKey = Button(this).apply {
+      id = R.id.save_sleipnir_key
+      text = "Save Sleipnir key securely"
+    }
+    val sleipnirNote = TextView(this).apply {
+      text = "Sleipnir Free currently advertises 1080p / 5 Mbps. This route sends one 720p30 H.264 feed at a 3.2 Mbps video target plus 128 kb/s AAC; assuming 10% transport overhead, the estimated total is 3.66 Mbps. YouTube's H.264 720p30 floor is 3 Mbps and its recommendation is 8 Mbps. Actual encoder peak and downstream viewer playback are unverified. Choose Low-load 540p for a 1.8 Mbps target if Android reports low memory."
+    }
     val initialTwitchEnabled = initializeDestinationSelection(
       savedSelection = if (outputPrefs.contains("twitch_enabled")) outputPrefs.getBoolean("twitch_enabled", false) else null,
       configuredDefault = RtmpsPublisher.keyValid(secretStore.get("rtmps"))
@@ -402,13 +450,21 @@ class MainActivity : Activity() {
     val verifyTwitchChat = Button(this).apply { text = "Check Twitch chat connection · no stream" }
     val removeTwitchChatToken = Button(this).apply { text = "Remove saved Twitch chat token" }
     val twitchChatGuide = Button(this).apply { text = "Open Twitch token and chat permissions guide" }
-    val qualityLabels = listOf("Stable multi-stream · up to 720p · 4.5 Mbps", "High quality · up to 1080p · 8 Mbps")
+    val qualityLabels = listOf(
+      "Stable multi-stream · up to 720p · 4.5 Mbps",
+      "High quality · up to 1080p · 8 Mbps",
+      "Low-load diagnostic · up to 540p · 1.8 Mbps"
+    )
     val overlayQuality = Spinner(this).apply {
       id = R.id.overlay_quality
       adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, qualityLabels).also {
         it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
       }
-      setSelection(if (outputPrefs.getString("overlay_profile", "stable_720") == "high_1080") 1 else 0)
+      setSelection(when (outputPrefs.getString("overlay_profile", "stable_720")) {
+        "high_1080" -> 1
+        "low_load_540" -> 2
+        else -> 0
+      })
     }
     val reconnectOutputs = Button(this).apply { text = "Reconnect stream outputs" }
     val videoModeNote = TextView(this).apply {
@@ -618,7 +674,12 @@ class MainActivity : Activity() {
 
     fun refreshOutputSummary() {
       val secretStore = SecretStore(this)
-      val selected = listOf(
+      val relayMode = enableSleipnir.isChecked
+      enableTwitch.isEnabled = !relayMode
+      enableYouTube.isEnabled = !relayMode
+      enableKick.isEnabled = !relayMode
+      rotateSleipnirVideo180.isEnabled = relayMode
+      val direct = listOf(
         Triple("Twitch", enableTwitch.isChecked, RtmpsPublisher.keyValid(secretStore.get("rtmps"))),
         Triple("YouTube", enableYouTube.isChecked,
           RtmpsPublisher.keyValid(secretStore.get("youtube_key")) &&
@@ -627,6 +688,9 @@ class MainActivity : Activity() {
           RtmpsPublisher.keyValid(secretStore.get("kick_key")) &&
             RtmpsPublisher.endpointValid(outputPrefs.getString("kick_server", "").orEmpty()))
       )
+      val relayReady = RtmpsPublisher.keyValid(secretStore.get("sleipnir_key")) &&
+        RtmpsPublisher.endpointValid(outputPrefs.getString("sleipnir_server", "").orEmpty())
+      val selected = if (relayMode) listOf(Triple("Sleipnir", true, relayReady)) else direct
       val selectedCount = selected.count { it.second }
       val states = selected.joinToString("   ·   ") { (label, enabled, ready) ->
         when {
@@ -635,26 +699,42 @@ class MainActivity : Activity() {
           else -> "$label selected · missing key or RTMPS URL"
         }
       }
-      val quality = if (overlayQuality.selectedItemPosition == 1) OverlayEncodingProfile.HIGH_1080P
-        else OverlayEncodingProfile.STABLE_720P
+      val quality = when (overlayQuality.selectedItemPosition) {
+        1 -> OverlayEncodingProfile.HIGH_1080P
+        2 -> OverlayEncodingProfile.LOW_LOAD_540P
+        else -> OverlayEncodingProfile.STABLE_720P
+      }
       val twitchNotice = if (quality == OverlayEncodingProfile.HIGH_1080P && enableTwitch.isChecked)
         "\nTwitch lists 6 Mbps for 1080p60; the shared 8 Mbps profile is above that guide."
         else ""
       outputReadiness.text = "Next public stream · local setup only: $states$twitchNotice"
       outputReadiness.setPadding(dp(14), dp(12), dp(14), dp(12))
       outputReadiness.setBackgroundResource(R.drawable.sweaty_info_card)
-      val perDestination = quality.videoBitrateMbps + 0.128
-      val aggregate = perDestination * selectedCount
-      val capacityTarget = aggregate * 2.0
-      val qualityLabel = if (quality == OverlayEncodingProfile.HIGH_1080P) "1080p / 8 Mbps" else "720p / 4.5 Mbps"
-      destinations.text = "Overlay budget ($qualityLabel): ${formatMbps(perDestination)} Mbps per selected destination; " +
-        "${formatMbps(aggregate)} Mbps aggregate payload for $selectedCount selected. For a conservative 50% upload-utilization ceiling, target more than " +
-        "${formatMbps(capacityTarget)} Mbps sustained upload in total. This is a planning estimate, not a speed test."
+      if (relayMode) {
+        val videoTargetBps = if (quality == OverlayEncodingProfile.LOW_LOAD_540P) 1_800_000 else 3_200_000
+        val estimatedTotalMbps = SleipnirRelay.projectedIngestBitrate(videoTargetBps) / 1_000_000.0
+        val profileLabel = if (quality == OverlayEncodingProfile.LOW_LOAD_540P) "540p / 1.8 Mbps" else "720p30 / 3.2 Mbps"
+        destinations.text = "Sleipnir single-upload estimate ($profileLabel): ${formatMbps(estimatedTotalMbps)} Mbps including AAC and assumed 10% transport overhead. Sleipnir Free advertises a 5 Mbps budget; the 720p target clears YouTube's 3 Mbps H.264 floor but is below its 8 Mbps recommendation. This is a planning estimate, not a packet-level cap or route test."
+      } else {
+        val perDestination = quality.videoBitrateMbps + 0.128
+        val aggregate = perDestination * selectedCount
+        val capacityTarget = aggregate * 2.0
+        val qualityLabel = when (quality) {
+          OverlayEncodingProfile.HIGH_1080P -> "1080p / 8 Mbps"
+          OverlayEncodingProfile.LOW_LOAD_540P -> "up to 540p / 1.8 Mbps"
+          else -> "720p / 4.5 Mbps"
+        }
+        destinations.text = "Overlay budget ($qualityLabel): ${formatMbps(perDestination)} Mbps per selected destination; " +
+          "${formatMbps(aggregate)} Mbps aggregate payload for $selectedCount selected. For a conservative 50% upload-utilization ceiling, target more than " +
+          "${formatMbps(capacityTarget)} Mbps sustained upload in total. This is a planning estimate, not a speed test."
+      }
       destinations.setPadding(dp(14), dp(12), dp(14), dp(12))
       destinations.setBackgroundResource(R.drawable.sweaty_info_card)
     }
     refreshOutputSummary()
 
+    watchRtmpsUrl("Sleipnir", sleipnirServer, "sleipnir_server", "sleipnir_key", "sleipnir_enabled",
+      sleipnirServerStatus, sleipnirOutputStatus) { refreshOutputSummary() }
     watchRtmpsUrl("YouTube", youtubeServer, "youtube_server", "youtube_key", "youtube_enabled",
       youtubeServerStatus, youtubeOutputStatus) { refreshOutputSummary() }
     watchRtmpsUrl("Kick", kickServer, "kick_server", "kick_key", "kick_enabled",
@@ -663,6 +743,8 @@ class MainActivity : Activity() {
     listOf(brandHeader, brandSubtitle, status,
       sectionHeader("PS5 input"), phoneIp, ps5Ip,
       sectionHeader("Stream destinations"), outputReadiness, destinations,
+      enableSleipnir, sleipnirServer, sleipnirServerStatus, saveSleipnirServer, sleipnirKey,
+      saveSleipnirKey, sleipnirOutputStatus, rotateSleipnirVideo180, sleipnirNote,
       enableTwitch, twitchStatus, openTwitchDashboard, twitchKey, saveTwitchKey,
       enableYouTube, openYouTubeDashboard, youtubeServer, youtubeServerStatus, saveYouTubeServer, testYouTubeConnection,
       youtubeKey, saveYouTube, youtubeOutputStatus,
@@ -801,6 +883,33 @@ class MainActivity : Activity() {
       openCreatorDashboard("Kick", KICK_DASHBOARD_URL,
         "The recommended RTMPS server URL is prefilled. Copy only your stream key into the separate Kick key field.")
     }
+    enableSleipnir.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("sleipnir_enabled", checked).apply()
+      refreshOutputSummary()
+    }
+    rotateSleipnirVideo180.setOnCheckedChangeListener { _, checked ->
+      outputPrefs.edit().putBoolean("sleipnir_rotate_180", checked).apply()
+    }
+    saveSleipnirServer.setOnClickListener {
+      saveOutputServerUrl("Sleipnir", sleipnirServer, "sleipnir_server", "sleipnir_key",
+        "sleipnir_enabled", sleipnirServerStatus, sleipnirOutputStatus) { refreshOutputSummary() }
+    }
+    saveSleipnirKey.setOnClickListener {
+      val key = sleipnirKey.text.toString().trim()
+      if (!RtmpsPublisher.keyValid(key)) {
+        status.text = "Enter a valid Sleipnir ingest key. It is saved only to this phone's Android Keystore."
+      } else try {
+        SecretStore(this).put("sleipnir_key", key)
+        sleipnirKey.text.clear()
+        sleipnirOutputStatus.text = outputCredentialStatus("Sleipnir", "sleipnir_key", "sleipnir_server")
+        status.text = if (enableSleipnir.isChecked)
+          "Sleipnir key saved securely. Its relay is selected for the next public stream. No stream has started."
+        else "Sleipnir key saved securely. Turn on its relay checkbox before streaming."
+        refreshOutputSummary()
+      } catch (error: Exception) {
+        status.text = "Could not securely save Sleipnir key (${error.javaClass.simpleName})."
+      }
+    }
     enableTwitch.setOnCheckedChangeListener { _, checked ->
       outputPrefs.edit().putBoolean("twitch_enabled", checked).apply()
       EncoderDiagnostics.record(this, EncoderDiagnosticEventName.DESTINATION_TOGGLED,
@@ -840,7 +949,11 @@ class MainActivity : Activity() {
     overlayQuality.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
       override fun onNothingSelected(parent: AdapterView<*>?) {}
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-        val profile = if (position == 1) "high_1080" else "stable_720"
+        val profile = when (position) {
+          1 -> "high_1080"
+          2 -> "low_load_540"
+          else -> "stable_720"
+        }
         val previousProfile = outputPrefs.getString("overlay_profile", "stable_720")
         outputPrefs.edit().putString("overlay_profile", profile).apply()
         if (profile != previousProfile) EncoderDiagnostics.record(this@MainActivity,
@@ -1180,7 +1293,7 @@ class MainActivity : Activity() {
         return@setOnClickListener
       }
       val secrets = SecretStore(this)
-      val destinations = buildList {
+      val directDestinations = buildList {
         if (enableTwitch.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
           "twitch", "Twitch", "rtmps://live.twitch.tv:443/app", secrets.get("rtmps")))
         if (enableYouTube.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
@@ -1188,11 +1301,17 @@ class MainActivity : Activity() {
         if (enableKick.isChecked) add(com.saevond.sweatyobs.ingest.RtmpDestination(
           "kick", "Kick", outputPrefs.getString("kick_server", "").orEmpty(), secrets.get("kick_key")))
       }
+      val destinations = OutputRouteSelector.select(
+        enableSleipnir.isChecked,
+        outputPrefs.getString("sleipnir_server", SleipnirRelay.DEFAULT_INGEST_URL).orEmpty(),
+        secrets.get("sleipnir_key"),
+        directDestinations
+      )
       val missing = destinations.firstOrNull { !it.isValid() }
       if (destinations.isEmpty()) {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
           EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.MULTIPLE, EncoderDiagnosticError.MISSING_CONFIG)
-        status.text = "Choose at least one platform output above."
+        status.text = "Choose at least one direct platform output or select the Sleipnir relay."
         return@setOnClickListener
       }
       if (missing != null) {
@@ -1201,7 +1320,8 @@ class MainActivity : Activity() {
         status.text = "Save a valid ${missing.label} RTMPS server URL and stream key before going live."
         return@setOnClickListener
       }
-      val overlayLabel = if (enableBrandOverlay.isChecked) "@saevond overlay enabled" else "original PS5 video pass-through"
+      val overlayLabel = if (enableBrandOverlay.isChecked) "@saevond overlay enabled" else "HUD off"
+      val routeLabel = if (enableSleipnir.isChecked) "Sleipnir single upstream" else destinations.joinToString(" + ") { it.label }
       getSharedPreferences("ps5_setup", MODE_PRIVATE).edit().putString("ps5_ipv4", ip).apply()
       EncoderDiagnostics.record(this, EncoderDiagnosticEventName.PS5_ADDRESS_SAVED,
         EncoderDiagnosticResult.SAVED, EncoderDiagnosticTarget.NETWORK)
@@ -1212,7 +1332,7 @@ class MainActivity : Activity() {
           action = Ps5LanService.ACTION_START_TWITCH
           putExtra(Ps5LanService.EXTRA_PS5_IPV4, ip)
         })
-        status.text = "Armed for ${destinations.joinToString(" + ") { it.label }} · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media; each destination reconnects independently."
+        status.text = "Armed for $routeLabel · $overlayLabel. Waiting for PS5 H.264/AAC RTMP media. RTMPS outputs retry independently."
       } catch (error: RuntimeException) {
         EncoderDiagnostics.record(this, EncoderDiagnosticEventName.STREAM_START_REJECTED,
           EncoderDiagnosticResult.REJECTED, EncoderDiagnosticTarget.NETWORK,

@@ -19,7 +19,11 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /** Low-frequency animated, full-screen @saevond overlay. Stats, chat, and alerts are simulated by default; live Twitch chat is optional. */
-internal class BrandOverlayCanvas(private val width: Int, private val height: Int) : Closeable {
+internal class BrandOverlayCanvas(
+  private val width: Int,
+  private val height: Int,
+  private val showBrandOverlay: Boolean = true
+) : Closeable {
   val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
   private val canvas = Canvas(bitmap)
   private val random = Random(0x5ae70dL)
@@ -92,8 +96,12 @@ internal class BrandOverlayCanvas(private val width: Int, private val height: In
 
   fun redrawIfDue(now: Long = SystemClock.elapsedRealtime()): Boolean {
     if (lastRenderAt != 0L && now - lastRenderAt < FRAME_UPDATE_MS) return false
-    updateSimulation(now)
     bitmap.eraseColor(Color.TRANSPARENT)
+    if (!showBrandOverlay) {
+      lastRenderAt = now
+      return true
+    }
+    updateSimulation(now)
     canvas.save()
     canvas.scale(width / BASE_WIDTH, height / BASE_HEIGHT)
     drawAtmosphere(now)

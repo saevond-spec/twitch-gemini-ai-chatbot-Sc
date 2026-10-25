@@ -10,9 +10,12 @@ android {
     applicationId = "com.saevond.sweatyobs"
     minSdk = 29
     targetSdk = 35
-    versionCode = 20
-    versionName = "0.1.10-dev.2"
+    versionCode = 26
+    versionName = "0.1.10-dev.3-sleipnir"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+  buildTypes {
+    getByName("debug") { applicationIdSuffix = ".dev16sleipnir" }
   }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
   kotlinOptions { jvmTarget = "17" }

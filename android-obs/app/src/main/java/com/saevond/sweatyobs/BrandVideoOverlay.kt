@@ -31,11 +31,23 @@ internal enum class OverlayEncodingProfile(
   val videoBitrateMbps: Double
 ) {
   STABLE_720P(1280, 720, 4.5),
-  HIGH_1080P(1920, 1080, 8.0);
+  HIGH_1080P(1920, 1080, 8.0),
+  LOW_LOAD_540P(960, 540, 1.8),
+  SLEIPNIR_720P(1280, 720, 3.2),
+  SLEIPNIR_LOW_LOAD_540P(960, 540, 1.8);
+
+  val isSleipnirCapped: Boolean
+    get() = this == SLEIPNIR_720P || this == SLEIPNIR_LOW_LOAD_540P
+
+  fun forSleipnir(): OverlayEncodingProfile =
+    if (this == LOW_LOAD_540P) SLEIPNIR_LOW_LOAD_540P else SLEIPNIR_720P
 
   companion object {
-    fun fromPreference(value: String?): OverlayEncodingProfile =
-      if (value == "high_1080") HIGH_1080P else STABLE_720P
+    fun fromPreference(value: String?): OverlayEncodingProfile = when (value) {
+      "high_1080" -> HIGH_1080P
+      "low_load_540" -> LOW_LOAD_540P
+      else -> STABLE_720P
+    }
   }
 }
 
@@ -51,7 +63,9 @@ internal class BrandVideoOverlay(
   private val onOutput: (RtmpMessage) -> Unit,
   private val onStatus: (String) -> Unit,
   private val onFailure: (String) -> Unit,
-  private val encodingProfile: OverlayEncodingProfile = OverlayEncodingProfile.STABLE_720P
+  private val encodingProfile: OverlayEncodingProfile = OverlayEncodingProfile.STABLE_720P,
+  private val showBrandOverlay: Boolean = true,
+  private val rotateVideo180: Boolean = false
 ) : Closeable {
   private data class Work(val message: RtmpMessage, val isKeyframe: Boolean)
   private val worker = HandlerThread("SweatyOBS-brand-overlay").apply { start() }
@@ -75,12 +89,21 @@ internal class BrandVideoOverlay(
   private var awaitingKeyframe = true
   private var flushDecoder = false
   private var scheduled = false
-  private var outputWidth = 0
-  private var outputHeight = 0
-  private var outputFps = 0
-  private var lastOutputTimestampMs = -1L
+  @Volatile private var outputWidth = 0
+  @Volatile private var outputHeight = 0
+  @Volatile private var outputFps = 0
+  @Volatile private var outputBitrateBps = 0
+  @Volatile private var outputCodecName = "unknown"
+  @Volatile private var lastOutputTimestampMs = -1L
   private var announcedConfig = false
   private var lastStatusAt = 0L
+
+  fun diagnosticsSummary(): String {
+    val dimensions = if (outputWidth > 0 && outputHeight > 0) "${outputWidth}x${outputHeight}@$outputFps" else "not-configured"
+    val bitrate = if (outputBitrateBps > 0) "${outputBitrateBps / 1_000}kbps" else "unknown-bitrate"
+    val queue = synchronized(lock) { "${pending.size}frames/${pendingBytes}bytes" }
+    return "codec=$outputCodecName encoded=$dimensions bitrate=$bitrate queue=$queue"
+  }
 
   fun setConfiguration(message: RtmpMessage) {
     if (closed.get()) return
@@ -232,6 +255,7 @@ internal class BrandVideoOverlay(
     outputHeight = profile.second
     outputFps = profile.third
     val outputBitrate = bitrateFor(outputWidth, outputHeight, encodingProfile)
+    outputBitrateBps = outputBitrate
 
     val encoderInfo = findEncoder(outputWidth, outputHeight, outputFps, outputBitrate)
     val videoEncoder = MediaCodec.createByCodecName(encoderInfo.name)
@@ -249,7 +273,7 @@ internal class BrandVideoOverlay(
       videoEncoder.configure(encodeFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
       val encoderSurface = videoEncoder.createInputSurface()
       createdInputSurface = encoderSurface
-      val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight)
+      val overlayCanvas = BrandOverlayCanvas(outputWidth, outputHeight, showBrandOverlay)
       synchronized(chatLock) {
         overlayCanvas.setLiveChatEnabled(liveChatEnabled)
         overlayCanvas.setLiveChatStatus(liveChatStatus)
@@ -259,7 +283,7 @@ internal class BrandVideoOverlay(
       val gl = try {
         GlBrandCompositor(
           encoderSurface, parsed.width, parsed.height, outputWidth, outputHeight,
-          overlayCanvas, handler,
+          rotateVideo180, overlayCanvas, handler,
           onFrame = { drainEncoder() },
           onFailure = { error -> fail("Brand overlay compositor failed (${error.javaClass.simpleName})") }
         )
@@ -284,6 +308,7 @@ internal class BrandVideoOverlay(
       }
       decoder = videoDecoder
       encoder = videoEncoder
+      outputCodecName = encoderInfo.name
       encoderInputSurface = encoderSurface
       createdInputSurface = null
       compositor = gl
@@ -291,7 +316,23 @@ internal class BrandVideoOverlay(
       config = parsed
       announcedConfig = false
       lastOutputTimestampMs = -1L
-      runCatching { onStatus("@saevond overlay active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode") }
+      val cbrAdvertised = runCatching {
+        encoderInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).encoderCapabilities
+          .isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+      }.getOrDefault(false)
+      val status = if (encodingProfile.isSleipnirCapped) {
+        val estimatedTotal = SleipnirRelay.projectedIngestBitrate(outputBitrate)
+        val rateControl = if (cbrAdvertised) "CBR" else "CBR compatibility probe (not advertised)"
+        "Sleipnir encoder ready · ${encoderInfo.name} · ${outputWidth}×${outputHeight}@$outputFps · " +
+          "$rateControl · ${outputBitrate / 1_000} kb/s target video · est ${estimatedTotal / 1_000} kb/s total " +
+          "(AAC + assumed 10% overhead) · output peak unverified · " +
+          SleipnirRelay.youtube720p30BitrateNote(outputWidth, outputHeight, outputFps, outputBitrate) +
+          (if (rotateVideo180) " · PS5 video rotated 180°; overlay remains upright" else "") +
+          (if (!showBrandOverlay) " · HUD off" else "")
+      } else {
+        "@saevond overlay active · ${outputWidth}×${outputHeight} · up to ${outputFps} fps · H.264 hardware encode"
+      }
+      runCatching { onStatus(status) }
     } catch (error: Exception) {
       runCatching { createdCompositor?.close() }
       runCatching { videoEncoder.stop() }
@@ -407,32 +448,50 @@ internal class BrandVideoOverlay(
       return maxOf(16, (sourceWidth * scale).toInt() and -2) to
         maxOf(16, (sourceHeight * scale).toInt() and -2)
     }
-    val targetSizes = if (requested == OverlayEncodingProfile.HIGH_1080P)
-      listOf(1920 to 1080, 1280 to 720, 854 to 480)
-    else listOf(1280 to 720, 854 to 480)
+    val targetSizes = when (requested) {
+      OverlayEncodingProfile.HIGH_1080P ->
+        listOf(1920 to 1080, 1280 to 720, 960 to 540, 854 to 480)
+      OverlayEncodingProfile.STABLE_720P ->
+        listOf(1280 to 720, 960 to 540, 854 to 480)
+      OverlayEncodingProfile.LOW_LOAD_540P, OverlayEncodingProfile.SLEIPNIR_LOW_LOAD_540P ->
+        listOf(960 to 540, 854 to 480, 640 to 360)
+      OverlayEncodingProfile.SLEIPNIR_720P ->
+        listOf(1280 to 720, 960 to 540, 854 to 480, 640 to 360)
+    }
     val candidates = targetSizes.map { fit(it.first, it.second) }.distinct()
     val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
       info.isEncoder && !info.isSoftwareOnly && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
     }
+    val fpsTargets = if (requested.isSleipnirCapped || requested == OverlayEncodingProfile.LOW_LOAD_540P)
+      listOf(30) else listOf(60, 30)
     for ((w, h) in candidates) {
       val bitrate = bitrateFor(w, h, requested)
-      for (fps in listOf(60, 30)) {
+      for (fps in fpsTargets) {
         if (codecs.any { info -> runCatching {
             val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
             caps.videoCapabilities.areSizeAndRateSupported(w, h, fps.toDouble()) &&
               bitrate in caps.videoCapabilities.bitrateRange &&
-              caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+              (requested.isSleipnirCapped ||
+                caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR))
           }.getOrDefault(false) }) return Triple(w, h, fps)
       }
     }
-    throw IllegalStateException("This phone has no supported H.264 hardware encoder profile at or below 1080p")
+    throw IllegalStateException("This phone has no supported H.264 hardware encoder profile for the selected quality")
   }
 
-  private fun bitrateFor(width: Int, height: Int, requested: OverlayEncodingProfile): Int = when {
-    width >= 1920 && height >= 1080 -> 8_000_000
-    width >= 1280 && height >= 720 && requested == OverlayEncodingProfile.HIGH_1080P -> 6_000_000
-    width >= 1280 && height >= 720 -> 4_500_000
-    else -> 3_000_000
+  private fun bitrateFor(width: Int, height: Int, requested: OverlayEncodingProfile): Int {
+    if (requested.isSleipnirCapped) {
+      return SleipnirRelay.videoBitrate(width, height, SleipnirRelay.MAX_VIDEO_BITRATE_BPS)
+    }
+    if (requested == OverlayEncodingProfile.LOW_LOAD_540P) {
+      return SleipnirRelay.videoBitrate(width, height, 1_800_000)
+    }
+    return when {
+      width >= 1920 && height >= 1080 -> 8_000_000
+      width >= 1280 && height >= 720 && requested == OverlayEncodingProfile.HIGH_1080P -> 6_000_000
+      width >= 1280 && height >= 720 -> 4_500_000
+      else -> 3_000_000
+    }
   }
 
   private fun findEncoder(width: Int, height: Int, fps: Int, bitrate: Int): MediaCodecInfo =
@@ -442,7 +501,8 @@ internal class BrandVideoOverlay(
           val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
           caps.videoCapabilities.areSizeAndRateSupported(width, height, fps.toDouble()) &&
             bitrate in caps.videoCapabilities.bitrateRange &&
-            caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            (encodingProfile.isSleipnirCapped ||
+              caps.encoderCapabilities.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR))
         }.getOrDefault(false)
     } ?: throw IllegalStateException("H.264 hardware encoder is unavailable for this profile")
 
@@ -501,6 +561,7 @@ private class GlBrandCompositor(
   private val inputHeight: Int,
   private val width: Int,
   private val height: Int,
+  rotateVideo180: Boolean,
   private val overlay: BrandOverlayCanvas,
   handler: Handler,
   private val onFrame: () -> Unit,
@@ -513,6 +574,8 @@ private class GlBrandCompositor(
   private val overlayTexture: Int
   private val program: Int
   private val overlayProgram: Int
+  private val videoOutputTransform = OutputFrameTransform.videoGlMatrix(rotateVideo180)
+  private val overlayOutputTransform = OutputFrameTransform.overlayGlMatrix()
   private lateinit var videoSurfaceTexture: SurfaceTexture
   private val rendererClosed = AtomicBoolean(false)
   val decoderSurface: Surface
@@ -581,6 +644,7 @@ private class GlBrandCompositor(
       val textureLocation = GLES20.glGetUniformLocation(program,"uTexture")
       bindAttributes(vertexData,position,texCoord)
       GLES20.glUniformMatrix4fv(textureMatrixLocation,1,false,textureMatrix,0)
+      GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program,"uOutputMatrix"),1,false,videoOutputTransform,0)
       GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
       GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,externalTexture)
       GLES20.glUniform1i(textureLocation,0)
@@ -594,6 +658,7 @@ private class GlBrandCompositor(
       GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
       GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,overlayTexture)
       GLES20.glUniform1i(GLES20.glGetUniformLocation(overlayProgram,"uTexture"),1)
+      GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(overlayProgram,"uOutputMatrix"),1,false,overlayOutputTransform,0)
       GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP,0,4)
       GLES20.glDisable(GLES20.GL_BLEND)
       val pts = surfaceTexture.timestamp.coerceAtLeast(1L)
@@ -645,8 +710,8 @@ private class GlBrandCompositor(
     private const val EGL_RECORDABLE_ANDROID = 0x3142
     private const val VIDEO_VERTEX = """
       attribute vec4 aPosition; attribute vec4 aTexCoord;
-      uniform mat4 uTextureMatrix; varying vec2 vTexCoord;
-      void main(){ gl_Position=aPosition; vTexCoord=(uTextureMatrix*aTexCoord).xy; }
+      uniform mat4 uTextureMatrix; uniform mat4 uOutputMatrix; varying vec2 vTexCoord;
+      void main(){ gl_Position=uOutputMatrix*aPosition; vTexCoord=(uTextureMatrix*aTexCoord).xy; }
     """
     private const val VIDEO_FRAGMENT = """
       #extension GL_OES_EGL_image_external : require
@@ -654,8 +719,8 @@ private class GlBrandCompositor(
       void main(){ gl_FragColor=texture2D(uTexture,vTexCoord); }
     """
     private const val OVERLAY_VERTEX = """
-      attribute vec4 aPosition; attribute vec2 aTexCoord; varying vec2 vTexCoord;
-      void main(){ gl_Position=aPosition; vTexCoord=aTexCoord; }
+      attribute vec4 aPosition; attribute vec2 aTexCoord; uniform mat4 uOutputMatrix; varying vec2 vTexCoord;
+      void main(){ gl_Position=uOutputMatrix*aPosition; vTexCoord=aTexCoord; }
     """
     private const val OVERLAY_FRAGMENT = """
       precision mediump float; uniform sampler2D uTexture; varying vec2 vTexCoord;

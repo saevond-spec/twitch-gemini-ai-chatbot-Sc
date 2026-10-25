@@ -56,7 +56,8 @@ data class OutputSnapshot(
     val retry = if (reconnects > 0) " · reconnects $reconnects" else ""
     val dropped = if (droppedPackets > 0) " · skipped $droppedPackets stale packets" else ""
     val error = lastError?.let { " · last error $it" }.orEmpty()
-    return "$label $state · health $health$speed$queue$retry$dropped$error"
+    val evidence = if (state == "LIVE") " · RTMPS publish accepted; downstream playback unverified" else ""
+    return "$label $state · health $health$speed$queue$retry$dropped$error$evidence"
   }
 }
 
@@ -91,7 +92,7 @@ class ReliableRtmpOutput(
      * One permit and a dedicated publisher cleanup lane per supported platform. A session keeps
      * its permit until the active publisher socket is closed, so sessions cannot overlap.
      */
-    private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick")
+    private val DESTINATION_LEASES = listOf("twitch", "youtube", "kick", "sleipnir")
       .associateWith { Semaphore(1, true) }
 
     private fun boundedCleanupExecutor(destinationId: String, threadSuffix: String) =
@@ -104,10 +105,10 @@ class ReliableRtmpOutput(
       )
 
     // Setup-socket cleanup cannot put a publisher's abort behind a stalled failed-address close.
-    private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick")
+    private val CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick", "sleipnir")
       .associateWith { id -> boundedCleanupExecutor(id, "publisher-close") }
 
-    private val SOCKET_CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick")
+    private val SOCKET_CLOSE_EXECUTORS = listOf("twitch", "youtube", "kick", "sleipnir")
       .associateWith { id -> boundedCleanupExecutor(id, "socket-close") }
 
     /**
