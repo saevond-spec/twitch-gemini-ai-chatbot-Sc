@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-const DESTINATIONS = new Set(['twitch', 'youtube', 'kick']);
+const DESTINATIONS = new Set(['twitch', 'youtube', 'kick', 'sleipnir']);
 const INGEST_STATES = new Set(['LISTENING', 'CONNECTED', 'PUBLISHING', 'STOPPED', 'FAILED']);
 const OUTPUT_STATES = new Set(['STOPPED', 'WAITING FOR KEYFRAME', 'CONNECTING', 'LIVE', 'RETRYING']);
 const ERROR_CATEGORIES = new Set([
@@ -36,7 +36,7 @@ const EVENT_RESULTS = new Set([
 ]);
 const EVENT_TARGETS = new Set([
   'none', 'app', 'diagnostics', 'network', 'permissions', 'settings', 'overlay', 'music',
-  'multiple', 'twitch', 'youtube', 'kick',
+  'multiple', 'twitch', 'youtube', 'kick', 'sleipnir',
 ]);
 const EVENT_ERRORS = new Set([
   'NONE', 'IOException', 'IllegalStateException', 'IllegalArgumentException', 'SocketTimeoutException',
@@ -88,7 +88,7 @@ function normalizeSample(sample) {
   if (!exactKeys(internet, ['validated', 'transport']) || typeof internet.validated !== 'boolean' ||
       !TRANSPORTS.has(internet.transport)) return null;
 
-  if (!Array.isArray(sample.destinations) || sample.destinations.length > 3) return null;
+  if (!Array.isArray(sample.destinations) || sample.destinations.length > 4) return null;
   const seen = new Set();
   const destinations = [];
   for (const destination of sample.destinations) {
