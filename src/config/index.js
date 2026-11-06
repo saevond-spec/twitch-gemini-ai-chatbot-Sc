@@ -27,7 +27,7 @@ const optional = {
   DEEPSEEK_API_KEY: '',
   OPENAI_API_KEY: '',
   OPENAI_MODEL: 'gpt-4.1-mini',
-  AI_PROVIDER_ORDER: 'deepseek,openai',
+  AI_PROVIDER_ORDER: 'deepseek',
   AI_FAILBACK_INTERVAL_MS: 60000,
   AI_MAX_FAILBACK_INTERVAL_MS: 300000,
   DEEPSEEK_MODEL: 'deepseek-chat',
@@ -180,7 +180,7 @@ export const config = {
     timeoutMs: env.AI_TIMEOUT_MS,
   },
   ai: {
-    providerOrder: (env.AI_PROVIDER_ORDER || 'deepseek,openai')
+    providerOrder: (env.AI_PROVIDER_ORDER || 'deepseek')
       .split(',').map(name => name.trim().toLowerCase())
       .filter((name, index, names) => ['deepseek', 'openai'].includes(name) && names.indexOf(name) === index),
     failbackIntervalMs: env.AI_FAILBACK_INTERVAL_MS,

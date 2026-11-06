@@ -523,10 +523,13 @@ export class OpenAIClient {
 
 export function createAIClient() {
   const providers = [];
-  if (config.deepseek.apiKey?.trim()) {
+  const enabledProviders = new Set(
+    config.ai.providerOrder?.length ? config.ai.providerOrder : ['deepseek']
+  );
+  if (enabledProviders.has('deepseek') && config.deepseek.apiKey?.trim()) {
     providers.push({ name: 'deepseek', client: new DeepSeekClient() });
   }
-  if (config.openai.apiKey?.trim()) {
+  if (enabledProviders.has('openai') && config.openai.apiKey?.trim()) {
     providers.push({ name: 'openai', client: new OpenAIClient() });
   }
   return new AIProviderRouter({

@@ -29,7 +29,7 @@ services:
       - key: OPENAI_MODEL
         value: "gpt-4.1-mini"
       - key: AI_PROVIDER_ORDER
-        value: "deepseek,openai"
+        value: "deepseek"
       - key: AI_FAILBACK_INTERVAL_MS
         value: "60000"
       - key: POLLINATIONS_API_KEY

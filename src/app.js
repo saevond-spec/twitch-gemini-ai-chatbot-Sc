@@ -54,6 +54,7 @@ import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './mus
 import { createEncoderEventBridge } from './music/encoderBridge.js';
 import { createEncoderDiagnostics } from './music/encoderDiagnostics.js';
 import { createEncoderAdminUnlockRouter } from './security/encoderAdminUnlockRouter.js';
+import { SleipnirLiveState } from './integrations/sleipnir/liveState.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -126,6 +127,9 @@ const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
   windowMs: 60_000,
 });
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
+const sleipnirLiveState = new SleipnirLiveState({
+  staleAfterMs: Math.max(15_000, Number(process.env.SLEIPNIR_LIVE_STATE_STALE_SECONDS || 90) * 1000),
+});
 
 const AUTO_ENABLED = config.auto.enabled;
 const AUTO_USE_DEEPSEEK = config.auto.useDeepSeek;
@@ -201,7 +205,10 @@ app.use((req, res, next) => {
 const encoderBridge = createEncoderEventBridge({ token: process.env.ENCODER_BRIDGE_TOKEN || '', getState: getMusicState });
 const encoderDiagnostics = createEncoderDiagnostics({
   bridgeToken: process.env.ENCODER_BRIDGE_TOKEN || '',
-  logEvent: record => console.info('[encoder-telemetry] ' + JSON.stringify(record)),
+  logEvent: record => {
+    sleipnirLiveState.observe(record);
+    console.info('[encoder-telemetry] ' + JSON.stringify(record));
+  },
 });
 const encoderPollLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, validate: false });
 const diagnosticsSessionLimiter = rateLimit({ windowMs: 60 * 1000, max: 4, validate: false });
@@ -272,6 +279,7 @@ app.get('/readyz', async (req, res) => {
         status: 'ready',
         ai: ai.getHealth(),
         oauthPersistence: getAuthPersistenceStatus(),
+        sleipnir: sleipnirLiveState.snapshot(),
       });
     }
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -283,6 +291,7 @@ app.get('/readyz', async (req, res) => {
     ai: ai ? ai.getHealth() : null,
     auth: isAuthorized(),
     oauthPersistence: getAuthPersistenceStatus(),
+    sleipnir: sleipnirLiveState.snapshot(),
   });
 });
 
@@ -298,6 +307,11 @@ app.get('/api/auth/status', requireAdmin, (req, res) => {
   });
 });
 
+app.get('/api/sleipnir/status', requireAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(sleipnirLiveState.snapshot());
+});
+
 app.post(
   '/api/ai/verify-credentials',
   requireAdmin,
@@ -310,7 +324,7 @@ app.post(
     try {
       const reports = await ai.verifyCredentials();
       const configured = new Set(reports.filter(report => report.configured).map(report => report.provider));
-      const expected = ['deepseek', 'openai'];
+      const expected = config.ai.providerOrder;
       const providers = [
         ...reports,
         ...expected
@@ -539,7 +553,8 @@ function startAutoMessages() {
 
     const now = Date.now();
     for (const channel of twitchClient.channels) {
-      const streamContext = highlightDetector?.getLiveContext(channel) || {};
+      const twitchStreamContext = highlightDetector?.getLiveContext(channel) || {};
+      const streamContext = sleipnirLiveState.resolveStreamContext(twitchStreamContext, now);
       if (config.auto.requireLive && !streamContext.live) continue;
 
       const lastHumanAt = await ConversationStore.getLastActivity(channel);
