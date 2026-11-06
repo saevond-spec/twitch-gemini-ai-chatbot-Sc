@@ -324,7 +324,7 @@ app.post(
     try {
       const reports = await ai.verifyCredentials();
       const configured = new Set(reports.filter(report => report.configured).map(report => report.provider));
-      const expected = ['deepseek', 'openai'];
+      const expected = config.ai.providerOrder;
       const providers = [
         ...reports,
         ...expected
