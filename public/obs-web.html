@@ -13,12 +13,50 @@
 <main class="page">
   <header class="header">
     <div><p class="eyebrow">SWEATYCLANKER / OBS WEB</p><h1>Stream control</h1>
-    <p class="sub">Browser dashboard · no APK · no extra hosting bill</p></div>
+    <p class="sub">PS5 receiver and Sleipnir relay setup · no APK needed for this dashboard</p></div>
     <p id="connection" class="pill" role="status" aria-live="polite">Connecting to bot…</p>
   </header>
   <section class="notice" aria-label="Important limitation">
     <strong>Browser controller, not an RTMP receiver</strong>
-    <p>The browser can monitor the bot and open controls. It cannot accept native PS5 RTMP or keep encoding when backgrounded. We are building an independent DNS and RTMP receiver. Do not change PS5 DNS until it is tested.</p>
+    <p>The browser can monitor the bot and open controls. It cannot accept native PS5 RTMP or keep encoding when backgrounded. Relay settings and diagnostics are available below. A connected receiver backend is still required to carry PS5 gameplay.</p>
+  </section>
+  <section class="panel" aria-labelledby="setup-head">
+    <h2 id="setup-head">Sleipnir relay setup</h2>
+    <p class="hint">Unlock with this app's ADMIN_API_KEY. Credentials stay out of browser storage and diagnostic reports.</p>
+    <form id="unlock-form">
+      <label for="admin-key">Dashboard access key</label>
+      <input id="admin-key" type="password" autocomplete="off" required maxlength="512">
+      <div class="actions"><button type="submit">Unlock settings</button><button id="lock" type="button">Lock dashboard</button></div>
+    </form>
+    <p id="setup-message" role="status" aria-live="polite">Settings locked</p>
+    <form id="relay-form" hidden>
+      <label for="relay-url">Sleipnir server address</label>
+      <input id="relay-url" type="url" required maxlength="200" placeholder="rtmps://ingest.sleipnir.tv/live">
+      <label for="relay-key">Stream key</label>
+      <input id="relay-key" type="password" autocomplete="off" maxlength="512" placeholder="Leave blank to keep saved key">
+      <p id="key-state" class="hint">No key loaded</p>
+      <label class="check-label"><input id="clear-key" type="checkbox"> Remove saved stream key</label>
+      <label for="receiver-ip">Receiver IPv4 address (optional reference)</label>
+      <input id="receiver-ip" inputmode="decimal" maxlength="15" placeholder="192.168.1.108">
+      <p class="hint">Enter the receiver's address, not the PS5's address. Saving it does not change DNS or connect the receiver.</p>
+      <div class="actions"><button type="submit">Save relay settings</button><button id="check-relay" type="button">Check saved server connection</button></div>
+      <p id="storage-state" class="hint"></p>
+      <p class="hint">Settings are staged here; they are not yet applied to a receiver. The connection check sends no video and does not test your stream key.</p>
+    </form>
+  </section>
+  <section id="diagnostics-panel" class="panel" aria-labelledby="diagnostics-head" hidden>
+    <h2 id="diagnostics-head">Connection diagnostics</h2>
+    <div class="grid">
+      <div class="metric"><span>Receiver control</span><strong id="receiver-control">Unavailable</strong></div>
+      <div class="metric"><span>Server connection check</span><strong id="relay-check">Not tested</strong></div>
+      <div class="metric"><span>Receiver video / audio packets</span><strong id="receiver-packets">No report</strong></div>
+      <div class="metric"><span>Sleipnir sender bitrate</span><strong id="relay-bitrate">Unknown</strong></div>
+      <div class="metric wide"><span>Reported output states</span><strong id="output-states">No report</strong></div>
+    </div>
+    <p id="telemetry-age" class="hint"></p>
+    <p class="hint">Reports come from the encoder, not a destination viewer. Growing packet counts and sender bitrate show traffic; confirm moving video and audio in the destination preview separately.</p>
+    <div class="actions"><button id="refresh-status" type="button">Refresh diagnostics</button><button id="copy-report" type="button">Copy safe report</button></div>
+    <p class="hint">Broadcast start/stop is unavailable until a receiver control backend is connected. Saving settings or passing a connection check never starts a broadcast.</p>
   </section>
   <section class="panel" aria-labelledby="audio-head">
     <div class="panel-head"><h2 id="audio-head">Music commands</h2><span class="tag">Twitch chat</span></div>
@@ -45,12 +83,12 @@
     <h2 id="link-head">Open your tools</h2>
     <div class="actions">
       <a href="https://www.twitch.tv/popout/saevond/chat" target="_blank" rel="noopener noreferrer">Open Twitch chat ↗</a>
-      <a href="https://studio.golightstream.com/" target="_blank" rel="noopener noreferrer">Open Lightstream ↗</a>
+      <a href="https://sleipnir.tv/" target="_blank" rel="noopener noreferrer">Open Sleipnir ↗</a>
       <a href="/music-player" target="_blank" rel="noopener noreferrer">Open browser music player ↗</a>
     </div>
     <p class="hint">Playing music on this website does not add it to the Twitch broadcast.</p>
   </section>
-  <footer>No PSN credentials, Twitch stream keys, or payments are collected on this dashboard. Experimental control panel; not a verified streaming backend.</footer>
+  <footer>Stream keys are masked and never included in copied reports. Check the storage notice before saving. This browser is not an RTMP receiver.</footer>
 </main>
 </body>
 </html>

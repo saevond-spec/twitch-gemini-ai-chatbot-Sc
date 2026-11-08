@@ -1,3 +1,4 @@
+import { ObsWebControl, createObsWebRouter } from './encoder/obsWebControl.js';
 
 import express from 'express';
 import expressWs from 'express-ws';
@@ -202,11 +203,13 @@ app.use((req, res, next) => {
   next();
 });
 
+const obsWebControl = new ObsWebControl();
 const encoderBridge = createEncoderEventBridge({ token: process.env.ENCODER_BRIDGE_TOKEN || '', getState: getMusicState });
 const encoderDiagnostics = createEncoderDiagnostics({
   bridgeToken: process.env.ENCODER_BRIDGE_TOKEN || '',
   logEvent: record => {
     sleipnirLiveState.observe(record);
+    obsWebControl.observe(record);
     console.info('[encoder-telemetry] ' + JSON.stringify(record));
   },
 });
@@ -233,6 +236,7 @@ app.get('/api/encoder/commands', encoderPollLimiter, (req, res) => {
   res.status(result.status).json(result.body);
 });
 
+app.use('/api/obs-web', express.json({ limit: '4kb' }), createObsWebRouter({ control: obsWebControl, requireAdmin }));
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
