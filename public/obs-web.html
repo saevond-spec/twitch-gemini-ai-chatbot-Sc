@@ -12,14 +12,16 @@
 <body>
 <main class="page">
   <header class="header">
-    <div><p class="eyebrow">SWEATYCLANKER / OBS WEB</p><h1>Stream control</h1>
+    <div><p class="eyebrow">SWEATYCLANKER / OBS WEB</p><h1>Your stream studio</h1>
     <p class="sub">PS5 receiver and Sleipnir relay setup · no APK needed for this dashboard</p></div>
     <p id="connection" class="pill" role="status" aria-live="polite">Connecting to bot…</p>
   </header>
   <section class="notice" aria-label="Important limitation">
     <strong>Browser controller, not an RTMP receiver</strong>
-    <p>The browser can monitor the bot and open controls. It cannot accept native PS5 RTMP or keep encoding when backgrounded. Relay settings and diagnostics are available below. A connected receiver backend is still required to carry PS5 gameplay.</p>
+    <p>The browser can monitor the bot and open controls. It cannot accept native PS5 RTMP or keep encoding when backgrounded. Set up your stream below, then run a private ingest test before going live. The page controls a connected receiver; the receiver carries your PS5 video.</p>
   </section>
+  <nav class="workflow" aria-label="Streaming steps"><a href="#setup-head">1 · Setup</a><a href="#controls-head">2 · Test &amp; stream</a><a href="#audio-head">3 · Music</a><a href="#diagnostics-head">4 · Diagnostics</a></nav>
+  <details class="panel"><summary>How to use this studio</summary><ol class="guide"><li>Unlock with your dashboard access key.</li><li>Save your Sleipnir URL, key and stream profile.</li><li>Connect the receiver agent on the machine receiving your PS5 broadcast. Buttons stay unavailable until it checks in.</li><li>Press <strong>Test PS5 ingest</strong>, then start the PS5 broadcast using your verified receiver route. Watch the processed frame count. This test does not forward video to Sleipnir.</li><li>Press <strong>Go live through Sleipnir</strong>. This sends video to the destinations enabled in Sleipnir. Confirm gameplay and audio on those platforms.</li><li>Use <strong>Reconnect relay</strong> if needed, and <strong>Stop receiver processing</strong> to stop this agent's FFmpeg process. End the broadcast on your PS5 too.</li></ol></details>
   <section class="panel" aria-labelledby="setup-head">
     <h2 id="setup-head">Sleipnir relay setup</h2>
     <p class="hint">Unlock with this app's ADMIN_API_KEY. Credentials stay out of browser storage and diagnostic reports.</p>
@@ -39,10 +41,26 @@
       <label for="receiver-ip">Receiver IPv4 address (optional reference)</label>
       <input id="receiver-ip" inputmode="decimal" maxlength="15" placeholder="192.168.1.108">
       <p class="hint">Enter the receiver's address, not the PS5's address. Saving it does not change DNS or connect the receiver.</p>
+      <h3>Stream profile</h3>
+      <label for="ps5-ip">PS5 IPv4 address (reference)</label><input id="ps5-ip" inputmode="decimal" maxlength="15" placeholder="Your PS5 network address">
+      <label for="quality">Video quality</label><select id="quality"><option value="540p30">Low load · 540p / 30 fps</option><option value="720p30" selected>Balanced · 720p / 30 fps</option><option value="1080p30">Full HD · 1080p / 30 fps</option><option value="passthrough">Original PS5 video · no overlay or rotation</option></select>
+      <label class="check-label"><input id="rotate" type="checkbox"> Rotate gameplay 180°</label>
+      <label class="check-label"><input id="overlay" type="checkbox"> Add @saevond border and name overlay</label>
+      <p class="hint">The overlay stays upright. This is a basic brand overlay; live chat and animated overlays are not supported by this receiver yet.</p>
+      <label for="game-volume">Game audio volume <output id="game-volume-value">85%</output></label><input id="game-volume" type="range" min="0" max="100" value="85">
+      <label for="stream-title">Stream title</label><input id="stream-title" maxlength="100">
+      <label for="stream-game">Game</label><input id="stream-game" maxlength="80">
+      <label for="stream-keywords">Keywords</label><input id="stream-keywords" maxlength="250">
+      <button id="copy-metadata" type="button">Copy stream description</button><p class="hint">Copies metadata for your platform dashboards; it does not change platform titles automatically.</p>
       <div class="actions"><button type="submit">Save relay settings</button><button id="check-relay" type="button">Check saved server connection</button></div>
       <p id="storage-state" class="hint"></p>
-      <p class="hint">Settings are staged here; they are not yet applied to a receiver. The connection check sends no video and does not test your stream key.</p>
+      <p class="hint">Saved settings apply when you next start or reconnect the connected receiver. The connection check sends no video and does not test your stream key.</p>
     </form>
+  </section>
+  <section class="panel" aria-labelledby="controls-head"><h2 id="controls-head">Test and stream</h2>
+    <p id="agent-state" role="status">Unlock to check receiver connection</p>
+    <div class="actions"><button data-receiver-action="diagnostic" disabled>Test PS5 ingest · no forwarding</button><button data-receiver-action="start" class="live-button" disabled>Go live through Sleipnir</button><button data-receiver-action="reconnect" disabled>Reconnect relay</button><button data-receiver-action="stop" disabled>Stop receiver processing</button></div>
+    <p id="agent-progress" class="hint">No connected receiver</p><p class="hint">Going live forwards to all destinations enabled in Sleipnir. Manage Twitch, YouTube and Kick in your Sleipnir dashboard. Stopping here stops the agent's video process, not the PS5 broadcast or DNS listener.</p>
   </section>
   <section id="diagnostics-panel" class="panel" aria-labelledby="diagnostics-head" hidden>
     <h2 id="diagnostics-head">Connection diagnostics</h2>
@@ -56,27 +74,30 @@
     <p id="telemetry-age" class="hint"></p>
     <p class="hint">Reports come from the encoder, not a destination viewer. Growing packet counts and sender bitrate show traffic; confirm moving video and audio in the destination preview separately.</p>
     <div class="actions"><button id="refresh-status" type="button">Refresh diagnostics</button><button id="copy-report" type="button">Copy safe report</button></div>
-    <p class="hint">Broadcast start/stop is unavailable until a receiver control backend is connected. Saving settings or passing a connection check never starts a broadcast.</p>
+    <p class="hint">The timeline records requested commands and receiver acknowledgements. Acknowledged means received by the agent; processed frames are separate evidence of video activity.</p>
   </section>
   <section class="panel" aria-labelledby="audio-head">
-    <div class="panel-head"><h2 id="audio-head">Music commands</h2><span class="tag">Twitch chat</span></div>
+    <div class="panel-head"><h2 id="audio-head">Music player controls</h2><span class="tag">Remote player</span></div>
     <div class="grid">
       <div class="metric"><span>Requested state</span><strong id="requested-state">Unknown</strong></div>
       <div class="metric"><span>Station</span><strong id="station">Unknown</strong></div>
       <div class="metric wide"><span>Track reported by player</span><strong id="track">Not reported</strong></div>
     </div>
     <p class="hint">This reports the music player's control state, <strong>not</strong> whether viewers can hear audio.</p>
-    <p class="command-label">Send in Twitch chat:</p>
+    <div class="actions"><button data-music-action="play">Play music</button><button data-music-action="pause">Pause music</button><button data-music-action="skip">Next song</button><button data-music-action="volume" data-volume="0">Mute music</button><button data-music-action="club">Club / House</button><button data-music-action="dubstep">Dubstep</button></div>
+    <label for="music-volume">Music volume</label><input id="music-volume" type="range" min="0" max="100" value="22"><button id="save-music-volume" type="button">Apply music volume</button>
+    <p class="hint">These control the existing music player. The new receiver agent does not yet mix that player into PS5 video. Shuffle, local file selection and auto-next parity are still pending.</p>
+    <p class="command-label">You can also use Twitch chat:</p>
     <div class="commands">
       <code>!play</code><code>!music pause</code><code>!skip</code><code>!music dubstep</code><code>!music club</code>
     </div>
   </section>
   <section class="panel" aria-labelledby="route-head">
-    <h2 id="route-head">Broadcast path</h2>
+    <h2 id="route-head">Receiver timeline</h2><ol id="receiver-timeline" class="guide"><li>No command history yet</li></ol><h3>Broadcast path</h3>
     <ul class="steps">
       <li><span class="circle">1</span><span><strong>PS5 gameplay</strong><small>Use the existing console broadcast until a replacement receiver is tested</small></span></li>
       <li><span class="circle">2</span><span><strong>Music output</strong><small>Viewer-audible mixing is NOT verified with the free browser-only configuration</small></span></li>
-      <li><span class="circle">3</span><span><strong>Destinations</strong><small>Our independent server is being built; no live receiver deployed</small></span></li>
+      <li><span class="circle">3</span><span><strong>Destinations</strong><small>A compatible receiver host must run the agent; no receiver deployment has been verified</small></span></li>
     </ul>
   </section>
   <section class="panel" aria-labelledby="link-head">

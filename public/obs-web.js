@@ -62,6 +62,10 @@
     clearInterval(polling);
     el('admin-key').value = ''; el('relay-key').value = '';
     el('relay-form').hidden = true; el('diagnostics-panel').hidden = true;
+    document.querySelectorAll('[data-receiver-action]').forEach(button => { button.disabled = true; });
+    el('agent-state').textContent = 'Unlock to check receiver connection';
+    el('agent-progress').textContent = 'Settings locked';
+    el('receiver-timeline').replaceChildren();
     message('Settings locked');
   }
   async function request(path, method = 'GET', body) {
@@ -83,12 +87,24 @@
     if (loadForm) {
       el('relay-url').value = data.settings.relayUrl;
       el('receiver-ip').value = data.settings.receiverAddress;
+      fillProfile(data.settings.profile || {});
     }
     el('key-state').textContent = data.settings.keyConfigured ? 'A stream key is saved (hidden).' : 'No stream key saved.';
     el('storage-state').textContent = data.settings.storageError ? 'Encrypted settings could not be loaded. Server configuration needs repair.' :
-      data.settings.storage === 'encrypted_file' ? 'Encrypted server file. Persistence across deployments depends on the configured storage volume.' :
+      data.settings.storage === 'encrypted_redis' ? 'Encrypted settings saved in the existing database; retained across app restarts. Keep the dashboard access key stable.' : data.settings.storage === 'encrypted_file' ? 'Encrypted server file. Persistence across deployments depends on the configured storage volume.' :
       'Session storage only: settings will be lost when the server restarts. Permanent encrypted storage is not configured.';
     el('receiver-control').textContent = data.receiver.reason;
+    el('agent-state').textContent = data.receiver.state + ' · ' + data.receiver.reason;
+    el('agent-progress').textContent = data.receiver.connected ? 'Processed frames: ' + data.receiver.frames + (data.receiver.pending ? ' · Command pending: ' + data.receiver.pending.action : '') : 'A saved IP address alone does not connect a receiver.';
+    document.querySelectorAll('[data-receiver-action]').forEach(button => {
+      button.disabled = !data.receiver.connected || (Boolean(data.receiver.pending) && button.dataset.receiverAction !== 'stop') ||
+        (button.dataset.receiverAction === 'reconnect' && data.receiver.state !== 'STREAMING');
+    });
+    el('receiver-timeline').replaceChildren();
+    for (const event of (data.receiver.events || []).slice().reverse()) {
+      const row = document.createElement('li'); row.textContent = new Date(event.at).toLocaleTimeString() + ' · ' + event.action + ' · ' + event.result;
+      el('receiver-timeline').append(row);
+    }
     el('relay-check').textContent = data.connectionCheck ?
       (data.connectionCheck.reachable ? 'TLS reachable · video untested' : 'Connection failed') : 'Not tested';
     const sample = data.telemetry.fresh ? data.telemetry.sample : null;
@@ -97,6 +113,16 @@
     el('relay-bitrate').textContent = relay ? (relay.bytesPerSecond * 8 / 1000).toFixed(0) + ' kbps · ' + relay.state : 'Unknown';
     el('output-states').textContent = sample?.destinations.length ? sample.destinations.map(item => item.id + ': ' + item.state).join(' · ') : 'No recent report';
     el('telemetry-age').textContent = data.telemetry.receivedAt ? 'Last encoder report: ' + new Date(data.telemetry.receivedAt).toLocaleString() : 'No authenticated encoder report received.';
+  }
+  function fillProfile(profile) {
+    el('ps5-ip').value = profile.ps5Address || '';
+    el('quality').value = profile.quality || '720p30';
+    el('rotate').checked = profile.rotate180 === true;
+    el('overlay').checked = profile.overlay === true;
+    el('game-volume').value = profile.gameVolume ?? 85;
+    el('game-volume-value').textContent = el('game-volume').value + '%';
+    el('stream-title').value = profile.title || ''; el('stream-game').value = profile.game || '';
+    el('stream-keywords').value = profile.keywords || '';
   }
   async function action(work, success) {
     if (busy) return;
@@ -110,7 +136,8 @@
     event.preventDefault();
     accessKey = el('admin-key').value; el('admin-key').value = '';
     await action(async () => { const data = await request('status');
-      if (accessKey) { el('relay-url').value = data.settings.relayUrl; el('receiver-ip').value = data.settings.receiverAddress; }
+      if (accessKey) { el('relay-url').value = data.settings.relayUrl; el('receiver-ip').value = data.settings.receiverAddress;
+      fillProfile(data.settings.profile || {}); }
       return data;
     }, 'Settings unlocked');
     clearInterval(polling);
@@ -120,10 +147,11 @@
   el('relay-form').addEventListener('submit', event => {
     event.preventDefault();
     const body = { relayUrl: el('relay-url').value, streamKey: el('relay-key').value,
-      clearKey: el('clear-key').checked, receiverAddress: el('receiver-ip').value.trim() };
+      clearKey: el('clear-key').checked, receiverAddress: el('receiver-ip').value.trim(),
+      profile: { ps5Address: el('ps5-ip').value.trim(), quality: el('quality').value, rotate180: el('rotate').checked, overlay: el('overlay').checked, gameVolume: Number(el('game-volume').value), title: el('stream-title').value, game: el('stream-game').value, keywords: el('stream-keywords').value } };
     action(async () => { const result = await request('settings', 'PUT', body);
       el('relay-key').value = ''; el('clear-key').checked = false; return result;
-    }, 'Settings saved here. Receiver configuration has not changed.');
+    }, 'Settings saved. Start or reconnect the receiver to apply them.');
   });
   el('check-relay').addEventListener('click', () => action(() => request('check', 'POST'), 'Connection check complete. No video was sent.'));
   el('refresh-status').addEventListener('click', () => action(() => request('status'), 'Diagnostics refreshed'));
@@ -139,6 +167,27 @@
   setInterval(() => {
     if (snapshot?.telemetry.receivedAt && Date.now() - Date.parse(snapshot.telemetry.receivedAt) > 90000) {
       snapshot.telemetry.fresh = false; render(snapshot);
+    }
+  }, 5000);
+  document.querySelectorAll('[data-receiver-action]').forEach(button => button.addEventListener('click', () =>
+    action(() => request('command', 'POST', { action: button.dataset.receiverAction }), 'Command requested. Wait for the receiver acknowledgement.')));
+  document.querySelectorAll('[data-music-action]').forEach(button => button.addEventListener('click', () => {
+    if (!accessKey) return message('Unlock the dashboard before controlling music.');
+    action(() => request('music', 'POST', { action: button.dataset.musicAction, volume: Number(button.dataset.volume || 22) }), 'Music player command sent. Broadcast audio is not verified.');
+  }));
+  el('save-music-volume').addEventListener('click', () => {
+    if (!accessKey) return message('Unlock the dashboard first.');
+    action(() => request('music', 'POST', { action: 'volume', volume: Number(el('music-volume').value) }), 'Music player volume updated.');
+  });
+  el('game-volume').addEventListener('input', () => { el('game-volume-value').textContent = el('game-volume').value + '%'; });
+  el('copy-metadata').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText([el('stream-title').value, el('stream-game').value, '@saevond', el('stream-keywords').value].filter(Boolean).join('\n')); message('Stream description copied.'); }
+    catch { message('Clipboard unavailable. Copy the title and game fields manually.'); }
+  });
+  setInterval(() => {
+    if (snapshot?.receiver.lastSeen && Date.now() - Date.parse(snapshot.receiver.lastSeen) >= 30000) {
+      snapshot.receiver.connected = false; snapshot.receiver.state = 'OFFLINE'; snapshot.receiver.frames = null;
+      snapshot.receiver.reason = 'Receiver report expired'; render(snapshot);
     }
   }, 5000);
   window.addEventListener('pagehide', lock);
