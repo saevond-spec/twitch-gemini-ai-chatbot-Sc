@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ReceiverControl, normalizeProfile } from '../src/encoder/receiverControl.js';
+import { ObsWebControl } from '../src/encoder/obsWebControl.js';
+import { receiverArgs } from '../server/web-receiver-agent.mjs';
+const settings = { relayUrl: 'rtmps://ingest.sleipnir.tv/live', streamKey: 'fixture-key', profile: {} };
+const report = { id: 'receiver123', state: 'STOPPED', frames: 0, revision: 0 };
+test('offline controls reject commands; fresh receiver receives settings and acknowledgement clears pending', () => {
+  let now = 1000; const control = new ReceiverControl({ now: () => now });
+  assert.throws(() => control.command('start', settings), /offline/);
+  control.poll(report);
+  control.command('start', settings);
+  assert.ok(!JSON.stringify(control.snapshot()).includes(settings.streamKey));
+  const { command } = control.poll(report);
+  assert.equal(command.settings.streamKey, settings.streamKey);
+  assert.throws(() => control.command('start', settings), /pending/);
+  control.poll({ ...report, state: 'STREAMING', frames: 20, revision: command.revision, ack: command.id });
+  assert.equal(control.snapshot().pending, null);
+  assert.equal(control.snapshot().state, 'STREAMING');
+  now += 31000;
+  assert.equal(control.snapshot().state, 'OFFLINE');
+  assert.throws(() => control.command('start', settings), /offline/);
+});
+test('Stop supersedes queued starts; expired starts never get delivered; another agent cannot hijack a live session', () => {
+  let now = 1000; const control = new ReceiverControl({ now: () => now });
+  control.poll(report); control.command('start', settings); control.command('stop', settings);
+  assert.equal(control.poll(report).command.action, 'stop');
+  assert.throws(() => control.poll({ ...report, id: 'another-agent' }), /Another receiver/);
+  now += 26000;
+  assert.equal(control.poll(report).command, null);
+});
+test('diagnostic has no relay output and passthrough cannot silently drop transformations', () => {
+  const args = receiverArgs('diagnostic', settings);
+  assert.ok(!args.some(arg => arg.includes('sleipnir') || arg.includes('fixture-key')));
+  assert.deepEqual(args.slice(-3), ['-f', 'null', '-']);
+  assert.throws(() => receiverArgs('start', { ...settings, profile: { quality: 'passthrough', overlay: true } }), /require/);
+  const live = receiverArgs('start', { ...settings, profile: { rotate180: true, gameVolume: 40 } });
+  assert.match(live[live.indexOf('-vf') + 1], /^hflip,vflip,scale=/);
+  assert.match(live[live.indexOf('-af') + 1], /volume=0.4/);
+  assert.throws(() => normalizeProfile({ gameVolume: 101 }));
+  assert.throws(() => normalizeProfile({ ps5Address: '999.1.1.1' }));
+});
+test('encrypted database settings survive controller restart and failed writes retain previous state', async () => {
+  const env = { ADMIN_API_KEY: 'a'.repeat(40) }; let value = null;
+  const redis = { get: async () => value, set: async (_key, next) => { value = next; } };
+  const control = new ObsWebControl({ env }); await control.initializeRedis(redis);
+  await control.savePersistent(settings);
+  assert.ok(!value.includes(settings.streamKey));
+  const next = new ObsWebControl({ env }); await next.initializeRedis(redis);
+  assert.equal(next.settings.streamKey, settings.streamKey);
+  assert.equal(next.snapshot().settings.storage, 'encrypted_redis');
+  redis.set = async () => { throw Error('offline'); };
+  await assert.rejects(next.savePersistent({ ...settings, streamKey: 'replacement' }), /not saved/);
+  assert.equal(next.settings.streamKey, settings.streamKey);
+});

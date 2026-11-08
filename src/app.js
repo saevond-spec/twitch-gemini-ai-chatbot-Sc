@@ -51,7 +51,7 @@ import { ConversationRetentionEngine } from './chat/conversationRetention.js';
 import { LurkerActivationEngine } from './chat/lurkerActivation.js';
 import { detectLanguage, languageInstruction, localizedGenericFallback } from './chat/language.js';
 import { gameLanguageInstruction } from './chat/gameLanguage.js';
-import { getMusicState, setMusicPublisher, updateMusicPlayerStatus } from './music/player.js';
+import { getMusicState, setMusicPublisher, updateMusicPlayerStatus, handleMusicCommand, handleSkipCommand, handleVolumeCommand } from './music/player.js';
 import { createEncoderEventBridge } from './music/encoderBridge.js';
 import { createEncoderDiagnostics } from './music/encoderDiagnostics.js';
 import { createEncoderAdminUnlockRouter } from './security/encoderAdminUnlockRouter.js';
@@ -191,7 +191,7 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   validate: false,
-  skip: req => req.path.startsWith('/api/encoder/'),
+  skip: req => req.path.startsWith('/api/encoder/') || req.path === '/api/obs-web/receiver/poll',
 });
 app.use(limiter);
 const allowedOrigins = config.server.allowedOrigins || [];
@@ -236,7 +236,12 @@ app.get('/api/encoder/commands', encoderPollLimiter, (req, res) => {
   res.status(result.status).json(result.body);
 });
 
-app.use('/api/obs-web', express.json({ limit: '4kb' }), createObsWebRouter({ control: obsWebControl, requireAdmin }));
+app.use('/api/obs-web', express.json({ limit: '4kb' }), createObsWebRouter({ control: obsWebControl, requireAdmin,
+  receiverToken: process.env.ENCODER_BRIDGE_TOKEN || '',
+  music: (action, volume) => action === 'skip' ? handleSkipCommand({ mod: true }) :
+    action === 'volume' ? handleVolumeCommand({ mod: true }, '!volume ' + volume) :
+    handleMusicCommand({ mod: true }, '!music ' + action)
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
@@ -1320,6 +1325,7 @@ async function bootstrap() {
   log.info('🚀 Starting SweatyClanker v3...');
   log.info('🔌 Connecting to Redis...');
   await connectRedis();
+  await obsWebControl.initializeRedis(getRedis());
   const redis = getRedis();
   if (redis) log.info('✅ Redis connected');
   else log.warn('⚠️ Redis not available, using file storage fallback');
