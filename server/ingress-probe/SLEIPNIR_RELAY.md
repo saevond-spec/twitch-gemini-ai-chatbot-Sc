@@ -31,3 +31,5 @@ For a compatible software encoder, publish to `rtmp://<temporary-remote-host>:<t
 6. Finally establish native PS5 compatibility separately. This remains an unverified hardware/platform constraint.
 
 Do not enable forwarding for unauthenticated streams. The service does not support permanent 24/7 streaming under the free temporary tunnel policy.
+
+Safety gate: the live services are not considered verified by unit tests; require Sleipnir's reported streaming state and platform playback checks.
