@@ -57,6 +57,21 @@
       <p class="hint">Saved settings apply when you next start or reconnect the connected receiver. The connection check sends no video and does not test your stream key.</p>
     </form>
   </section>
+  <section class="panel" aria-labelledby="ingest-head">
+    <h2 id="ingest-head">Cloud PS5 ingest route</h2>
+    <p class="hint">This is your own cloud receiver backend, monitored from this web app. The browser does not accept RTMP directly. The free tunnel is temporary and uses a random port.</p>
+    <div class="grid">
+      <div class="metric"><span>RTMP receiver</span><strong id="ingest-receiver">Unlock to check</strong></div>
+      <div class="metric"><span>Public TCP tunnel</span><strong id="ingest-tunnel">Unlock to check</strong></div>
+      <div class="metric"><span>External RTMP publish test</span><strong id="ingest-probe">Not checked</strong></div>
+      <div class="metric"><span>Native PS5 routing</span><strong>Not yet verified</strong></div>
+    </div>
+    <label for="ingest-address">Public RTMP ingest URL — compatible encoder use only</label>
+    <input id="ingest-address" readonly value="Unavailable" aria-label="Current public RTMP receiver URL">
+    <p id="ingest-expiry" class="hint">Route expires automatically. An RTMP URL here cannot be entered into the PS5 native Broadcast menu, and DNS does not change the destination port.</p>
+    <div class="actions"><button id="refresh-ingest" type="button" disabled>Check public receiver</button><button id="copy-ingest" type="button" disabled>Copy RTMP address</button></div>
+    <p class="hint">This diagnostic service does not send to Sleipnir or Twitch/Kick. A successful synthetic test confirms external RTMP reachability, not that the PS5 can use that address.</p>
+  </section>
   <section class="panel" aria-labelledby="controls-head"><h2 id="controls-head">Test and stream</h2>
     <p id="agent-state" role="status">Unlock to check receiver connection</p>
     <div class="actions"><button data-receiver-action="diagnostic" disabled>Test PS5 ingest · no forwarding</button><button data-receiver-action="start" class="live-button" disabled>Go live through Sleipnir</button><button data-receiver-action="reconnect" disabled>Reconnect relay</button><button data-receiver-action="stop" disabled>Stop receiver processing</button></div>
