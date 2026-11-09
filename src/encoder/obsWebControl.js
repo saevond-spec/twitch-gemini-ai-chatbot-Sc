@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ReceiverControl, normalizeProfile } from './receiverControl.js';
 import { fetchIngressStatus } from './obsIngressStatus.js';
-import { musicCatalogFromEnv, normalizeMusicPreferences, publicMusicCatalog } from './obsMusicLibrary.js';
+import { musicCatalogFromEnv, normalizeMusicPreferences, publicMusicCatalog, receiverMusicProfile } from './obsMusicLibrary.js';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
 import { randomBytes, createCipheriv, createDecipheriv, createHash, timingSafeEqual } from 'node:crypto';
@@ -57,6 +57,7 @@ export class ObsWebControl {
     this.redisKey = env.ADMIN_API_KEY?.length >= 32 ? createHash("sha256").update("obs-settings-v1:" + env.ADMIN_API_KEY).digest() : null;
     this.probe = probe;
     this.musicCatalog = musicCatalogFromEnv(env);
+    this.musicSyncToken = env.OBS_MUSIC_SYNC_TOKEN || '';
     this.settings = { relayUrl: 'rtmps://ingest.sleipnir.tv/live', streamKey: '', receiverAddress: '', profile: normalizeProfile(),
       music: normalizeMusicPreferences({}, this.musicCatalog) };
     this.storageFile = env.OBS_CONTROL_SETTINGS_FILE;
@@ -153,6 +154,15 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
     if (!valid) return res.status(401).json({ error: 'Receiver authentication required' });
     try { res.json(control.receiver.poll(req.body)); }
     catch (error) { res.status(409).json({ error: error.message }); }
+  });
+  router.get('/music/sync', rateLimit({ windowMs: 60000, max: 24, validate: false }), (req, res) => {
+    const supplied = (req.get('authorization') || '').replace(/^Bearer /, '');
+    const secret = control.musicSyncToken;
+    if (secret.length < 32 || Buffer.byteLength(supplied) !== Buffer.byteLength(secret) ||
+      !timingSafeEqual(Buffer.from(supplied),Buffer.from(secret))) {
+      return res.status(401).json({ error: 'Music sync authentication required' });
+    }
+    res.json(receiverMusicProfile(control.settings.music, control.musicCatalog));
   });
   router.use(requireAdmin);
   router.get('/status', (_req, res) => res.json(control.snapshot()));
