@@ -23,16 +23,37 @@ export function authorizePublisher(body, env = process.env) {
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a,b);
 }
-export function buildRelayArgs(env = process.env) {
+export function buildRelayArgs(env = process.env, options = {}) {
   const config = relayConfiguration(env);
   if (!config.ready) throw Error(config.reason);
   const input = 'rtmp://127.0.0.1:1935/secure/' + config.publishToken;
   const output = SLEIPNIR_RTMP_SERVER + '/' + encodeURIComponent(config.streamKey);
   // Never echo these args or child stderr: the output URL contains a stream key.
-  return [
-    '-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1',
-    '-i', input, '-map', '0:v:0', '-map', '0:a:0?',
-    '-c:v', 'copy', '-c:a', 'aac', '-ar', '48000', '-b:a', '128k',
-    '-f', 'flv', output
-  ];
+  const args = ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-i', input];
+  const music = options.music;
+  if (music?.playlistPath && music.volume > 0) {
+    // FFconcat plays selected audio URLs in order. Loop the playlist only
+    // when auto-next was enabled; game audio remains the primary input.
+    // The playlist already repeats selected tracks; concat -stream_loop is unreliable.
+    args.push('-f','concat','-safe','0',
+      '-protocol_whitelist','file,https,tls,tcp,crypto,http',
+      '-i',music.playlistPath);
+    const gameGain = Math.max(0,Math.min(1,(options.gameVolume ?? 85)/100));
+    const musicGain = Math.max(0,Math.min(1,music.volume/100));
+    args.push('-filter_complex',
+      '[0:a:0]volume=' + gameGain.toFixed(2) + '[game];' +
+      '[1:a:0]aresample=48000,volume=' + musicGain.toFixed(2) + '[music];' +
+      '[game][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]',
+      '-map','0:v:0','-map','[outa]');
+  } else {
+    args.push('-map','0:v:0','-map','0:a:0?');
+  }
+  if (options.overlay === true) {
+    const label='@saevond';
+    args.push('-vf',"drawbox=x=0:y=0:w=iw:h=ih:color=0xD71D8B@0.85:t=8," +
+      "drawtext=text='" + label + "':fontcolor=white:fontsize=28:x=24:y=24:box=1:boxcolor=black@0.55:boxborderw=8",
+      '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-pix_fmt','yuv420p');
+  } else args.push('-c:v','copy');
+  args.push('-c:a','aac','-ar','48000','-b:a','128k','-f','flv',output);
+  return args;
 }

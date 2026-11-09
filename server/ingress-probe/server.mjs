@@ -2,6 +2,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { authorizePublisher, buildRelayArgs, relayConfiguration } from './sleipnir-relay.mjs';
+import { fetchSelectedMusic, writeMusicPlaylist } from './music-playlist.mjs';
 
 const began = Date.now();
 const lifetimeMs = 12 * 60 * 1000;
@@ -20,6 +21,8 @@ const status = {
   output: 'no recording; Sleipnir relay is disabled unless explicitly configured',
   relay: relayConfiguration().ready ? 'ARMED_WAITING_FOR_AUTHENTICATED_PUBLISHER' : 'DISABLED',
   relayFrames: 0,
+  musicMode: 'NOT_CHECKED',
+  selectedMusicCount: 0,
   publicSmoke: 'NOT_REQUESTED',
   authRejectionProbe: 'NOT_RUN',
   outputVerified: false,
@@ -29,6 +32,7 @@ const status = {
 const children = new Set();
 let stopped = false;
 let relayChild = null;
+let relayStarting = false;
 const endpointRe = /tcp:\/\/([a-z0-9][a-z0-9.-]*):(\d{2,5})/i;
 const safeError = error => (error && error.code ? String(error.code) : 'PROCESS_ERROR');
 
@@ -148,10 +152,35 @@ function launchSyntheticProbe(endpoint) {
   }, 4000);
 }
 
-function startProtectedRelay() {
-  if (stopped || relayChild || !relayConfiguration().ready) return;
+async function startProtectedRelay() {
+  if (stopped || relayChild || relayStarting || !relayConfiguration().ready) return;
+  relayStarting = true;
+  status.musicMode = 'CHECKING_APPROVED_SELECTION';
+  const selected = await fetchSelectedMusic();
+  if (stopped) { relayStarting = false; return; }
+  status.musicMode = selected.status;
+  let options = {};
+  if (selected.profile) {
+    options.gameVolume = selected.profile.gameVolume;
+    options.overlay = selected.profile.overlay;
+    if (selected.status === 'READY') {
+      try {
+        const playlistPath = await writeMusicPlaylist(selected.profile);
+        options.music = {
+          playlistPath, volume:selected.profile.volume,
+          autoNext:selected.profile.autoNext
+        };
+        status.selectedMusicCount = selected.profile.selected.length;
+        status.musicMode = 'MIXING_SELECTED_TRACKS';
+      } catch {
+        status.musicMode = 'PLAYLIST_UNAVAILABLE_GAME_AUDIO_ONLY';
+      }
+    }
+  }
+  if (stopped) { relayStarting = false; return; }
   let args;
-  try { args = buildRelayArgs(); } catch { return; }
+  try { args = buildRelayArgs(process.env,options); }
+  catch { relayStarting = false; return; }
   status.relay = 'CONNECTING_TO_SLEIPNIR';
   status.relayFrames = 0;
   let buffer = '';
@@ -181,6 +210,7 @@ function startProtectedRelay() {
     }
   });
   relayChild = child;
+  relayStarting = false;
 }
 
 function launchTunnel() {
@@ -246,7 +276,7 @@ const server = http.createServer((req, res) => {
       if (payload.length > 4096) req.destroy();
     });
     req.on('end', () => {
-      const permitted = !stopped && !relayChild && authorizePublisher(payload);
+      const permitted = !stopped && !relayChild && !relayStarting && authorizePublisher(payload);
       res.writeHead(permitted ? 200 : 403); res.end();
       if (permitted) setTimeout(startProtectedRelay, 1000);
     });
@@ -279,4 +309,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,musicMode:status.musicMode,selectedMusicCount:status.selectedMusicCount,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
