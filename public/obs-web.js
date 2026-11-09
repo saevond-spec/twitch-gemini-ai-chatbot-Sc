@@ -95,10 +95,18 @@
       'Session storage only: settings will be lost when the server restarts. Permanent encrypted storage is not configured.';
     el('receiver-control').textContent = data.receiver.reason;
     el('agent-state').textContent = data.receiver.state + ' · ' + data.receiver.reason;
-    el('agent-progress').textContent = data.receiver.connected ? 'Processed frames: ' + data.receiver.frames + (data.receiver.pending ? ' · Command pending: ' + data.receiver.pending.action : '') : 'A saved IP address alone does not connect a receiver.';
+    const media = data.receiver.connected ? data.receiver.media : null;
+    el('agent-progress').textContent = data.receiver.connected
+      ? 'Processed video frames: ' + data.receiver.frames +
+        (media ? ' · media: ' + media.sourceState + ' · local output: ' +
+          (media.outputBytes / 1024 / 1024).toFixed(2) + ' MiB' +
+          (media.speed ? ' · processing speed: ' + media.speed : '') +
+          ' · incoming audio packets: unmeasured' : '') +
+        (data.receiver.pending ? ' · command pending: ' + data.receiver.pending.action : '')
+      : 'No receiver heartbeat. A saved IP address alone does not connect a receiver.';
     document.querySelectorAll('[data-receiver-action]').forEach(button => {
       button.disabled = !data.receiver.connected || (Boolean(data.receiver.pending) && button.dataset.receiverAction !== 'stop') ||
-        (button.dataset.receiverAction === 'reconnect' && data.receiver.state !== 'STREAMING');
+        (button.dataset.receiverAction === 'reconnect' && !['STREAMING', 'STALLED'].includes(data.receiver.state));
     });
     el('receiver-timeline').replaceChildren();
     for (const event of (data.receiver.events || []).slice().reverse()) {

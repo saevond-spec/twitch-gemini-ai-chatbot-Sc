@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { MediaProgress } from './media-progress.mjs';
 import { normalizeProfile } from '../src/encoder/receiverControl.js';
 import { validateRelay } from '../src/encoder/obsWebControl.js';
 
@@ -60,9 +61,12 @@ export async function runAgent(env = process.env) {
   }
   const id = randomUUID();
   let child = null, state = 'STOPPED', frames = 0, revision = 0, ack = null, lastId = null;
+  let media = new MediaProgress();
+  let activeAction = null;
   let lastContact = Date.now(), stopping = false;
   async function stop() {
     const prior = child; child = null; state = 'STOPPED'; frames = 0;
+    activeAction = null; media = new MediaProgress();
     if (!prior || prior.exitCode !== null) return;
     await new Promise(resolve => {
       const timer = setTimeout(() => prior.kill('SIGKILL'), 3000);
@@ -78,6 +82,8 @@ export async function runAgent(env = process.env) {
       try {
         const args = receiverArgs(command.action, command.settings, { inputMode });
         state = 'STARTING';
+        activeAction = command.action;
+        media = new MediaProgress();
         const current = spawn(env.OBS_FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         child = current;
         let buffer = '';
@@ -85,32 +91,33 @@ export async function runAgent(env = process.env) {
           if (child !== current) return;
           buffer = (buffer + data).slice(-4096);
           const lines = buffer.split(/\r?\n/); buffer = lines.pop();
-          for (const line of lines) {
-            if (/^frame=\d+$/.test(line)) {
-              frames = Number(line.slice(6));
-              if (frames > 0) state = command.action === 'diagnostic' ? 'DIAGNOSTIC' : 'STREAMING';
-            }
-          }
+          for (const line of lines) media.accept(line);
+          frames = media.videoFrames;
+          if (frames > 0) state = command.action === 'diagnostic' ? 'DIAGNOSTIC' : 'STREAMING';
         });
         // FFmpeg stderr can contain the destination key. Never forward or log it.
         current.stderr.on('data', () => {});
         current.on('error', () => { if (child === current) state = 'FAILED'; });
-        current.on('close', () => { if (child === current) { child = null; state = 'FAILED'; frames = 0; } });
+        current.on('close', () => { if (child === current) { child = null; state = 'FAILED'; activeAction = null; } });
       } catch { state = 'FAILED'; }
     }
     revision = command.revision; ack = command.id;
   }
   const watchdog = setInterval(() => {
     if (Date.now() - lastContact > 30000 && child) void stop();
+    else if (child && frames > 0 && media.snapshot().sourceState === 'STALLED') state = 'STALLED';
   }, 1000);
   const shutdown = () => { stopping = true; void stop(); };
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);
   try {
     while (!stopping) {
       try {
+        if (child && media.snapshot().sourceState === 'PROCESSING' && frames > 0) {
+          state = activeAction === 'diagnostic' ? 'DIAGNOSTIC' : 'STREAMING';
+        }
         const response = await fetch(new URL('/api/obs-web/receiver/poll', base), {
           method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, state, frames, revision, ack }), signal: AbortSignal.timeout(8000)
+          body: JSON.stringify({ id, state, frames, revision, ack, media: media.snapshot() }), signal: AbortSignal.timeout(8000)
         });
         if (!response.ok) throw Error('Control connection unavailable');
         const data = await response.json(); lastContact = Date.now();
