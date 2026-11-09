@@ -20,6 +20,7 @@ const status = {
   output: 'no recording; Sleipnir relay is disabled unless explicitly configured',
   relay: relayConfiguration().ready ? 'ARMED_WAITING_FOR_AUTHENTICATED_PUBLISHER' : 'DISABLED',
   relayFrames: 0,
+  publicSmoke: 'NOT_REQUESTED',
   authRejectionProbe: 'NOT_RUN',
   outputVerified: false,
   ps5Connected: false,
@@ -95,6 +96,37 @@ function launchAuthRejectionProbe() {
     }
   });
 }
+function launchSleipnirSmokeTest() {
+  // Explicit opt-in is required. This emits a silent black screen for no more
+  // than 25 seconds and never reads, captures, or records PS5 gameplay.
+  if (stopped || process.env.OBS_PUBLIC_SMOKE_TEST !== 'true' || !relayConfiguration().ready) return;
+  if (status.authRejectionProbe !== 'REJECTED_AS_EXPECTED') {
+    console.log('RTMP_LIVE_SMOKE_SKIPPED_SECURITY_CHECK');
+    return;
+  }
+  const secretToken = relayConfiguration().publishToken;
+  status.publicSmoke = 'STARTED';
+  // The local NGINX on_publish callback authorizes only this exact token.
+  spawnTracked('ffmpeg', [
+    '-hide_banner', '-nostdin', '-loglevel', 'error',
+    '-f','lavfi','-i','color=c=black:s=640x360:r=30',
+    '-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000',
+    '-t','25','-map','0:v:0','-map','1:a:0',
+    '-c:v','libx264','-preset','ultrafast','-tune','zerolatency',
+    '-pix_fmt','yuv420p','-g','60','-b:v','600k',
+    '-c:a','aac','-b:a','96k',
+    '-f','flv', 'rtmp://127.0.0.1:1935/secure/' + secretToken
+  ], {
+    // Suppress stderr; arguments contain a private publish token.
+    stderr() {},
+    error() { status.publicSmoke = 'PROCESS_ERROR'; },
+    close(code) {
+      status.publicSmoke = code === 0 ? 'SENT_TO_PROTECTED_LOCAL_INGEST' : 'FAILED_EXIT_' + String(code);
+      console.log('RTMP_LIVE_SMOKE ' + status.publicSmoke);
+    }
+  });
+}
+
 function launchSyntheticProbe(endpoint) {
   if (stopped || status.syntheticProbe !== 'NOT_RUN') return;
   status.syntheticProbe = 'STARTING';
@@ -187,6 +219,7 @@ function launchTunnel() {
         console.log('RTMP_INGRESS_READY ' + status.publicEndpoint);
         launchSyntheticProbe(status.publicEndpoint);
         setTimeout(launchAuthRejectionProbe, 7000);
+        setTimeout(launchSleipnirSmokeTest, 13000);
       }
     }
   }
@@ -246,4 +279,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
