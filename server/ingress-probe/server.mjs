@@ -24,6 +24,7 @@ const status = {
   musicMode: 'NOT_CHECKED',
   selectedMusicCount: 0,
   publicSmoke: 'NOT_REQUESTED',
+  qualityTest: 'NOT_REQUESTED',
   authRejectionProbe: 'NOT_RUN',
   outputVerified: false,
   ps5Connected: false,
@@ -109,15 +110,18 @@ function launchSleipnirSmokeTest() {
     return;
   }
   const secretToken = relayConfiguration().publishToken;
+  const qualityTest = process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true';
+  const source = qualityTest ? 'testsrc2=s=1920x1080:r=60' : 'testsrc2=s=640x360:r=30';
   status.publicSmoke = 'STARTED';
+  if (qualityTest) status.qualityTest = 'GENERATING_NATIVE_1080P60';
   // The local NGINX on_publish callback authorizes only this exact token.
   spawnTracked('ffmpeg', [
     '-hide_banner', '-nostdin', '-loglevel', 'error',
-    '-re','-f','lavfi','-i','testsrc2=s=640x360:r=30',
+    '-re','-f','lavfi','-i',source,
     '-re','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000',
     '-t','25','-map','0:v:0','-map','1:a:0',
     '-c:v','libx264','-preset','ultrafast','-tune','zerolatency',
-    '-pix_fmt','yuv420p','-g','60','-b:v','600k',
+    '-pix_fmt','yuv420p','-g',qualityTest ? '120' : '60','-b:v',qualityTest ? '3500k' : '600k',
     '-c:a','aac','-b:a','96k',
     '-f','flv', 'rtmp://127.0.0.1:1935/secure/' + secretToken
   ], {
@@ -213,6 +217,12 @@ async function startProtectedRelay() {
       relayStarting = false;
       return;
     }
+  }
+  if (process.env.OBS_PUBLIC_SMOKE_TEST === 'true' &&
+      process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true') {
+    options.quality = '1080p60';
+    options.overlay = true;
+    status.qualityTest = '1080P60_4500K_H264';
   }
   if (stopped) { relayStarting = false; return; }
   let args;
@@ -370,4 +380,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,musicMode:status.musicMode,selectedMusicCount:status.selectedMusicCount,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,qualityTest:status.qualityTest,musicMode:status.musicMode,selectedMusicCount:status.selectedMusicCount,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
