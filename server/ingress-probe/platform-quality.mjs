@@ -22,8 +22,8 @@ export const QUALITY_TARGETS = Object.freeze({
   })
 });
 
-export function getActiveQualityProfile(env = process.env) {
-  const selected = env.OBS_SHARED_HIGH_QUALITY_ENABLED === 'true';
+export function getActiveQualityProfile(env = process.env, options = {}) {
+  const selected = env.OBS_SHARED_HIGH_QUALITY_ENABLED === 'true' && (options.quality === undefined || options.quality === '1080p60');
   const p = QUALITY_TARGETS.sleipnirFreeShared;
   if (p.videoKbps + p.audioKbps > p.totalCapKbps) throw Error('Sleipnir free tier bitrate budget exceeded');
   return { ...p, enabled: selected };
