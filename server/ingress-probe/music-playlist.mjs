@@ -22,8 +22,11 @@ export function validateMusicProfile(raw, allowedHosts) {
     selected.push({ id:song.id, title:String(song.title || song.id).slice(0,160),
       genre:GENRES.has(song.genre)?song.genre:'mixed', sourceUrl:url.href });
   }
+  const gameVolume = Number.isInteger(raw.gameVolume) && raw.gameVolume >= 0 &&
+    raw.gameVolume <= 100 ? raw.gameVolume : 85;
   return { autoStart:raw.autoStart === true, shuffle:raw.shuffle === true,
-    autoNext:raw.autoNext === true, volume, selected };
+    autoNext:raw.autoNext === true, volume, selected,
+    gameVolume, overlay:raw.overlay === true };
 }
 
 export function orderMusicTracks(profile, random = randomInt) {
