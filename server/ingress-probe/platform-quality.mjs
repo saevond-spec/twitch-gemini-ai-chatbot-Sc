@@ -43,7 +43,7 @@ export function buildQualityVideoArgs(profile, options = {}) {
   }
   return [
     '-vf', filters.join(','),
-    '-c:v','libx264','-preset','veryfast','-tune','zerolatency',
+    '-c:v','libx264','-preset','ultrafast','-threads','2','-tune','zerolatency',
     '-pix_fmt','yuv420p','-profile:v','high',
     '-b:v', String(profile.videoKbps)+'k',
     '-maxrate', String(profile.videoKbps)+'k',

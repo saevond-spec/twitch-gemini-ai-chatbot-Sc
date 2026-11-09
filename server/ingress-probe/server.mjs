@@ -111,9 +111,9 @@ function launchSleipnirSmokeTest() {
   }
   const secretToken = relayConfiguration().publishToken;
   const qualityTest = process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true';
-  const source = qualityTest ? 'testsrc2=s=1920x1080:r=60' : 'testsrc2=s=640x360:r=30';
+  const source = qualityTest ? 'color=c=0x1e3a5f:s=1920x1080:r=60' : 'testsrc2=s=640x360:r=30';
   status.publicSmoke = 'STARTED';
-  if (qualityTest) status.qualityTest = 'GENERATING_NATIVE_1080P60';
+  if (qualityTest) status.qualityTest = 'GENERATING_NATIVE_1080P60_LOW_MOTION';
   // The local NGINX on_publish callback authorizes only this exact token.
   spawnTracked('ffmpeg', [
     '-hide_banner', '-nostdin', '-loglevel', 'error',
@@ -245,8 +245,18 @@ async function startProtectedRelay() {
         }
       }
     },
-    // FFmpeg stderr may contain a stream key; never log it.
-    stderr() {},
+    // Only log known error categories, never raw FFmpeg stderr: its output
+    // URL could contain private Sleipnir credentials.
+    stderr(chunk) {
+      if (/No such filter|Error initializing filter|Error reinitializing filters/i.test(chunk))
+        status.qualityTest = 'FAILED_VIDEO_FILTER';
+      else if (/Error while opening encoder|Error initializing output stream/i.test(chunk))
+        status.qualityTest = 'FAILED_ENCODER';
+      else if (/Connection refused|Connection timed out|Broken pipe/i.test(chunk))
+        status.qualityTest = 'FAILED_NETWORK';
+      else if (/Invalid argument|Error parsing|Undefined constant/i.test(chunk))
+        status.qualityTest = 'FAILED_ARGUMENTS';
+    },
     error(error) { status.relay = 'ERROR_' + safeError(error); },
     close(code) {
       if (relayChild === child) {
