@@ -40,14 +40,16 @@ export function orderMusicTracks(profile, random = randomInt) {
   return profile.autoNext ? tracks : tracks.slice(0,1);
 }
 
-export function concatPlaylistText(tracks) {
+export function concatPlaylistText(tracks, autoNext = true) {
   if (!tracks.length) throw Error('No playable approved tracks');
-  // Every URL is validated before this function is called. Avoid untrusted
-  // line breaks and quotes that could escape ffconcat's file directive.
-  return 'ffconcat version 1.0\n' + tracks.map(song => {
+  const entries = tracks.map(song => {
     if (!song.sourceUrl.startsWith('https://') || /[\r\n'\\]/.test(song.sourceUrl)) throw Error('Invalid music source');
     return "file '" + song.sourceUrl + "'\n";
-  }).join('');
+  });
+  // Repeating the concat source is more reliable than -stream_loop on the
+  // concat demuxer. A maximum of 50k entries avoids unbounded input growth.
+  const cycles = autoNext ? Math.min(500, Math.floor(50000 / entries.length)) : 1;
+  return 'ffconcat version 1.0\n' + entries.join('').repeat(cycles);
 }
 
 export async function fetchSelectedMusic(env = process.env, fetchImpl = fetch) {
@@ -76,6 +78,6 @@ export async function fetchSelectedMusic(env = process.env, fetchImpl = fetch) {
 export async function writeMusicPlaylist(profile, path='/tmp/obs-selected-music.ffconcat') {
   const tracks = orderMusicTracks(profile);
   await mkdir('/tmp',{recursive:true});
-  await writeFile(path,concatPlaylistText(tracks),{mode:0o600});
+  await writeFile(path,concatPlaylistText(tracks,profile.autoNext),{mode:0o600});
   return path;
 }
