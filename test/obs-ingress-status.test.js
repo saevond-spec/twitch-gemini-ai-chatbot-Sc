@@ -19,6 +19,13 @@ test('dashboard exposes temporary usable RTMP URL for compatible senders only', 
   assert.equal(result.publicBroadcastStarted, false);
   assert.equal(result.remainingSeconds, 600);
 });
+test('relaying state and unauthorized publisher rejection are safely exposed without credentials', () => {
+  const r = normalizeIngressStatus({...healthy,relay:'DISABLED',authRejectionProbe:'REJECTED_AS_EXPECTED'},now);
+  assert.equal(r.relay, 'DISABLED');
+  assert.equal(r.authRejectionPassed, true);
+  assert.equal(r.publicBroadcastStarted, false);
+});
+
 test('failed synthetic publish, expired route, or stopped receiver fails closed', () => {
   assert.equal(normalizeIngressStatus({...healthy,syntheticProbe:'FAILED_EXIT_1'},now).ingestReady,false);
   assert.equal(normalizeIngressStatus({...healthy,expiresAt:'2026-11-09T09:59:59Z'},now).endpoint,null);
