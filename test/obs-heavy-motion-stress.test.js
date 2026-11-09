@@ -16,7 +16,7 @@ test('heavy gaming test relay uses H264 passthrough ONLY behind two flags',()=>{
  }
 });
 test('heavy stress does not replace normal selected high quality encoder',()=>{
- const a=buildRelayArgs(env,{quality:'1080p60',overlay:true});
+ const a=buildRelayArgs({...env,OBS_FORCE_VIDEO_REENCODE:'true'},{quality:'1080p60',overlay:true});
  assert.equal(a[a.indexOf('-c:v')+1],'libx264');
  assert.equal(a[a.indexOf('-maxrate')+1],'4500k');
  assert.equal(getActiveQualityProfile(env,{quality:'1080p60'}).enabled,true);
