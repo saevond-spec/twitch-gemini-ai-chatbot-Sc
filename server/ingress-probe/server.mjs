@@ -97,8 +97,8 @@ function launchAuthRejectionProbe() {
   });
 }
 function launchSleipnirSmokeTest() {
-  // Explicit opt-in is required. This emits a silent black screen for no more
-  // than 25 seconds and never reads, captures, or records PS5 gameplay.
+  // Explicit opt-in is required. A generated moving test pattern with silent
+  // audio is paced in real time for at most 25 seconds. It never accesses PS5 gameplay.
   if (stopped || process.env.OBS_PUBLIC_SMOKE_TEST !== 'true' || !relayConfiguration().ready) return;
   if (status.authRejectionProbe !== 'REJECTED_AS_EXPECTED') {
     console.log('RTMP_LIVE_SMOKE_SKIPPED_SECURITY_CHECK');
@@ -109,8 +109,8 @@ function launchSleipnirSmokeTest() {
   // The local NGINX on_publish callback authorizes only this exact token.
   spawnTracked('ffmpeg', [
     '-hide_banner', '-nostdin', '-loglevel', 'error',
-    '-f','lavfi','-i','color=c=black:s=640x360:r=30',
-    '-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000',
+    '-re','-f','lavfi','-i','testsrc2=s=640x360:r=30',
+    '-re','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000',
     '-t','25','-map','0:v:0','-map','1:a:0',
     '-c:v','libx264','-preset','ultrafast','-tune','zerolatency',
     '-pix_fmt','yuv420p','-g','60','-b:v','600k',
