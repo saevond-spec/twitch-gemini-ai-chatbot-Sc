@@ -26,7 +26,8 @@ export function validateMusicProfile(raw, allowedHosts) {
     raw.gameVolume <= 100 ? raw.gameVolume : 85;
   return { autoStart:raw.autoStart === true, shuffle:raw.shuffle === true,
     autoNext:raw.autoNext === true, volume, selected,
-    gameVolume, overlay:raw.overlay === true };
+    gameVolume, overlay:raw.overlay === true,
+    quality: ['passthrough','540p30','720p30','1080p30','1080p60'].includes(raw.quality) ? raw.quality : '720p30' };
 }
 
 export function orderMusicTracks(profile, random = randomInt) {
