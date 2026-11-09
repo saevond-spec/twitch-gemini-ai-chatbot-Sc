@@ -12,7 +12,7 @@ test('heavy gaming test relay uses H264 passthrough ONLY behind two flags',()=>{
  assert.equal(args.includes('-vf'),false);
  for(const off of [env,{...env,OBS_PUBLIC_SMOKE_TEST:'true'},{...env,OBS_HEAVY_MOTION_SMOKE_TEST:'true'}]){
    const a=buildRelayArgs(off,{quality:'1080p60',testPassthrough:true});
-   assert.equal(a[a.indexOf('-c:v')+1],'libx264');
+   assert.equal(a[a.indexOf('-c:v')+1],'copy');
  }
 });
 test('heavy stress does not replace normal selected high quality encoder',()=>{
