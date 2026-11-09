@@ -64,6 +64,8 @@
     clearInterval(polling);
     el('admin-key').value = ''; el('relay-key').value = '';
     el('relay-form').hidden = true; el('diagnostics-panel').hidden = true;
+    el('run-backend-terminal').disabled = true;
+    el('backend-terminal-output').textContent = '$ locked\nUnlock the dashboard to run backend diagnostics.';
     document.querySelectorAll('[data-receiver-action]').forEach(button => { button.disabled = true; });
     el('agent-state').textContent = 'Unlock to check receiver connection';
     el('agent-progress').textContent = 'Settings locked';
@@ -280,6 +282,7 @@
     clearInterval(polling);
     if (snapshot && accessKey) {
       el('refresh-ingest').disabled = false;
+      el('run-backend-terminal').disabled = false;
       void refreshIngress();
       polling = setInterval(() => { if (!document.hidden) { action(() => request('status')); void refreshIngress(); } }, 15000);
     }
@@ -293,6 +296,19 @@
     action(async () => { const result = await request('settings', 'PUT', body);
       el('relay-key').value = ''; el('clear-key').checked = false; return result;
     }, 'Settings saved. Start or reconnect the receiver to apply them.');
+  });
+  el('run-backend-terminal').addEventListener('click', async () => {
+    if (!accessKey) return message('Unlock the dashboard first.');
+    const output = el('backend-terminal-output');
+    const button = el('run-backend-terminal');
+    button.disabled = true;
+    output.textContent = '$ ' + el('backend-terminal-command').value + '\nRunning approved diagnostic…';
+    try {
+      const response = await request('terminal', 'POST', { command: el('backend-terminal-command').value });
+      output.textContent = response.lines.join('\n') + '\n' + response.at;
+    } catch (error) {
+      output.textContent = '$ failed\n' + error.message;
+    } finally { button.disabled = !accessKey; }
   });
   el('check-relay').addEventListener('click', () => action(() => request('check', 'POST'), 'Connection check complete. No video was sent.'));
   el('refresh-status').addEventListener('click', () => action(() => request('status'), 'Diagnostics refreshed'));
