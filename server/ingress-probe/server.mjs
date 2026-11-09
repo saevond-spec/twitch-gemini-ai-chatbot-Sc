@@ -177,6 +177,14 @@ async function startProtectedRelay() {
       }
     }
   }
+  // A short test uses only synthesized tone and a fixed branding overlay.
+  // It never imports unverified music files or changes saved user preferences.
+  if (process.env.OBS_PUBLIC_SMOKE_TEST === 'true' &&
+      process.env.OBS_OVERLAY_MIX_SMOKE_TEST === 'true') {
+    options.syntheticTestTone = true;
+    options.overlay = true;
+    status.musicMode = 'SYNTHETIC_TONE_TEST_ONLY';
+  }
   if (stopped) { relayStarting = false; return; }
   let args;
   try { args = buildRelayArgs(process.env,options); }

@@ -31,7 +31,16 @@ export function buildRelayArgs(env = process.env, options = {}) {
   // Never echo these args or child stderr: the output URL contains a stream key.
   const args = ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-i', input];
   const music = options.music;
-  if (music?.playlistPath && music.volume > 0) {
+  if (options.syntheticTestTone === true) {
+    // This is an original synthesized 440Hz signal, never a catalog track.
+    // Used only with the separate, explicitly enabled short public test.
+    args.push('-f','lavfi','-i','sine=frequency=440:sample_rate=48000');
+    args.push('-filter_complex',
+      '[0:a:0]volume=0.85[game];' +
+      '[1:a:0]aresample=48000,volume=0.22[music];' +
+      '[game][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[outa]',
+      '-map','0:v:0','-map','[outa]');
+  } else if (music?.playlistPath && music.volume > 0) {
     // FFconcat plays selected audio URLs in order. Loop the playlist only
     // when auto-next was enabled; game audio remains the primary input.
     // The playlist already repeats selected tracks; concat -stream_loop is unreliable.
