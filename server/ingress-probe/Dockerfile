@@ -7,6 +7,7 @@ WORKDIR /app
 COPY server.mjs /app/server.mjs
 COPY sleipnir-relay.mjs /app/sleipnir-relay.mjs
 COPY music-playlist.mjs /app/music-playlist.mjs
+COPY platform-quality.mjs /app/platform-quality.mjs
 COPY nginx.conf /etc/nginx/nginx.conf
 ENV NODE_ENV=production PORT=10000
 EXPOSE 10000
