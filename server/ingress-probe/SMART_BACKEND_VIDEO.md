@@ -11,3 +11,5 @@ Only a trusted administrator who explicitly sets `OBS_FORCE_VIDEO_REENCODE=true`
 A 1080p60 heavy-motion synthetic source previously achieved ~14 fps on this host, whereas the video-copy relay to Sleipnir/Twitch/Kick continued reporting live. Video passthrough with *pre-encoded real gameplay* has not been verified using a PS5. Local synthetic encode tests do not prove stable live gameplay.
 
 Normal test flags are off. Do not start a public test without a bounded run and safe shutdown.
+
+Video diagnostics expose the effective video mode and whether the overlay was actually applied, without printing FFmpeg URLs or stream credentials.
