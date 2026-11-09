@@ -8,6 +8,7 @@ COPY server.mjs /app/server.mjs
 COPY sleipnir-relay.mjs /app/sleipnir-relay.mjs
 COPY music-playlist.mjs /app/music-playlist.mjs
 COPY platform-quality.mjs /app/platform-quality.mjs
+COPY backend-video-mode.mjs /app/backend-video-mode.mjs
 COPY nginx.conf /etc/nginx/nginx.conf
 ENV NODE_ENV=production PORT=10000
 EXPOSE 10000
