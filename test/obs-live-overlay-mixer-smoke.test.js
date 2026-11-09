@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildRelayArgs } from '../server/ingress-probe/sleipnir-relay.mjs';
-const env={OBS_SLEIPNIR_RELAY_ENABLED:'true',OBS_INGEST_PUBLISH_TOKEN:'test-token-1234567890123456789012345',OBS_SLEIPNIR_STREAM_KEY:'mock-key'};
+const env={OBS_SLEIPNIR_RELAY_ENABLED:'true',OBS_INGEST_PUBLISH_TOKEN:'test-token-1234567890123456789012345',OBS_SLEIPNIR_STREAM_KEY:'mock-key',OBS_FORCE_VIDEO_REENCODE:'true'};
 test('explicit overlay + tone test renders branded H264 and AAC-mixed music without real tracks',()=>{
  const args=buildRelayArgs(env,{syntheticTestTone:true,overlay:true});
  const filter=args[args.indexOf('-filter_complex')+1];

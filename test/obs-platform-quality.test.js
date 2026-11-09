@@ -20,7 +20,7 @@ test('Sleipnir free shared output never exceeds 5 Mbps',()=>{
  assert.equal(p.enabled,true);
 });
 test('full-quality relay is explicit opt-in and adds bounded H264 rate control',()=>{
- const args=buildRelayArgs({...env,OBS_SHARED_HIGH_QUALITY_ENABLED:'true'},{overlay:true});
+ const args=buildRelayArgs({...env,OBS_SHARED_HIGH_QUALITY_ENABLED:'true',OBS_FORCE_VIDEO_REENCODE:'true'},{quality:'1080p60',overlay:true});
  assert.equal(args[args.indexOf('-maxrate')+1],'4500k');
  assert.equal(args[args.indexOf('-bufsize')+1],'9000k');
  assert.equal(args[args.indexOf('-c:v')+1],'libx264');

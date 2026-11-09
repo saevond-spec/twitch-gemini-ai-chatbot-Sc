@@ -11,7 +11,7 @@ test('1080p60 high quality profile is explicitly gated and limited to 5 Mbps agg
  assert.equal(p.width,1920);
  assert.equal(p.height,1080);
  assert.ok(p.videoKbps+p.audioKbps<=5000);
- const ffmpeg=buildRelayArgs(env,{quality:'1080p60',overlay:true});
+ const ffmpeg=buildRelayArgs({...env,OBS_FORCE_VIDEO_REENCODE:'true'},{quality:'1080p60',overlay:true});
  assert.equal(ffmpeg[ffmpeg.indexOf('-maxrate')+1],'4500k');
  assert.ok(ffmpeg.some(x=>String(x).includes('@saevond')));
 });

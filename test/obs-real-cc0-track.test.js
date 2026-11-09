@@ -13,7 +13,7 @@ test('selected track is a real HTTPS MP3 from explicitly allowed CC0 host',()=>{
  assert.match(concatPlaylistText(p.selected,false),/classical_duo_24002\.mp3/);
 });
 test('selected audio path uses separate 85% game and 22% music and branded overlay',()=>{
- const env={OBS_SLEIPNIR_RELAY_ENABLED:'true',OBS_INGEST_PUBLISH_TOKEN:'test-token-1234567890123456789012345',OBS_SLEIPNIR_STREAM_KEY:'test-key'};
+ const env={OBS_SLEIPNIR_RELAY_ENABLED:'true',OBS_INGEST_PUBLISH_TOKEN:'test-token-1234567890123456789012345',OBS_SLEIPNIR_STREAM_KEY:'test-key',OBS_FORCE_VIDEO_REENCODE:'true'};
  const args=buildRelayArgs(env,{music:{playlistPath:'/tmp/obs-selected-music.ffconcat',volume:22,autoNext:false},gameVolume:85,overlay:true});
  assert.match(args[args.indexOf('-filter_complex')+1],/volume=0.22/);
  assert.match(args[args.indexOf('-filter_complex')+1],/volume=0.85/);

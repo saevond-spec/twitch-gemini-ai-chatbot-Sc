@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { authorizePublisher, buildRelayArgs, relayConfiguration } from './sleipnir-relay.mjs';
 import { fetchSelectedMusic, writeMusicPlaylist } from './music-playlist.mjs';
+import { chooseVideoMode } from './backend-video-mode.mjs';
 
 const began = Date.now();
 const lifetimeMs = 12 * 60 * 1000;
@@ -29,6 +30,9 @@ const status = {
   stressSourceFrames: 0,
   stressSourceFps: 0,
   stressSourceSpeed: 0,
+  videoMode: 'NOT_RUNNING',
+  overlayApplied: false,
+  videoModeReason: 'NO_AUTHENTICATED_SOURCE',
   authRejectionProbe: 'NOT_RUN',
   outputVerified: false,
   ps5Connected: false,
@@ -268,6 +272,10 @@ async function startProtectedRelay() {
     status.qualityTest = '1080P60_4500K_H264';
   }
   if (stopped) { relayStarting = false; return; }
+  const videoDecision = chooseVideoMode(process.env, options);
+  status.videoMode = videoDecision.videoMode;
+  status.overlayApplied = videoDecision.overlayApplied;
+  status.videoModeReason = videoDecision.reason;
   let args;
   try { args = buildRelayArgs(process.env,options); }
   catch { relayStarting = false; return; }
@@ -433,4 +441,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,qualityTest:status.qualityTest,stressProfile:status.stressProfile,stressSourceFrames:status.stressSourceFrames,stressSourceFps:status.stressSourceFps,stressSourceSpeed:status.stressSourceSpeed,musicMode:status.musicMode,selectedMusicCount:status.selectedMusicCount,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,relayFrames:status.relayFrames,qualityTest:status.qualityTest,videoMode:status.videoMode,overlayApplied:status.overlayApplied,videoModeReason:status.videoModeReason,stressProfile:status.stressProfile,stressSourceFrames:status.stressSourceFrames,stressSourceFps:status.stressSourceFps,stressSourceSpeed:status.stressSourceSpeed,musicMode:status.musicMode,selectedMusicCount:status.selectedMusicCount,publicSmoke:status.publicSmoke,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();

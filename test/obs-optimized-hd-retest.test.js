@@ -15,6 +15,6 @@ test('enabled encoder retains full HD source maximum and bitrate gate',()=>{
   assert.ok(args[args.indexOf('-vf')+1].includes('min(1920,iw)'));
 });
 test('real high quality profile enabled only when selected and never alters default relay',()=>{
-  assert.equal(buildRelayArgs(env,{quality:'1080p60',overlay:true}).includes('libx264'),true);
+  assert.equal(buildRelayArgs({...env,OBS_FORCE_VIDEO_REENCODE:'true'},{quality:'1080p60',overlay:true}).includes('libx264'),true);
   assert.equal(buildRelayArgs(env,{quality:'720p30'}).includes('copy'),true);
 });

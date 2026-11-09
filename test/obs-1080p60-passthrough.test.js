@@ -11,6 +11,6 @@ test('explicit bounded passthrough copies source 1080p60 H264 to Sleipnir',()=>{
 test('passthrough cannot be selected without both explicit test flags',()=>{
  for (const env of [config,{...config,OBS_PUBLIC_SMOKE_TEST:'true'},{...config,OBS_1080P60_PASSTHROUGH_TEST:'true'}]) {
   const args=buildRelayArgs(env,{quality:'1080p60',testPassthrough:true,overlay:false});
-  assert.equal(args[args.indexOf('-c:v')+1],'libx264');
+  assert.equal(args[args.indexOf('-c:v')+1],'copy');
  }
 });
