@@ -14,9 +14,18 @@ export function musicCatalogFromEnv(env = process.env) {
         seen.has(item.id) || typeof item.title !== 'string' ||
         !item.title.trim() || item.title.length > 160) return [];
     seen.add(item.id);
+    const genre = ['club-house', 'dubstep-bass', 'pop-trap'].includes(item.genre) ? item.genre : 'mixed';
+    let sourceUrl = null;
+    try {
+      const candidate = new URL(item.sourceUrl || '');
+      if (candidate.protocol === 'https:' && !candidate.username && !candidate.password &&
+        !candidate.hash && !candidate.search && candidate.port === '') sourceUrl = candidate.href;
+    } catch { /* Do not accept unknown or relative file locations. */ }
     return [{ id: item.id, title: item.title.trim(),
       artist: typeof item.artist === 'string' ? item.artist.slice(0, 100) : '',
       license: typeof item.license === 'string' ? item.license.slice(0, 180) : 'UNVERIFIED',
+      credit: typeof item.credit === 'string' ? item.credit.slice(0, 250) : '',
+      genre, sourceUrl,
       streamApproved: item.streamApproved === true }];
   });
 }
@@ -44,5 +53,16 @@ export function normalizeMusicPreferences(input = {}, catalog = [], previous = {
   };
 }
 export function publicMusicCatalog(catalog) {
-  return catalog.map(({id,title,artist,license,streamApproved}) => ({id,title,artist,license,streamApproved}));
+  return catalog.map(({id,title,artist,license,genre,streamApproved}) => ({id,title,artist,license,genre,streamApproved}));
+}
+export function receiverMusicProfile(settings, catalog) {
+  const selected = new Set(settings?.selectedTrackIds || []);
+  return {
+    autoStart: settings?.autoStart === true,
+    shuffle: settings?.shuffle !== false,
+    autoNext: settings?.autoNext !== false,
+    volume: settings?.volume ?? 22,
+    tracks: catalog.filter(track => track.streamApproved && selected.has(track.id) && track.sourceUrl)
+      .map(({id,title,artist,genre,credit,sourceUrl}) => ({id,title,artist,genre,credit,sourceUrl}))
+  };
 }
