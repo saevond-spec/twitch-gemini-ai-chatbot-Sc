@@ -106,7 +106,14 @@
     <fieldset id="music-library-panel">
       <legend>Stream music library · APK-style track selection</legend>
       <p class="hint" id="music-library-help">Only tracks explicitly approved for livestream use are selectable. Your music choices are saved in the website's settings, but sending them to the isolated cloud mixer requires the receiver integration.</p>
-      <div class="actions"><button type="button" id="select-all-music">Select all approved tracks</button><button type="button" id="clear-music-selection">Clear selection</button></div>
+      <label for="music-genre">Track category</label>
+      <select id="music-genre">
+        <option value="mixed">Mixed · all genres</option>
+        <option value="club-house">Club / House</option>
+        <option value="dubstep-bass">Dubstep / Bass</option>
+        <option value="pop-trap">Pop / Trap</option>
+      </select>
+      <div class="actions"><button type="button" id="select-all-music">Select all approved tracks</button><button type="button" id="select-genre-music">Select this category</button><button type="button" id="clear-music-selection">Clear selection</button></div>
       <div id="music-track-list" role="group" aria-label="Licensed music tracks"><p class="hint">Unlock the dashboard to load your catalog.</p></div>
       <label class="check-label"><input id="music-autostart" type="checkbox" checked> Automatically start selected music when the stream starts</label>
       <label class="check-label"><input id="music-shuffle" type="checkbox" checked> Shuffle selected tracks</label>
