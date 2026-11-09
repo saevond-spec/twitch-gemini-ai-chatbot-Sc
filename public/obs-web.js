@@ -71,6 +71,8 @@
     el('ingest-receiver').textContent = 'Unlock to check';
     el('ingest-tunnel').textContent = 'Unlock to check';
     el('ingest-probe').textContent = 'Not checked';
+    el('ingest-auth').textContent = 'Not checked';
+    el('ingest-relay').textContent = 'Not configured';
     el('refresh-ingest').disabled = true; el('copy-ingest').disabled = true;
     el('ingest-expiry').textContent = 'Temporary route status unavailable while dashboard is locked.';
     el('receiver-timeline').replaceChildren();
@@ -99,6 +101,8 @@
       el('ingest-receiver').textContent = data.available ? data.receiver || 'Unknown' : 'Offline';
       el('ingest-tunnel').textContent = data.available ? data.tunnel || 'Unknown' : 'Unavailable';
       el('ingest-probe').textContent = data.syntheticPassed ? 'Passed: external RTMP publish' : 'Not confirmed';
+      el('ingest-auth').textContent = data.authRejectionPassed ? 'Rejected invalid publisher' : 'Not verified';
+      el('ingest-relay').textContent = data.relay || 'Unknown';
       el('ingest-address').value = data.ingestReady && data.endpoint ? data.endpoint : 'Unavailable';
       el('copy-ingest').disabled = !(data.ingestReady && data.endpoint);
       el('ingest-expiry').textContent = data.ingestReady
@@ -113,6 +117,8 @@
       el('ingest-receiver').textContent = 'Status unavailable';
       el('ingest-tunnel').textContent = 'Unknown';
       el('ingest-probe').textContent = 'Not confirmed';
+      el('ingest-auth').textContent = 'Not verified';
+      el('ingest-relay').textContent = 'Status unavailable';
       el('ingest-expiry').textContent = 'Could not reach the cloud diagnostic receiver.';
     }
   }
