@@ -55,6 +55,7 @@
   'use strict';
   const el = id => document.getElementById(id);
   let accessKey = '', snapshot = null, polling = null, busy = false, epoch = 0;
+  let ingress = null;
   const message = text => { el('setup-message').textContent = text; };
   function lock() {
     epoch += 1;
@@ -65,6 +66,13 @@
     document.querySelectorAll('[data-receiver-action]').forEach(button => { button.disabled = true; });
     el('agent-state').textContent = 'Unlock to check receiver connection';
     el('agent-progress').textContent = 'Settings locked';
+    ingress = null;
+    el('ingest-address').value = 'Unavailable';
+    el('ingest-receiver').textContent = 'Unlock to check';
+    el('ingest-tunnel').textContent = 'Unlock to check';
+    el('ingest-probe').textContent = 'Not checked';
+    el('refresh-ingest').disabled = true; el('copy-ingest').disabled = true;
+    el('ingest-expiry').textContent = 'Temporary route status unavailable while dashboard is locked.';
     el('receiver-timeline').replaceChildren();
     message('Settings locked');
   }
@@ -81,6 +89,39 @@
     }
     return data;
   }
+  async function refreshIngress() {
+    if (!accessKey) return;
+    const current = epoch;
+    try {
+      const data = await request('ingress');
+      if (current !== epoch) return;
+      ingress = data;
+      el('ingest-receiver').textContent = data.available ? data.receiver || 'Unknown' : 'Offline';
+      el('ingest-tunnel').textContent = data.available ? data.tunnel || 'Unknown' : 'Unavailable';
+      el('ingest-probe').textContent = data.syntheticPassed ? 'Passed: external RTMP publish' : 'Not confirmed';
+      el('ingest-address').value = data.ingestReady && data.endpoint ? data.endpoint : 'Unavailable';
+      el('copy-ingest').disabled = !(data.ingestReady && data.endpoint);
+      el('ingest-expiry').textContent = data.ingestReady
+        ? 'Temporary receiver ready for compatible RTMP senders. Expires in approximately ' +
+          Math.ceil((data.remainingSeconds || 0) / 60) + ' min. Native PS5 route is still unverified.'
+        : (data.reason || 'Receiver not ready or temporary tunnel expired; native PS5 route remains unverified.');
+    } catch {
+      if (current !== epoch) return;
+      ingress = null;
+      el('ingest-address').value = 'Unavailable';
+      el('copy-ingest').disabled = true;
+      el('ingest-receiver').textContent = 'Status unavailable';
+      el('ingest-tunnel').textContent = 'Unknown';
+      el('ingest-probe').textContent = 'Not confirmed';
+      el('ingest-expiry').textContent = 'Could not reach the cloud diagnostic receiver.';
+    }
+  }
+  el('refresh-ingest').addEventListener('click', refreshIngress);
+  el('copy-ingest').addEventListener('click', async () => {
+    if (!ingress?.ingestReady || !ingress.endpoint) return;
+    try { await navigator.clipboard.writeText(ingress.endpoint); message('Temporary RTMP receiver URL copied. Not a PS5 Broadcast menu setting.'); }
+    catch { message('Clipboard unavailable. Copy the displayed address manually.'); }
+  });
   function render(data, loadForm = false) {
     snapshot = data;
     el('relay-form').hidden = false; el('diagnostics-panel').hidden = false;
@@ -149,7 +190,11 @@
       return data;
     }, 'Settings unlocked');
     clearInterval(polling);
-    if (snapshot && accessKey) polling = setInterval(() => { if (!document.hidden) action(() => request('status')); }, 15000);
+    if (snapshot && accessKey) {
+      el('refresh-ingest').disabled = false;
+      void refreshIngress();
+      polling = setInterval(() => { if (!document.hidden) { action(() => request('status')); void refreshIngress(); } }, 15000);
+    }
   });
   el('lock').addEventListener('click', lock);
   el('relay-form').addEventListener('submit', event => {
