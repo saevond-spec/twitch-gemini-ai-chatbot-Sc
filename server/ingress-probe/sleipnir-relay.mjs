@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { getActiveQualityProfile, buildQualityVideoArgs } from './platform-quality.mjs';
 
 export const SLEIPNIR_RTMP_SERVER = 'rtmps://ingest.sleipnir.tv:1936/live';
 
@@ -57,7 +58,10 @@ export function buildRelayArgs(env = process.env, options = {}) {
   } else {
     args.push('-map','0:v:0','-map','0:a:0?');
   }
-  if (options.overlay === true) {
+  const quality = getActiveQualityProfile(env);
+  if (quality.enabled) {
+    args.push(...buildQualityVideoArgs(quality, {overlay:options.overlay === true}));
+  } else if (options.overlay === true) {
     const label='@saevond';
     args.push('-vf',"drawbox=x=0:y=0:w=iw:h=ih:color=0xD71D8B@0.85:t=8," +
       "drawtext=text='" + label + "':fontcolor=white:fontsize=28:x=24:y=24:box=1:boxcolor=black@0.55:boxborderw=8",
