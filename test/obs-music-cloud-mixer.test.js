@@ -36,7 +36,7 @@ test('music mix maps live video, game audio and music at separate gains with ove
  assert.match(filter,/volume=0.22/);
  assert.match(filter,/amix=inputs=2/);
  assert.ok(args.includes('-vf'));
- assert.ok(args.includes('drawbox='));
+ assert.ok(args.some(x=>typeof x==='string' && x.includes('drawbox=')));
  assert.equal(args[args.indexOf('-i')+1],'rtmp://127.0.0.1:1935/secure/'+env.OBS_INGEST_PUBLISH_TOKEN);
 });
 test('autostart disabled or missing key never downloads music',async()=>{
