@@ -59,7 +59,7 @@ export class ReceiverControl {
           m.downstreamPlaybackVerified !== false ||
           (m.lastVideoAt !== null && !Number.isFinite(Date.parse(m.lastVideoAt))) ||
           (m.lastProgressAt !== null && !Number.isFinite(Date.parse(m.lastProgressAt))) ||
-          (m.speed !== null && (typeof m.speed !== 'string' || !/^(?:\\d+(?:\\.\\d+)?)x$/.test(m.speed)))) {
+          (m.speed !== null && (typeof m.speed !== 'string' || !/^(?:\d+(?:\.\d+)?)x$/.test(m.speed)))) {
         throw Error('Invalid receiver media progress');
       }
     }
