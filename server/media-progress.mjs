@@ -24,17 +24,17 @@ export class MediaProgress {
     const key = line.slice(0, split).trim();
     const value = line.slice(split + 1).trim();
     const number = Number(value);
-    if (key === 'frame' && /^\\d+$/.test(value) && Number.isSafeInteger(number)) {
+    if (key === 'frame' && /^\d+$/.test(value) && Number.isSafeInteger(number)) {
       if (number > this.videoFrames) this.lastVideoAt = this.now();
       this.videoFrames = Math.max(this.videoFrames, number);
-    } else if (key === 'total_size' && /^\\d+$/.test(value) && Number.isSafeInteger(number)) {
+    } else if (key === 'total_size' && /^\d+$/.test(value) && Number.isSafeInteger(number)) {
       this.outputBytes = Math.max(this.outputBytes, number);
-    } else if (key === 'out_time_us' && /^\\d+$/.test(value) && Number.isSafeInteger(number)) {
+    } else if (key === 'out_time_us' && /^\d+$/.test(value) && Number.isSafeInteger(number)) {
       this.outputTimeMs = Math.max(this.outputTimeMs, Math.floor(number / 1000));
-    } else if (key === 'out_time_ms' && /^\\d+$/.test(value) && Number.isSafeInteger(number)) {
+    } else if (key === 'out_time_ms' && /^\d+$/.test(value) && Number.isSafeInteger(number)) {
       // Older FFmpeg versions name this field _ms while its units are microseconds.
       this.outputTimeMs = Math.max(this.outputTimeMs, Math.floor(number / 1000));
-    } else if (key === 'speed' && /^(?:\\d+(?:\\.\\d+)?)x$/.test(value)) {
+    } else if (key === 'speed' && /^(?:\d+(?:\.\d+)?)x$/.test(value)) {
       this.speed = value;
     } else if (key === 'progress' && (value === 'continue' || value === 'end')) {
       this.lastProgressAt = this.now();
