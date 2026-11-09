@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ReceiverControl, normalizeProfile } from './receiverControl.js';
+import { fetchIngressStatus } from './obsIngressStatus.js';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
 import { randomBytes, createCipheriv, createDecipheriv, createHash, timingSafeEqual } from 'node:crypto';
@@ -149,6 +150,15 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
   });
   router.use(requireAdmin);
   router.get('/status', (_req, res) => res.json(control.snapshot()));
+  // The dedicated free receiver is a separate process. Expose its status only
+  // to an authenticated dashboard; never treat its tunnel as verified PS5 routing.
+  let ingressPending = null;
+  router.get('/ingress', async (_req, res) => {
+    if (!ingressPending) {
+      ingressPending = fetchIngressStatus().finally(() => { ingressPending = null; });
+    }
+    res.json(await ingressPending);
+  });
   router.put('/settings', async (req, res) => {
     try { res.json(await control.savePersistent(req.body)); }
     catch (error) { res.status(400).json({ error: error.message }); }
