@@ -110,10 +110,12 @@ function launchSleipnirSmokeTest() {
     return;
   }
   const secretToken = relayConfiguration().publishToken;
-  const qualityTest = process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true';
+  const qualityTest = process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true' ||
+    process.env.OBS_1080P60_PASSTHROUGH_TEST === 'true';
   const source = qualityTest ? 'color=c=0x1e3a5f:s=1920x1080:r=60' : 'testsrc2=s=640x360:r=30';
   status.publicSmoke = 'STARTED';
-  if (qualityTest) status.qualityTest = 'GENERATING_NATIVE_1080P60_LOW_MOTION';
+  if (qualityTest) status.qualityTest = process.env.OBS_1080P60_PASSTHROUGH_TEST === 'true'
+    ? 'GENERATING_NATIVE_1080P60_PASSTHROUGH' : 'GENERATING_NATIVE_1080P60_LOW_MOTION';
   // The local NGINX on_publish callback authorizes only this exact token.
   spawnTracked('ffmpeg', [
     '-hide_banner', '-nostdin', '-loglevel', 'error',
@@ -121,7 +123,8 @@ function launchSleipnirSmokeTest() {
     '-re','-f','lavfi','-i','anullsrc=channel_layout=stereo:sample_rate=48000',
     '-t','25','-map','0:v:0','-map','1:a:0',
     '-c:v','libx264','-preset','ultrafast','-tune','zerolatency',
-    '-pix_fmt','yuv420p','-g',qualityTest ? '120' : '60','-b:v',qualityTest ? '3500k' : '600k',
+    '-pix_fmt','yuv420p','-g',qualityTest ? '120' : '60','-b:v',qualityTest ? '4500k' : '600k',
+    ...(qualityTest ? ['-maxrate','4500k','-bufsize','9000k','-threads','2'] : []),
     '-c:a','aac','-b:a','96k',
     '-f','flv', 'rtmp://127.0.0.1:1935/secure/' + secretToken
   ], {
@@ -217,6 +220,13 @@ async function startProtectedRelay() {
       relayStarting = false;
       return;
     }
+  }
+  if (process.env.OBS_PUBLIC_SMOKE_TEST === 'true' &&
+      process.env.OBS_1080P60_PASSTHROUGH_TEST === 'true') {
+    options.testPassthrough = true;
+    options.quality = '1080p60';
+    options.overlay = false;
+    status.qualityTest = '1080P60_PASSTHROUGH_DIAGNOSTIC';
   }
   if (process.env.OBS_PUBLIC_SMOKE_TEST === 'true' &&
       process.env.OBS_1080P60_QUALITY_SMOKE_TEST === 'true') {
