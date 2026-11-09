@@ -59,7 +59,7 @@ export function buildRelayArgs(env = process.env, options = {}) {
     args.push('-map','0:v:0','-map','0:a:0?');
   }
   const quality = getActiveQualityProfile(env, options);
-  if (options.testPassthrough === true && env.OBS_PUBLIC_SMOKE_TEST === 'true' && env.OBS_1080P60_PASSTHROUGH_TEST === 'true') {
+  if (options.testPassthrough === true && env.OBS_PUBLIC_SMOKE_TEST === 'true' && (env.OBS_1080P60_PASSTHROUGH_TEST === 'true' || env.OBS_HEAVY_MOTION_SMOKE_TEST === 'true')) {
     // Diagnostic-only: preserve native source H264, avoid a second 1080p encoder.
     args.push('-c:v','copy');
   } else if (quality.enabled) {
