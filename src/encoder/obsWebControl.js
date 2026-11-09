@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ReceiverControl, normalizeProfile } from './receiverControl.js';
 import { fetchIngressStatus } from './obsIngressStatus.js';
+import { normalizeTerminalCommand, terminalResponse } from './obsBackendTerminal.js';
 import { musicCatalogFromEnv, normalizeMusicPreferences, publicMusicCatalog, receiverMusicProfile } from './obsMusicLibrary.js';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
@@ -169,6 +170,16 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
   });
   router.use(requireAdmin);
   router.get('/status', (_req, res) => res.json(control.snapshot()));
+  // Authenticated, rate-limited read-only backend console. No arbitrary shell.
+  router.post('/terminal', rateLimit({ windowMs: 60000, max: 12, validate: false }), async (req, res) => {
+    try {
+      const command = normalizeTerminalCommand(req.body?.command);
+      const ingress = command === 'ingress' ? await fetchIngressStatus() : null;
+      res.json(terminalResponse(command,{snapshot:control.snapshot(),ingress}));
+    } catch (error) {
+      res.status(400).json({error: error.message === 'Unknown terminal command' ? error.message : 'Backend diagnostics unavailable'});
+    }
+  });
   // The dedicated free receiver is a separate process. Expose its status only
   // to an authenticated dashboard; never treat its tunnel as verified PS5 routing.
   let ingressPending = null;
