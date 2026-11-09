@@ -327,11 +327,35 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end();
   }
 });
-server.listen(Number(process.env.PORT) || 10000, '0.0.0.0', () => {
-  console.log('RTMP_PROBE_SERVER_STARTED');
-  launchMediaReceiver();
-  launchTunnel();
-});
+// Render's service health check requires an externally reachable TCP
+// listener. Keep the HTTP listener independent of tunnel/NGINX startup.
+const httpPort = Number(process.env.PORT || 10000);
+if (!Number.isInteger(httpPort) || httpPort < 1024 || httpPort > 65535) {
+  console.error('RTMP_HTTP_INVALID_PORT');
+  process.exitCode = 1;
+  server.close();
+} else {
+  server.on('error', error => {
+    console.error('RTMP_HTTP_BIND_FAILED ' + safeError(error));
+    process.exitCode = 1;
+  });
+  server.listen(httpPort, '0.0.0.0', async () => {
+    const address = server.address();
+    console.log('RTMP_HTTP_BOUND ' + JSON.stringify({
+      host: address?.address, port: address?.port, family: address?.family
+    }));
+    try {
+      const response = await fetch('http://127.0.0.1:' + httpPort + '/healthz',
+        {signal: AbortSignal.timeout(3000)});
+      console.log('RTMP_HTTP_LOOPBACK_CHECK ' + (response.ok ? 'PASSED' : 'HTTP_' + response.status));
+    } catch (error) {
+      console.log('RTMP_HTTP_LOOPBACK_CHECK FAILED_' + safeError(error));
+    }
+    console.log('RTMP_PROBE_SERVER_STARTED');
+    launchMediaReceiver();
+    launchTunnel();
+  });
+}
 function stop() {
   if (stopped) return;
   stopped = true;
