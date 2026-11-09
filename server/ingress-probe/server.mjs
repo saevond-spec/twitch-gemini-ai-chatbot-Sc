@@ -59,6 +59,15 @@ function launchMediaReceiver() {
         }
       }
     },
+    stderr(data) {
+      // This isolated diagnostic receiver has no stream keys or upstream credentials.
+      // Publish only FFmpeg's first sanitized failure reason, never arbitrary media.
+      for (const line of data.split(/\r?\n/)) {
+        if (/error|failed|invalid|cannot|address already in use|option/i.test(line)) {
+          console.log('RTMP_FFMPEG_DIAGNOSTIC ' + line.replace(/[^\x20-\x7e]/g, '').slice(0, 250));
+        }
+      }
+    },
     error(error) { status.mediaReceiver = 'ERROR_' + safeError(error); },
     close(code) {
       if (!stopped && Date.now() - began < lifetimeMs) {
