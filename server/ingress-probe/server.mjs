@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 
 const began = Date.now();
 const lifetimeMs = 12 * 60 * 1000;
-const limitBytes = 0; // No recording; FFmpeg discards decoded media.
+// NGINX accepts concurrent RTMP connections and never records media.
 const status = {
   mode: 'diagnostic_only',
   price: '$0 free tunnel (subject to provider limits)',
@@ -14,7 +14,9 @@ const status = {
   tunnel: 'STARTING',
   mediaReceiver: 'STARTING',
   frames: 0,
-  output: 'null sink (never broadcasts to Sleipnir)',
+  inboundBytes: 0,
+  syntheticProbe: 'NOT_RUN',
+  output: 'no recording and no outbound broadcast',
   outputVerified: false,
   ps5Connected: false,
   notes: 'A public endpoint alone does not prove PS5 native broadcast can be redirected to this host and port.'
@@ -36,46 +38,51 @@ function spawnTracked(binary, args, handlers = {}) {
 
 function launchMediaReceiver() {
   if (stopped) return;
-  status.mediaReceiver = 'LISTENING_OR_WAITING';
-  // No Twitch/Kick/Sleipnir credential is present; incoming video is discarded.
-  let buffer = '';
-  spawnTracked('ffmpeg', [
-    '-hide_banner','-nostdin','-loglevel','error','-progress','pipe:1',
-    '-listen','1','-i','rtmp://127.0.0.1:1935/app',
-    '-map','0:v:0?','-map','0:a:0?','-f','null','-'
-  ], {
-    data(chunk) {
-      buffer = (buffer + chunk).slice(-4096);
-      const parts = buffer.split(/\r?\n/);
-      buffer = parts.pop();
-      for (const line of parts) {
-        if (line.startsWith('frame=')) {
-          const n = Number(line.slice(6));
-          if (Number.isSafeInteger(n) && n > status.frames) {
-            status.frames = n;
-            status.ps5Connected = false; // Media source identity not provable.
-            status.mediaReceiver = 'MEDIA_RECEIVED_SOURCE_UNVERIFIED';
-          }
-        }
-      }
-    },
+  status.mediaReceiver = 'STARTING_NGINX';
+  spawnTracked('nginx', ['-c','/etc/nginx/nginx.conf','-g','daemon off;'], {
     stderr(data) {
-      // This isolated diagnostic receiver has no stream keys or upstream credentials.
-      // Publish only FFmpeg's first sanitized failure reason, never arbitrary media.
       for (const line of data.split(/\r?\n/)) {
-        if (/error|failed|invalid|cannot|address already in use|option/i.test(line)) {
-          console.log('RTMP_FFMPEG_DIAGNOSTIC ' + line.replace(/[^\x20-\x7e]/g, '').slice(0, 250));
+        if (/emerg|alert|crit|failed|denied/i.test(line)) {
+          console.log('RTMP_NGINX_DIAGNOSTIC ' + line.replace(/[^\x20-\x7e]/g, '').slice(0, 240));
         }
       }
     },
     error(error) { status.mediaReceiver = 'ERROR_' + safeError(error); },
-    close(code) {
-      if (!stopped && Date.now() - began < lifetimeMs) {
-        status.mediaReceiver = 'RESTARTING_' + String(code);
-        setTimeout(launchMediaReceiver, 3000);
-      }
-    }
+    close(code) { if (!stopped) status.mediaReceiver = 'NGINX_EXITED_' + String(code); }
   });
+  const statTimer = setInterval(async () => {
+    if (stopped) { clearInterval(statTimer); return; }
+    try {
+      const response = await fetch('http://127.0.0.1:8088/stat', { signal: AbortSignal.timeout(1500) });
+      if (!response.ok) throw Error('stats HTTP status ' + response.status);
+      const xml = await response.text();
+      const stream = xml.match(/<bytes_in>(\d+)<\/bytes_in>/);
+      const inboundBytes = stream ? Number(stream[1]) : 0;
+      if (Number.isSafeInteger(inboundBytes) && inboundBytes > status.inboundBytes) status.inboundBytes = inboundBytes;
+      status.mediaReceiver = /<publishing\s*\/>/.test(xml) ? 'RTMP_PUBLISHER_CONNECTED' : 'NGINX_LISTENING';
+    } catch { status.mediaReceiver = 'NGINX_STATS_UNREACHABLE'; }
+  }, 4000);
+}
+
+function launchSyntheticProbe(endpoint) {
+  if (stopped || status.syntheticProbe !== 'NOT_RUN') return;
+  status.syntheticProbe = 'STARTING';
+  const url = endpoint.replace(/^tcp:\/\//, 'rtmp://') + '/app/synthetic-connection-test';
+  setTimeout(() => {
+    if (stopped) return;
+    spawnTracked('ffmpeg', [
+      '-hide_banner','-nostdin','-loglevel','error',
+      '-f','lavfi','-i','color=c=black:s=160x90:r=5',
+      '-t','2','-c:v','libx264','-preset','ultrafast',
+      '-pix_fmt','yuv420p','-f','flv',url
+    ], {
+      error(error) { status.syntheticProbe = 'FAILED_' + safeError(error); },
+      close(code) {
+        status.syntheticProbe = code === 0 ? 'PUBLISHED_THROUGH_PUBLIC_TCP' : 'FAILED_EXIT_' + String(code);
+        console.log('RTMP_SYNTHETIC_PROBE ' + status.syntheticProbe);
+      }
+    });
+  }, 4000);
 }
 
 function launchTunnel() {
@@ -112,6 +119,7 @@ function launchTunnel() {
         status.publicEndpoint = 'tcp://' + match[1].toLowerCase() + ':' + port;
         status.tunnel = 'PUBLIC_TCP_ASSIGNED';
         console.log('RTMP_INGRESS_READY ' + status.publicEndpoint);
+        launchSyntheticProbe(status.publicEndpoint);
       }
     }
   }
@@ -151,4 +159,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
