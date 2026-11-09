@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 export const ACTIONS = ['diagnostic', 'start', 'reconnect', 'stop'];
 export function normalizeProfile(input = {}) {
   const quality = input.quality ?? '720p30';
-  if (!['passthrough', '540p30', '720p30', '1080p30'].includes(quality)) throw Error('Unknown quality profile');
+  if (!['passthrough', '540p30', '720p30', '1080p30', '1080p60'].includes(quality)) throw Error('Unknown quality profile');
   const gameVolume = input.gameVolume ?? 85;
   if (!Number.isInteger(gameVolume) || gameVolume < 0 || gameVolume > 100) throw Error('Game volume must be 0–100');
   const text = (value, max) => String(value || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max);
