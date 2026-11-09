@@ -151,6 +151,7 @@
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.className = 'music-track-select';
+      checkbox.dataset.genre = item.genre || 'mixed';
       checkbox.value = item.id;
       checkbox.checked = item.streamApproved && selected.has(item.id);
       checkbox.disabled = !item.streamApproved;
@@ -175,6 +176,19 @@
   }
   el('select-all-music').addEventListener('click', () => {
     document.querySelectorAll('.music-track-select').forEach(c => { if (!c.disabled) c.checked = true; });
+    musicSettingsDirty = true;
+  });
+  el('music-genre').addEventListener('change', () => {
+    const genre = el('music-genre').value;
+    document.querySelectorAll('.music-track-select').forEach(c => {
+      c.parentElement.hidden = genre !== 'mixed' && c.dataset.genre !== genre;
+    });
+  });
+  el('select-genre-music').addEventListener('click', () => {
+    const genre = el('music-genre').value;
+    document.querySelectorAll('.music-track-select').forEach(c => {
+      if (!c.disabled && (genre === 'mixed' || c.dataset.genre === genre)) c.checked = true;
+    });
     musicSettingsDirty = true;
   });
   el('clear-music-selection').addEventListener('click', () => {
