@@ -30,6 +30,8 @@ export function normalizeIngressStatus(report, now = Date.now()) {
     receiver: typeof report.mediaReceiver === 'string' ? report.mediaReceiver.slice(0, 64) : 'UNKNOWN',
     tunnel: typeof report.tunnel === 'string' ? report.tunnel.slice(0, 64) : 'UNKNOWN',
     syntheticPassed,
+    authRejectionPassed: report.authRejectionProbe === 'REJECTED_AS_EXPECTED',
+    relay: typeof report.relay === 'string' ? report.relay.slice(0, 72) : 'UNKNOWN',
     ingestReady: Boolean(active && listening && tunnelReady && endpoint && syntheticPassed),
     endpoint: active && tunnelReady && listening ? endpoint : null,
     // There is no verified PS5 native routing or downstream publication.
@@ -49,7 +51,7 @@ export async function fetchIngressStatus({ fetchImpl = fetch, now = Date.now, ti
     const data = await response.json();
     return normalizeIngressStatus(data, now());
   } catch {
-    return { available: false, ingestReady: false, endpoint: null,
+    return { available: false, ingestReady: false, endpoint: null, relay: 'UNAVAILABLE', authRejectionPassed: false,
       ps5NativeRouteVerified: false, outputToSleipnir: false,
       publicBroadcastStarted: false, mode: 'diagnostic_only',
       reason: 'Free receiver is unavailable or asleep. Its temporary TCP port may have expired.' };
