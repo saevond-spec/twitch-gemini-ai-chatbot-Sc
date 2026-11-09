@@ -12,7 +12,10 @@ export function normalizeIngressStatus(report, now = Date.now()) {
   const active = expiry > now;
   const validEndpoint = typeof report.publicEndpoint === 'string' &&
     /^tcp:\/\/[a-z0-9][a-z0-9.-]*:[0-9]{2,5}$/i.test(report.publicEndpoint);
-  const url = validEndpoint ? new URL(report.publicEndpoint.replace(/^tcp:/, 'http:')) : null;
+  let url = null;
+  if (validEndpoint) {
+    try { url = new URL(report.publicEndpoint.replace(/^tcp:/, 'http:')); } catch { /* Invalid port or host. */ }
+  }
   const port = url ? Number(url.port) : 0;
   const endpoint = validEndpoint && port >= 1 && port <= 65535
     ? 'rtmp://' + url.hostname + ':' + port + '/app/ps5' : null;
