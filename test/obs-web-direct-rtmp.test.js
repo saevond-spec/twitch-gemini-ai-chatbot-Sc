@@ -14,7 +14,7 @@ test('diagnostic direct receiver opens native RTMP listener without publishing t
   assert.ok(args.includes('-listen'));
   assert.equal(args[args.indexOf('-listen') + 1], '1');
   assert.equal(args[args.indexOf('-i') + 1], 'rtmp://0.0.0.0:1935/app');
-  assert.deepEqual(args.slice(-6), ['-map','0:v:0','-map','0:a:0?','-f','null','-']);
+  assert.deepEqual(args.slice(-7), ['-map','0:v:0','-map','0:a:0?','-f','null','-']);
   assert.ok(!args.join(' ').includes('unit-test-fake-key'));
 });
 
