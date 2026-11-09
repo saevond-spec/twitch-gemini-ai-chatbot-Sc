@@ -20,6 +20,7 @@ const status = {
   output: 'no recording; Sleipnir relay is disabled unless explicitly configured',
   relay: relayConfiguration().ready ? 'ARMED_WAITING_FOR_AUTHENTICATED_PUBLISHER' : 'DISABLED',
   relayFrames: 0,
+  authRejectionProbe: 'NOT_RUN',
   outputVerified: false,
   ps5Connected: false,
   notes: 'A public endpoint alone does not prove PS5 native broadcast can be redirected to this host and port.'
@@ -68,6 +69,32 @@ function launchMediaReceiver() {
   }, 4000);
 }
 
+function launchAuthRejectionProbe() {
+  if (stopped || status.authRejectionProbe !== 'NOT_RUN') return;
+  status.authRejectionProbe = 'RUNNING';
+  // Deliberately invalid publish name. This must not start an outbound relay.
+  // Local RTMP path avoids revealing private configuration over the public tunnel.
+  spawnTracked('ffmpeg', [
+    '-hide_banner','-nostdin','-loglevel','error',
+    '-f','lavfi','-i','color=c=black:s=160x90:r=5',
+    '-t','1','-c:v','libx264','-preset','ultrafast',
+    '-pix_fmt','yuv420p','-f','flv',
+    'rtmp://127.0.0.1:1935/secure/unauthorized-diagnostic-test'
+  ], {
+    // The sender's arguments are fixed; stderr is intentionally discarded.
+    stderr() {},
+    error() { status.authRejectionProbe = 'ERROR'; },
+    close(code) {
+      status.authRejectionProbe = code !== 0 ? 'REJECTED_AS_EXPECTED' : 'FAILED_OPEN';
+      console.log('RTMP_AUTH_REJECTION_TEST ' + status.authRejectionProbe);
+      if (status.authRejectionProbe === 'FAILED_OPEN') {
+        // Do not make the secured endpoint available when auth unexpectedly fails.
+        status.relay = 'SECURITY_CHECK_FAILED';
+        stop();
+      }
+    }
+  });
+}
 function launchSyntheticProbe(endpoint) {
   if (stopped || status.syntheticProbe !== 'NOT_RUN') return;
   status.syntheticProbe = 'STARTING';
@@ -159,6 +186,7 @@ function launchTunnel() {
         status.tunnel = 'PUBLIC_TCP_ASSIGNED';
         console.log('RTMP_INGRESS_READY ' + status.publicEndpoint);
         launchSyntheticProbe(status.publicEndpoint);
+        setTimeout(launchAuthRejectionProbe, 7000);
       }
     }
   }
@@ -218,4 +246,4 @@ setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
 
-setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,syntheticProbe:status.syntheticProbe,authRejectionProbe:status.authRejectionProbe,relay:status.relay,inboundBytes:status.inboundBytes,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
