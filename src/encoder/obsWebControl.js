@@ -164,7 +164,8 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
     }
     res.json({ ...receiverMusicProfile(control.settings.music, control.musicCatalog),
       overlay: control.settings.profile.overlay === true,
-      gameVolume: control.settings.profile.gameVolume });
+      gameVolume: control.settings.profile.gameVolume,
+      quality: control.settings.profile.quality });
   });
   router.use(requireAdmin);
   router.get('/status', (_req, res) => res.json(control.snapshot()));
