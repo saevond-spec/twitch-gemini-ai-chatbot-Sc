@@ -33,3 +33,5 @@ For a compatible software encoder, publish to `rtmp://<temporary-remote-host>:<t
 Do not enable forwarding for unauthenticated streams. The service does not support permanent 24/7 streaming under the free temporary tunnel policy.
 
 Safety gate: the live services are not considered verified by unit tests; require Sleipnir's reported streaming state and platform playback checks.
+
+The receiver also runs an invalid-token RTMP publish probe at startup, with status REJECTED_AS_EXPECTED only when the sender is denied; this checks ingress authorization independently of downstream playback.
