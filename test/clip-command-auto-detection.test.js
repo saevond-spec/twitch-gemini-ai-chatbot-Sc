@@ -27,9 +27,14 @@ async function loadDetector(t) {
     'src/bus/index.js': "const bus = { on() {}, off() {} }; export default bus;",
     'src/clips/twitchClipService.js': `
       export const calls = [];
+      export const liveCalls = [];
       export async function createClipFromVod(args) {
         calls.push(args);
         return { id: 'clip-' + calls.length, url: 'https://clips.twitch.tv/clip-' + calls.length };
+      }
+      export async function createLiveClip(args) {
+        liveCalls.push(args);
+        return { id: 'live-clip-' + liveCalls.length, url: 'https://clips.twitch.tv/live-clip-' + liveCalls.length };
       }
     `,
     'src/queue/index.js': `
@@ -176,6 +181,43 @@ test('very strong multi-viewer spike still creates a candidate when AI is unavai
   assert.equal(state.candidates.length, 1);
   assert.ok(state.candidates[0].score >= 84);
   assert.match(state.candidates[0].reason, /High-confidence audience anomaly/);
+});
+
+test('approved AI highlight creates an automatic live Twitch clip', async (t) => {
+  const { HighlightDetector, clipModule, queueModule } = await loadDetector(t);
+  const detector = new HighlightDetector({
+    chat: async () => JSON.stringify({
+      highlight: true,
+      score: 92,
+      title: 'Huge clutch',
+      reason: 'Strong multi-viewer reaction',
+      durationSeconds: 35,
+    }),
+  });
+  const { state } = primeLive(detector);
+  detector.autoLiveClippingEnabled = true;
+  detector.autoLiveClipCooldownMs = 120_000;
+
+  const now = Date.now();
+  state.startedAt = new Date(now - 10 * 60_000).toISOString();
+  await detector.evaluate(state, {
+    score: 92,
+    mathScore: 92,
+    uniqueUsers: 3,
+    totalExcitement: 12,
+    explicitClipVoters: 0,
+  }, [
+    { at: now - 1000, username: 'alice', message: 'NO WAY', excitement: 3 },
+    { at: now - 800, username: 'bob', message: 'INSANE', excitement: 3 },
+  ]);
+
+  assert.equal(state.candidates.length, 1);
+  assert.equal(clipModule.liveCalls.length, 1);
+  assert.equal(clipModule.liveCalls[0].broadcasterId, 'broadcaster-1');
+  assert.equal(clipModule.liveCalls[0].title, 'Huge clutch');
+  assert.equal(queueModule.jobs.length, 1);
+  assert.equal(queueModule.jobs[0].data.source, 'sweatyclanker-auto-live');
+  assert.equal(queueModule.jobs[0].data.highlightScore, 92);
 });
 
 test('offline !clip gives a clear response and creates nothing', async (t) => {
