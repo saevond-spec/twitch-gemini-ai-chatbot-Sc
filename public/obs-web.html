@@ -43,8 +43,9 @@
       <p class="hint">Enter the receiver's address, not the PS5's address. Saving it does not change DNS or connect the receiver.</p>
       <h3>Stream profile</h3>
       <label for="ps5-ip">PS5 IPv4 address (reference)</label><input id="ps5-ip" inputmode="decimal" maxlength="15" placeholder="Your PS5 network address">
-      <label for="quality">Video quality</label><select id="quality"><option value="540p30">Low load · 540p / 30 fps</option><option value="720p30" selected>Balanced · 720p / 30 fps</option><option value="1080p30">Full HD · 1080p / 30 fps</option><option value="passthrough">Original PS5 video · no overlay or rotation</option></select>
+      <label for="quality">Video quality</label><select id="quality"><option value="540p30">Low load · 540p / 30 fps</option><option value="720p30" selected>Balanced · 720p / 30 fps</option><option value="1080p30">Full HD · 1080p / 30 fps</option><option value="1080p60">Highest shared target · up to 1080p / 60 fps (5 Mbps Sleipnir Free)</option><option value="passthrough">Original PS5 video · no overlay or rotation</option></select>
       <label class="check-label"><input id="rotate" type="checkbox"> Rotate gameplay 180°</label>
+      <p class="hint">The shared Sleipnir Free input has a 5 Mbps cap. Up to 1080p60 is a requested encoding target, not a confirmed PS5 input or guaranteed platform playback quality. 2K on Twitch requires a separate eligible Enhanced Broadcasting encoder; Kick supports up to 1080p60.</p>
       <label class="check-label"><input id="overlay" type="checkbox"> Add @saevond border and name overlay</label>
       <p class="hint">The overlay stays upright. This is a basic brand overlay; live chat and animated overlays are not supported by this receiver yet.</p>
       <label for="game-volume">Game audio volume <output id="game-volume-value">85%</output></label><input id="game-volume" type="range" min="0" max="100" value="85">
