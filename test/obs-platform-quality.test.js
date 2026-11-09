@@ -28,6 +28,13 @@ test('full-quality relay is explicit opt-in and adds bounded H264 rate control',
  assert.match(args[args.indexOf('-vf')+1],/source_fps/);
  assert.match(args[args.indexOf('-vf')+1],/drawtext/);
 });
+test('1080p ceiling never increases incoming dimensions',()=>{
+ const p=getActiveQualityProfile({...env,OBS_SHARED_HIGH_QUALITY_ENABLED:'true'});
+ const args=buildQualityVideoArgs(p);
+ const filter=args[args.indexOf('-vf')+1];
+ assert.match(filter,/min\(1920,iw\)/);
+ assert.match(filter,/min\(1080,ih\)/);
+});
 test('default safe pipeline retains video passthrough and never upscales',()=>{
  const args=buildRelayArgs(env);
  assert.equal(args[args.indexOf('-c:v')+1],'copy');

@@ -34,7 +34,7 @@ export function buildQualityVideoArgs(profile, options = {}) {
   // The filter never upscales the input. Frames are not artificially doubled
   // from 30 to 60fps; fps from the sender is retained, to a maximum of 60.
   const filters = [
-    'scale=w=1920:h=1080:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos',
+    "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos",
     'fps=fps=min(source_fps\\,60):round=near'
   ];
   if (options.overlay) {
