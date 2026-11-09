@@ -34,7 +34,7 @@ export function buildRelayArgs(env = process.env, options = {}) {
   if (music?.playlistPath && music.volume > 0) {
     // FFconcat plays selected audio URLs in order. Loop the playlist only
     // when auto-next was enabled; game audio remains the primary input.
-    if (music.autoNext) args.push('-stream_loop', '-1');
+    // The playlist already repeats selected tracks; concat -stream_loop is unreliable.
     args.push('-f','concat','-safe','0',
       '-protocol_whitelist','file,https,tls,tcp,crypto,http',
       '-i',music.playlistPath);
