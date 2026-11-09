@@ -30,7 +30,7 @@ test('external music sources require exact HTTPS allowlisted host',()=>{
  assert.deepEqual(profile.selected.map(t=>t.id),['ok']);
 });
 test('music mix maps live video, game audio and music at separate gains with overlay',()=>{
- const args=buildRelayArgs(env,{music:{playlistPath:'/tmp/approved.ffconcat',volume:22,autoNext:true},overlay:true,gameVolume:85});
+ const args=buildRelayArgs({...env,OBS_FORCE_VIDEO_REENCODE:'true'},{music:{playlistPath:'/tmp/approved.ffconcat',volume:22,autoNext:true},overlay:true,gameVolume:85});
  const filter=args[args.indexOf('-filter_complex')+1];
  assert.match(filter,/volume=0.85/);
  assert.match(filter,/volume=0.22/);
