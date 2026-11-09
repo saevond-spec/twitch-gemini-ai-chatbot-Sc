@@ -163,6 +163,7 @@ async function startProtectedRelay() {
   if (selected.profile) {
     options.gameVolume = selected.profile.gameVolume;
     options.overlay = selected.profile.overlay;
+    options.quality = selected.profile.quality;
     if (selected.status === 'READY') {
       try {
         const playlistPath = await writeMusicPlaylist(selected.profile);
