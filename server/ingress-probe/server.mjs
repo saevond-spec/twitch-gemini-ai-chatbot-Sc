@@ -88,6 +88,7 @@ function launchTunnel() {
         if (!stopped) {
           status.publicEndpoint = null;
           status.tunnel = 'DISCONNECTED_' + String(code);
+          console.log('RTMP_TUNNEL_DISCONNECTED ' + String(code));
         }
       }
     });
@@ -101,6 +102,7 @@ function launchTunnel() {
       if (port > 0 && port <= 65535) {
         status.publicEndpoint = 'tcp://' + match[1].toLowerCase() + ':' + port;
         status.tunnel = 'PUBLIC_TCP_ASSIGNED';
+        console.log('RTMP_INGRESS_READY ' + status.publicEndpoint);
       }
     }
   }
@@ -123,6 +125,7 @@ const server = http.createServer((req, res) => {
   }
 });
 server.listen(Number(process.env.PORT) || 10000, '0.0.0.0', () => {
+  console.log('RTMP_PROBE_SERVER_STARTED');
   launchMediaReceiver();
   launchTunnel();
 });
@@ -130,6 +133,7 @@ function stop() {
   if (stopped) return;
   stopped = true;
   status.tunnel = 'EXPIRED';
+  console.log('RTMP_PROBE_EXPIRED');
   status.publicEndpoint = null;
   status.mediaReceiver = 'STOPPED';
   for (const child of children) child.kill('SIGTERM');
@@ -137,3 +141,5 @@ function stop() {
 setTimeout(stop, lifetimeMs).unref();
 process.on('SIGTERM', () => { stop(); server.close(); });
 process.on('SIGINT', () => { stop(); server.close(); });
+
+setInterval(() => console.log('RTMP_PROBE_HEALTH ' + JSON.stringify({tunnel:status.tunnel,receiver:status.mediaReceiver,frames:status.frames,remainingSeconds:Math.max(0,Math.floor((began + lifetimeMs - Date.now())/1000))})), 20000).unref();
