@@ -185,6 +185,34 @@ async function startProtectedRelay() {
     options.overlay = true;
     status.musicMode = 'SYNTHETIC_TONE_TEST_ONLY';
   }
+  // Explicit two-flag test only. This selects one real CC0 MP3 file from
+  // Keynata Commons, not a generated tone and not one of the user's NCS tracks.
+  // The selection is ephemeral and never modifies saved dashboard preferences.
+  if (process.env.OBS_PUBLIC_SMOKE_TEST === 'true' &&
+      process.env.OBS_CC0_SELECTED_TRACK_TEST === 'true') {
+    const track = {
+      id: 'classical_duo_24002',
+      title: 'Classical Duo No. 24002 — CC0 test track',
+      genre: 'mixed',
+      sourceUrl: 'https://carf-coder.github.io/keynata-commons/release/tracks/classical_duo_24002/classical_duo_24002.mp3'
+    };
+    try {
+      const playlistPath = await writeMusicPlaylist({
+        selected: [track], shuffle: false, autoNext: false
+      });
+      options.music = { playlistPath, volume: 22, autoNext: false };
+      options.gameVolume = 85;
+      options.overlay = true;
+      status.musicMode = 'SELECTED_CC0_MP3_PLAYLIST_TEST';
+      status.selectedMusicCount = 1;
+    } catch {
+      // Fail closed for the music test rather than reporting stream success
+      // for video-only playback.
+      status.musicMode = 'SELECTED_CC0_MP3_PLAYLIST_FAILED';
+      relayStarting = false;
+      return;
+    }
+  }
   if (stopped) { relayStarting = false; return; }
   let args;
   try { args = buildRelayArgs(process.env,options); }
