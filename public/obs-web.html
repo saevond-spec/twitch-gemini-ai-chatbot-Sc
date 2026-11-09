@@ -103,7 +103,18 @@
     <p class="hint">This reports the music player's control state, <strong>not</strong> whether viewers can hear audio.</p>
     <div class="actions"><button data-music-action="play">Play music</button><button data-music-action="pause">Pause music</button><button data-music-action="skip">Next song</button><button data-music-action="volume" data-volume="0">Mute music</button><button data-music-action="club">Club / House</button><button data-music-action="dubstep">Dubstep</button></div>
     <label for="music-volume">Music volume</label><input id="music-volume" type="range" min="0" max="100" value="22"><button id="save-music-volume" type="button">Apply music volume</button>
-    <p class="hint">These control the existing music player. The new receiver agent does not yet mix that player into PS5 video. Shuffle, local file selection and auto-next parity are still pending.</p>
+    <fieldset id="music-library-panel">
+      <legend>Stream music library · APK-style track selection</legend>
+      <p class="hint" id="music-library-help">Only tracks explicitly approved for livestream use are selectable. Your music choices are saved in the website's settings, but sending them to the isolated cloud mixer requires the receiver integration.</p>
+      <div class="actions"><button type="button" id="select-all-music">Select all approved tracks</button><button type="button" id="clear-music-selection">Clear selection</button></div>
+      <div id="music-track-list" role="group" aria-label="Licensed music tracks"><p class="hint">Unlock the dashboard to load your catalog.</p></div>
+      <label class="check-label"><input id="music-autostart" type="checkbox" checked> Automatically start selected music when the stream starts</label>
+      <label class="check-label"><input id="music-shuffle" type="checkbox" checked> Shuffle selected tracks</label>
+      <label class="check-label"><input id="music-autonext" type="checkbox" checked> Automatically play the next selected track</label>
+      <button type="button" id="save-music-library">Save selected tracks and startup settings</button>
+      <p class="hint" id="music-library-status">No live mixer has been verified; selecting tracks does not yet make them audible to viewers.</p>
+    </fieldset>
+    <p class="hint">The current remote music player is separate from the PS5 relay. Its controls are not proof that music is present in the output mix.</p>
     <p class="command-label">You can also use Twitch chat:</p>
     <div class="commands">
       <code>!play</code><code>!music pause</code><code>!skip</code><code>!music dubstep</code><code>!music club</code>

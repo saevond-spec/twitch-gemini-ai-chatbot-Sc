@@ -56,6 +56,7 @@
   const el = id => document.getElementById(id);
   let accessKey = '', snapshot = null, polling = null, busy = false, epoch = 0;
   let ingress = null;
+  let musicSettingsDirty = false;
   const message = text => { el('setup-message').textContent = text; };
   function lock() {
     epoch += 1;
@@ -66,6 +67,9 @@
     document.querySelectorAll('[data-receiver-action]').forEach(button => { button.disabled = true; });
     el('agent-state').textContent = 'Unlock to check receiver connection';
     el('agent-progress').textContent = 'Settings locked';
+    el('music-track-list').replaceChildren();
+    el('music-library-status').textContent = 'Unlock to view your saved track selections.';
+    musicSettingsDirty = false;
     ingress = null;
     el('ingest-address').value = 'Unavailable';
     el('ingest-receiver').textContent = 'Unlock to check';
@@ -128,8 +132,72 @@
     try { await navigator.clipboard.writeText(ingress.endpoint); message('Temporary RTMP receiver URL copied. Not a PS5 Broadcast menu setting.'); }
     catch { message('Clipboard unavailable. Copy the displayed address manually.'); }
   });
+  function renderMusicSettings(data, force = false) {
+    const catalog = data.settings.musicLibrary || [];
+    const prefs = data.settings.music || {};
+    if (!force && musicSettingsDirty) return;
+    const list = el('music-track-list');
+    list.replaceChildren();
+    if (!catalog.length) {
+      const empty = document.createElement('p');
+      empty.className = 'hint';
+      empty.textContent = 'No approved music tracks are configured on the server. Upload a licensed catalog; no songs have been fabricated.';
+      list.append(empty);
+    }
+    const selected = new Set(prefs.selectedTrackIds || []);
+    for (const item of catalog) {
+      const label = document.createElement('label');
+      label.className = 'check-label';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'music-track-select';
+      checkbox.value = item.id;
+      checkbox.checked = item.streamApproved && selected.has(item.id);
+      checkbox.disabled = !item.streamApproved;
+      checkbox.addEventListener('change', () => { musicSettingsDirty = true; });
+      const caption = document.createElement('span');
+      caption.textContent = item.title + (item.artist ? ' — ' + item.artist : '') +
+        (item.streamApproved ? '' : ' (streaming rights unverified)');
+      label.append(checkbox, caption);
+      list.append(label);
+    }
+    el('music-autostart').checked = prefs.autoStart === true;
+    el('music-shuffle').checked = prefs.shuffle !== false;
+    el('music-autonext').checked = prefs.autoNext !== false;
+    el('music-volume').value = prefs.volume ?? 22;
+    el('music-library-status').textContent = catalog.length
+      ? selected.size + ' approved tracks selected. Saved settings are not yet wired to the isolated Sleipnir mixer.'
+      : 'Add approved tracks before enabling on-stream playback.';
+    musicSettingsDirty = false;
+  }
+  for (const id of ['music-autostart','music-shuffle','music-autonext']) {
+    el(id).addEventListener('change', () => { musicSettingsDirty = true; });
+  }
+  el('select-all-music').addEventListener('click', () => {
+    document.querySelectorAll('.music-track-select').forEach(c => { if (!c.disabled) c.checked = true; });
+    musicSettingsDirty = true;
+  });
+  el('clear-music-selection').addEventListener('click', () => {
+    document.querySelectorAll('.music-track-select').forEach(c => { c.checked = false; });
+    musicSettingsDirty = true;
+  });
+  el('save-music-library').addEventListener('click', () => {
+    if (!accessKey) return message('Unlock the dashboard before saving music settings.');
+    const selectedTrackIds = Array.from(document.querySelectorAll('.music-track-select:checked'), c => c.value);
+    action(async () => {
+      const data = await request('music/library-settings', 'PUT', {
+        selectedTrackIds, autoStart: el('music-autostart').checked,
+        shuffle: el('music-shuffle').checked, autoNext: el('music-autonext').checked,
+        volume: Number(el('music-volume').value)
+      });
+      musicSettingsDirty = false;
+      renderMusicSettings(data, true);
+      return data;
+    }, 'Music library preferences saved. Cloud audio mixing is not yet verified.');
+  });
   function render(data, loadForm = false) {
     snapshot = data;
+    renderMusicSettings(data, loadForm);
     el('relay-form').hidden = false; el('diagnostics-panel').hidden = false;
     if (loadForm) {
       el('relay-url').value = data.settings.relayUrl;
