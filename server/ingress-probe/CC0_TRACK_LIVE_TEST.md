@@ -5,3 +5,5 @@ Only if **both** OBS_PUBLIC_SMOKE_TEST=true and OBS_CC0_SELECTED_TRACK_TEST=true
 Music mix uses game audio 85%, track audio 22%, with the @saevond overlay. Only 1 test track is selected and auto-next is off. This is a bounded live test for the already-authorized Twitch/Kick destinations. Do not claim successful remote audio playback from FFmpeg frames alone. Check remote input resolution, both destinations' states, relay status, and if possible direct viewer playback.
 
 Immediately disable both flags after testing. The test should never run on normal receiver startup without explicit opt-in.
+
+Operational safety: an unsuccessful music decode is not a successful track playback. Do not classify an upstream connection as proof of audio on viewer players.
