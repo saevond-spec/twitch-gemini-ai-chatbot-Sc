@@ -22,6 +22,27 @@ async function helixGet(path, params) {
   return response.data?.data || [];
 }
 
+export async function createLiveClip({ broadcasterId, durationSeconds = 35, title }) {
+  const duration = Math.max(5, Math.min(60, Number(durationSeconds) || 35));
+  const [clip] = await helixPost('/clips', {
+    broadcaster_id: broadcasterId,
+    duration,
+    title: String(title || 'SweatyClanker live highlight').slice(0, 100),
+  });
+  if (!clip?.id) throw new Error('Twitch did not return a live clip id');
+
+  for (let i = 0; i < 12; i += 1) {
+    if (i) await new Promise(r => setTimeout(r, 5000));
+    const [ready] = await helixGet('/clips', { id: clip.id });
+    if (ready) {
+      log.info(`Live Twitch clip ready: ${clip.id}`);
+      return { ...ready, edit_url: clip.edit_url };
+    }
+  }
+
+  throw new Error(`Live Twitch clip ${clip.id} was not ready after 60 seconds`);
+}
+
 export async function createClipFromVod({ broadcasterId, vodId, endSeconds, durationSeconds, title }) {
   const duration = Math.max(5, Math.min(60, Number(durationSeconds) || 30));
   const editorId = getAuthenticatedUserId();

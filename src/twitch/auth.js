@@ -33,6 +33,7 @@ export const CORE_BOT_SCOPES = [
   'moderation:read', 'channel:manage:moderators',
   'moderator:read:followers',
   'moderator:manage:shoutouts',
+  'clips:edit',
   'channel:manage:clips',
 ];
 

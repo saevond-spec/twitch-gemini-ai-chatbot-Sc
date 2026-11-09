@@ -4,7 +4,7 @@ import { getAccessToken } from '../twitch/auth.js';
 import { getRedis } from '../storage/redis.js';
 import { createLogger } from '../logger/index.js';
 import bus from '../bus/index.js';
-import { createClipFromVod } from '../clips/twitchClipService.js';
+import { createClipFromVod, createLiveClip } from '../clips/twitchClipService.js';
 import { enqueueTask } from '../queue/index.js';
 import { finalWindowOffsetSeconds, finalWindowSignals } from '../../highlight-window.js';
 import {
@@ -115,6 +115,9 @@ export class HighlightDetector {
     this.manualClipCooldownMs = asNumber(process.env.MANUAL_CLIP_COOLDOWN_SECONDS, 45, 10, 300) * 1000;
     this.viewerClipVoteWindowMs = asNumber(process.env.VIEWER_CLIP_VOTE_WINDOW_SECONDS, 12, 5, 60) * 1000;
     this.viewerClipVotesRequired = asNumber(process.env.VIEWER_CLIP_VOTES_REQUIRED, 2, 1, 10);
+    this.autoLiveClippingEnabled = asBoolean(process.env.AUTO_LIVE_CLIPPING_ENABLED, true);
+    this.autoLiveClipCooldownMs = asNumber(process.env.AUTO_LIVE_CLIP_COOLDOWN_SECONDS, 120, 30, 900) * 1000;
+    this.autoLiveClipDurationSeconds = asNumber(process.env.AUTO_LIVE_CLIP_DURATION_SECONDS, 35, 5, 60);
     this.states = new Map();
     this.interval = null;
     this.finalizeTimers = new Set();
@@ -137,6 +140,7 @@ export class HighlightDetector {
         candidates: [],
         clipVotes: [],
         lastManualClipAt: 0,
+        lastAutoClipAt: 0,
         lastAiAt: 0,
         lastEvidencePersistAt: 0,
         restored: false
@@ -272,6 +276,7 @@ export class HighlightDetector {
       clipVotes: (state.clipVotes || [])
         .filter((vote) => Number.isFinite(Number(vote?.at)) && Date.now() - Number(vote.at) <= this.viewerClipVoteWindowMs),
       lastManualClipAt: Number(state.lastManualClipAt || 0),
+      lastAutoClipAt: Number(state.lastAutoClipAt || 0),
       pendingFinalize: Boolean(state.pendingFinalize)
     };
     const serialized = JSON.stringify(payload);
@@ -479,6 +484,61 @@ export class HighlightDetector {
     return clip;
   }
 
+  async maybeCreateAutoLiveClip(state, candidate, now = Date.now()) {
+    if (!this.autoLiveClippingEnabled || !state?.live || state?.ending) return null;
+
+    const lastAt = Number(state.lastAutoClipAt || 0);
+    if (now - lastAt < this.autoLiveClipCooldownMs) {
+      log.info(`Skipping auto live clip: cooldown active for ${state.channel}`);
+      return null;
+    }
+
+    // Reserve the cooldown before calling Twitch so concurrent highlight signals
+    // cannot create duplicate clips for the same moment.
+    state.lastAutoClipAt = now;
+    await this.persist(state).catch(() => {});
+
+    try {
+      await this.resolveBroadcaster(state);
+      const clip = await createLiveClip({
+        broadcasterId: state.broadcasterId,
+        durationSeconds: Math.min(this.autoLiveClipDurationSeconds, Number(candidate?.endSeconds || this.autoLiveClipDurationSeconds)),
+        title: cleanText(candidate?.title || `${state.gameName || 'Gaming'} live highlight`, 100),
+      });
+
+      await enqueueTask('generate-clips', {
+        clipId: clip.id,
+        broadcasterId: state.broadcasterId,
+        title: candidate?.title,
+        reason: candidate?.reason || 'SweatyClanker auto live highlight',
+        twitchUrl: clip.url || `https://clips.twitch.tv/${clip.id}`,
+        source: 'sweatyclanker-auto-live',
+        highlightScore: Number(candidate?.score || 0),
+        streamId: state.streamId || null,
+        gameName: state.gameName || '',
+      }, {
+        jobId: `clip-${clip.id}`,
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      });
+
+      log.info(`Auto-created live Twitch clip ${clip.id} for ${state.channel} (score=${candidate?.score || 0})`);
+      return clip;
+    } catch (error) {
+      // Network/API failures should not lock automatic clipping for the full
+      // cooldown. Back off briefly, then allow the next strong moment to retry.
+      state.lastAutoClipAt = now - this.autoLiveClipCooldownMs + 15_000;
+      await this.persist(state).catch(() => {});
+      const status = Number(error?.response?.status || 0);
+      if (status === 401 || status === 403) {
+        log.warn('Auto live clip blocked by Twitch authorization; re-authorize SweatyClanker with clips:edit');
+      } else {
+        log.warn('Auto live clip creation failed', error.message);
+      }
+      return null;
+    }
+  }
+
   async requestManualClip({ channel, user = {}, message = '', now = Date.now() } = {}) {
     if (!this.enabled) return { ok: false, status: 'disabled', message: 'Clip detection is disabled.' };
     const state = this.stateFor(channel);
@@ -673,7 +733,7 @@ export class HighlightDetector {
       if (!signals.finalWindow) {
         if (shouldFallbackClipWithoutAI(signals, this.aiFallbackScoreThreshold)) {
           const score = Number(signals.mathScore || signals.score || 0);
-          this.addCandidate(state, {
+          const candidate = this.addCandidate(state, {
             elapsed,
             durationSeconds: 35,
             title: `${state.gameName || 'Gaming'} reaction spike`,
@@ -681,6 +741,7 @@ export class HighlightDetector {
             score,
           });
           log.warn(`Saved high-confidence mathematical highlight without AI review (score=${score})`);
+          await this.maybeCreateAutoLiveClip(state, candidate);
           return;
         }
         // Do not burn the long highlight cooldown when the model is unavailable.
@@ -694,13 +755,14 @@ export class HighlightDetector {
     }
 
     if (!decision?.highlight || Number(decision.score) < 70) return;
-    this.addCandidate(state, {
+    const candidate = this.addCandidate(state, {
       elapsed,
       durationSeconds: asNumber(decision.durationSeconds, 35, 20, 55),
       title: decision.title || `${state.gameName || 'Gaming'} highlight`,
       reason: decision.reason || 'Strong live chat reaction',
       score: Number(decision.score) || 0,
     });
+    await this.maybeCreateAutoLiveClip(state, candidate);
   }
 
   scheduleFinalize(snapshot, delayMs = 60000) {
