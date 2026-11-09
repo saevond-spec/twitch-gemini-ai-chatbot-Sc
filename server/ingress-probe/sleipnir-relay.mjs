@@ -58,7 +58,7 @@ export function buildRelayArgs(env = process.env, options = {}) {
   } else {
     args.push('-map','0:v:0','-map','0:a:0?');
   }
-  const quality = getActiveQualityProfile(env);
+  const quality = getActiveQualityProfile(env, options);
   if (quality.enabled) {
     args.push(...buildQualityVideoArgs(quality, {overlay:options.overlay === true}));
   } else if (options.overlay === true) {
