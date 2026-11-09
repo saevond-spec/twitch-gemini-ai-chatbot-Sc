@@ -5,12 +5,26 @@ import { pathToFileURL } from 'node:url';
 import { normalizeProfile } from '../src/encoder/receiverControl.js';
 import { validateRelay } from '../src/encoder/obsWebControl.js';
 
-export function receiverArgs(action, input) {
+/**
+ * Direct mode restores the APK's missing property: a real RTMP listener.
+ * The process still needs an external TCP-capable host and a separately verified
+ * PS5 DNS/ingest route; Render's public HTTP endpoint does not expose port 1935.
+ *
+ * In direct mode, the ingress must be protected by an upstream allowlist/gateway.
+ * FFmpeg's RTMP listener does not authenticate Twitch-style publish keys.
+ */
+export function receiverArgs(action, input, { inputMode = 'existing-nginx' } = {}) {
   if (!['diagnostic', 'start', 'reconnect'].includes(action)) throw Error('Unknown receiver action');
   const settings = validateRelay(input);
   const p = normalizeProfile(settings.profile);
+  if (!['existing-nginx', 'direct-rtmp'].includes(inputMode)) throw Error('Unsupported receiver input mode');
+  const source = inputMode === 'direct-rtmp'
+    ? 'rtmp://0.0.0.0:1935/app'
+    : 'rtmp://127.0.0.1:1935/relay/ps5';
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:1',
-    '-rw_timeout', '15000000', '-i', 'rtmp://127.0.0.1:1935/relay/ps5'];
+    '-rw_timeout', '15000000',
+    ...(inputMode === 'direct-rtmp' ? ['-listen', '1'] : []),
+    '-i', source];
   if (action === 'diagnostic') return args.concat(['-map', '0:v:0', '-map', '0:a:0?', '-f', 'null', '-']);
   if (!settings.streamKey) throw Error('Missing stream key');
   if (p.quality === 'passthrough') {
@@ -37,6 +51,13 @@ export async function runAgent(env = process.env) {
   if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash || base.pathname !== '/') throw Error('Use the HTTPS dashboard origin');
   const token = env.ENCODER_BRIDGE_TOKEN || '';
   if (token.length < 32) throw Error('Matching ENCODER_BRIDGE_TOKEN of at least 32 characters required');
+  const inputMode = env.OBS_RECEIVER_INPUT_MODE || 'existing-nginx';
+  if (!['existing-nginx', 'direct-rtmp'].includes(inputMode)) throw Error('Unsupported receiver input mode');
+  // Never expose unauthenticated native RTMP by accident. The operator must
+  // explicitly acknowledge that a TCP ingress firewall/gateway is configured.
+  if (inputMode === 'direct-rtmp' && env.OBS_RTMP_INGRESS_RESTRICTED !== 'true') {
+    throw Error('Direct RTMP requires a verified ingress allowlist/gateway (OBS_RTMP_INGRESS_RESTRICTED=true)');
+  }
   const id = randomUUID();
   let child = null, state = 'STOPPED', frames = 0, revision = 0, ack = null, lastId = null;
   let lastContact = Date.now(), stopping = false;
@@ -55,7 +76,7 @@ export async function runAgent(env = process.env) {
     await stop();
     if (command.action !== 'stop') {
       try {
-        const args = receiverArgs(command.action, command.settings);
+        const args = receiverArgs(command.action, command.settings, { inputMode });
         state = 'STARTING';
         const current = spawn(env.OBS_FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         child = current;
