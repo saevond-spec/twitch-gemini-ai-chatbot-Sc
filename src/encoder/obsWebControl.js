@@ -162,7 +162,9 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
       !timingSafeEqual(Buffer.from(supplied),Buffer.from(secret))) {
       return res.status(401).json({ error: 'Music sync authentication required' });
     }
-    res.json(receiverMusicProfile(control.settings.music, control.musicCatalog));
+    res.json({ ...receiverMusicProfile(control.settings.music, control.musicCatalog),
+      overlay: control.settings.profile.overlay === true,
+      gameVolume: control.settings.profile.gameVolume });
   });
   router.use(requireAdmin);
   router.get('/status', (_req, res) => res.json(control.snapshot()));
