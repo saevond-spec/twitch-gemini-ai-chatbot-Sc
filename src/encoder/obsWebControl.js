@@ -2,12 +2,13 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ReceiverControl, normalizeProfile } from './receiverControl.js';
 import { fetchIngressStatus } from './obsIngressStatus.js';
+import { musicCatalogFromEnv, normalizeMusicPreferences, publicMusicCatalog } from './obsMusicLibrary.js';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
 import { randomBytes, createCipheriv, createDecipheriv, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 
-export function validateRelay(input = {}, previous = {}) {
+export function validateRelay(input = {}, previous = {}, catalog = []) {
   let url;
   try { url = new URL(input.relayUrl); } catch { throw Error('Enter a valid Sleipnir RTMPS server address'); }
   if (url.protocol !== 'rtmps:' || url.hostname !== 'ingest.sleipnir.tv' ||
@@ -23,7 +24,8 @@ export function validateRelay(input = {}, previous = {}) {
   if (typeof receiverAddress !== 'string' || (receiverAddress && isIP(receiverAddress) !== 4)) {
     throw Error('Receiver address must be an IPv4 address, without a port');
   }
-  return { relayUrl: url.href, streamKey, receiverAddress, profile: normalizeProfile(input.profile ?? previous.profile) };
+  return { relayUrl: url.href, streamKey, receiverAddress, profile: normalizeProfile(input.profile ?? previous.profile),
+    music: normalizeMusicPreferences(input.music ?? {}, catalog, previous.music ?? {}) };
 }
 
 export function probeRelay(relayUrl, connect = tls.connect) {
@@ -54,7 +56,9 @@ export class ObsWebControl {
     this.redis = null;
     this.redisKey = env.ADMIN_API_KEY?.length >= 32 ? createHash("sha256").update("obs-settings-v1:" + env.ADMIN_API_KEY).digest() : null;
     this.probe = probe;
-    this.settings = { relayUrl: 'rtmps://ingest.sleipnir.tv/live', streamKey: '', receiverAddress: '', profile: normalizeProfile() };
+    this.musicCatalog = musicCatalogFromEnv(env);
+    this.settings = { relayUrl: 'rtmps://ingest.sleipnir.tv/live', streamKey: '', receiverAddress: '', profile: normalizeProfile(),
+      music: normalizeMusicPreferences({}, this.musicCatalog) };
     this.storageFile = env.OBS_CONTROL_SETTINGS_FILE;
     this.storageKey = /^[a-f0-9]{64}$/i.test(env.OBS_CONTROL_ENCRYPTION_KEY || '')
       ? Buffer.from(env.OBS_CONTROL_ENCRYPTION_KEY, 'hex') : null;
@@ -69,7 +73,7 @@ export class ObsWebControl {
         decipher.setAuthTag(Buffer.from(data.tag, 'hex'));
         this.settings = validateRelay(JSON.parse(Buffer.concat([
           decipher.update(Buffer.from(data.data, 'hex')), decipher.final()
-        ]).toString('utf8')));
+        ]).toString('utf8')), {}, this.musicCatalog);
       } catch (error) { if (error.code !== 'ENOENT') this.storageError = true; }
     }
   }
@@ -81,7 +85,7 @@ export class ObsWebControl {
         const data = JSON.parse(saved);
         const decipher = createDecipheriv('aes-256-gcm', this.redisKey, Buffer.from(data.iv, 'hex'));
         decipher.setAuthTag(Buffer.from(data.tag, 'hex'));
-        this.settings = validateRelay(JSON.parse(Buffer.concat([decipher.update(Buffer.from(data.data, 'hex')), decipher.final()]).toString()));
+        this.settings = validateRelay(JSON.parse(Buffer.concat([decipher.update(Buffer.from(data.data, 'hex')), decipher.final()]).toString()), {}, this.musicCatalog);
       }
       this.redis = redis;
     } catch { this.storageError = true; }
@@ -89,7 +93,7 @@ export class ObsWebControl {
   async savePersistent(input) {
     if (!this.redis) return this.save(input);
     if (this.storageError) throw Error('Settings storage needs repair before saving');
-    const next = validateRelay(input, this.settings);
+    const next = validateRelay(input, this.settings, this.musicCatalog);
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.redisKey, iv);
     const data = Buffer.concat([cipher.update(JSON.stringify(next)), cipher.final()]);
@@ -100,7 +104,7 @@ export class ObsWebControl {
     return this.snapshot();
   }
   save(input) {
-    const next = validateRelay(input, this.settings);
+    const next = validateRelay(input, this.settings, this.musicCatalog);
     if (this.storageError) throw Error('Saved settings could not be decrypted; restore the storage encryption key before saving');
     if (this.durable) {
       const iv = randomBytes(12);
@@ -127,7 +131,9 @@ export class ObsWebControl {
     const fresh = Boolean(this.sample && this.now() - this.sample.at <= 90000);
     return {
       settings: { relayUrl: this.settings.relayUrl, receiverAddress: this.settings.receiverAddress,
-        keyConfigured: Boolean(this.settings.streamKey), profile: this.settings.profile, storage: this.redis ? 'encrypted_redis' : this.durable ? 'encrypted_file' : 'session_only',
+        keyConfigured: Boolean(this.settings.streamKey), profile: this.settings.profile,
+        music: this.settings.music, musicLibrary: publicMusicCatalog(this.musicCatalog),
+        musicRelayVerified: false, storage: this.redis ? 'encrypted_redis' : this.durable ? 'encrypted_file' : 'session_only',
         storageError: this.storageError, appliedToReceiver: false },
       receiver: { ...this.receiver.snapshot(), controllable: this.receiver.snapshot().connected },
       telemetry: { fresh, receivedAt: this.sample ? new Date(this.sample.at).toISOString() : null,
@@ -166,6 +172,12 @@ export function createObsWebRouter({ control, requireAdmin, receiverToken = '', 
   router.post('/command', (req, res) => {
     try { control.receiver.command(req.body?.action, control.settings); res.json(control.snapshot()); }
     catch (error) { res.status(409).json({ error: error.message }); }
+  });
+  // Saved library selection does not by itself alter a separate cloud receiver.
+  router.put('/music/library-settings', async (req, res) => {
+    try { res.json(await control.savePersistent({ ...control.settings,
+      music: normalizeMusicPreferences(req.body, control.musicCatalog, control.settings.music) })); }
+    catch (error) { res.status(400).json({ error: error.message }); }
   });
   router.post('/music', (req, res) => {
     try {
