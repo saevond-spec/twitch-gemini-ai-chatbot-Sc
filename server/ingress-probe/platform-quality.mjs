@@ -50,6 +50,7 @@ export function buildQualityVideoArgs(profile, options = {}) {
     '-minrate', String(profile.videoKbps)+'k',
     '-bufsize', String(profile.videoKbps * 2)+'k',
     '-x264-params', 'nal-hrd=cbr:force-cfr=0',
-    '-g','120','-keyint_min','1'
+    '-g','120','-keyint_min','1',
+    '-force_key_frames','expr:gte(t,n_forced*2)'
   ];
 }
