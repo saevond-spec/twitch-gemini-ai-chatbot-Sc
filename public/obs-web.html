@@ -128,6 +128,21 @@
       <code>!play</code><code>!music pause</code><code>!skip</code><code>!music dubstep</code><code>!music club</code>
     </div>
   </section>
+  <section class="panel" id="backend-terminal-panel" aria-labelledby="backend-terminal-head">
+    <h2 id="backend-terminal-head">Backend diagnostics terminal</h2>
+    <p class="hint">Read-only commands executed by the authenticated web backend. This is not a Linux shell and cannot access secrets or start/stop a broadcast.</p>
+    <label for="backend-terminal-command">Command</label>
+    <select id="backend-terminal-command">
+      <option value="help">help — list commands</option>
+      <option value="status">status — backend connection</option>
+      <option value="ingress">ingress — receiver probe</option>
+      <option value="quality">quality — video target</option>
+      <option value="receiver">receiver — agent heartbeat</option>
+    </select>
+    <div class="actions"><button id="run-backend-terminal" type="button" disabled>Run diagnostics</button></div>
+    <pre id="backend-terminal-output" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#10111a;color:#d3f7df;padding:1rem;border-radius:0.6rem;min-height:7rem;font:0.85rem/1.55 monospace;">$ locked
+Unlock the dashboard to use the backend terminal.</pre>
+  </section>
   <section class="panel" aria-labelledby="route-head">
     <h2 id="route-head">Receiver timeline</h2><ol id="receiver-timeline" class="guide"><li>No command history yet</li></ol><h3>Broadcast path</h3>
     <ul class="steps">
