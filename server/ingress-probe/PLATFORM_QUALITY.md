@@ -19,3 +19,5 @@ The high quality FFmpeg filter preserves aspect ratio and does not upscale lower
 Official platform source: https://help.kick.com/en/articles/7066931-how-to-stream-on-kick-com
 https://help.twitch.tv/s/article/enhanced-broadcasting?language=en_US
 https://sleipnir.tv/
+
+Diagnostic rule: only measured receiver output and Sleipnir destination status may confirm deployed output resolution; a saved dashboard dropdown alone does not.
