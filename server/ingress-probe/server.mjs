@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { authorizePublisher, buildRelayArgs, relayConfiguration } from './sleipnir-relay.mjs';
 
 const began = Date.now();
 const lifetimeMs = 12 * 60 * 1000;
@@ -16,13 +17,16 @@ const status = {
   frames: 0,
   inboundBytes: 0,
   syntheticProbe: 'NOT_RUN',
-  output: 'no recording and no outbound broadcast',
+  output: 'no recording; Sleipnir relay is disabled unless explicitly configured',
+  relay: relayConfiguration().ready ? 'ARMED_WAITING_FOR_AUTHENTICATED_PUBLISHER' : 'DISABLED',
+  relayFrames: 0,
   outputVerified: false,
   ps5Connected: false,
   notes: 'A public endpoint alone does not prove PS5 native broadcast can be redirected to this host and port.'
 };
 const children = new Set();
 let stopped = false;
+let relayChild = null;
 const endpointRe = /tcp:\/\/([a-z0-9][a-z0-9.-]*):(\d{2,5})/i;
 const safeError = error => (error && error.code ? String(error.code) : 'PROCESS_ERROR');
 
@@ -85,6 +89,41 @@ function launchSyntheticProbe(endpoint) {
   }, 4000);
 }
 
+function startProtectedRelay() {
+  if (stopped || relayChild || !relayConfiguration().ready) return;
+  let args;
+  try { args = buildRelayArgs(); } catch { return; }
+  status.relay = 'CONNECTING_TO_SLEIPNIR';
+  status.relayFrames = 0;
+  let buffer = '';
+  const child = spawnTracked('ffmpeg', args, {
+    data(chunk) {
+      buffer = (buffer + chunk).slice(-2048);
+      const lines = buffer.split(/\r?\n/); buffer = lines.pop();
+      for (const line of lines) {
+        if (/^frame=\d+$/.test(line)) {
+          const count = Number(line.slice(6));
+          if (Number.isSafeInteger(count) && count > status.relayFrames) {
+            status.relayFrames = count;
+            status.relay = 'MEDIA_SENDING_TO_SLEIPNIR_UNVERIFIED_PLAYBACK';
+          }
+        }
+      }
+    },
+    // FFmpeg stderr may contain a stream key; never log it.
+    stderr() {},
+    error(error) { status.relay = 'ERROR_' + safeError(error); },
+    close(code) {
+      if (relayChild === child) {
+        relayChild = null;
+        status.relay = 'STOPPED_EXIT_' + String(code);
+        // No automatic restart or retry: requires another authenticated publish.
+      }
+    }
+  });
+  relayChild = child;
+}
+
 function launchTunnel() {
   // Ephemeral SSH key used exclusively for this 12-minute outbound tunnel.
   const key = '/tmp/obs-free-ingress-key';
@@ -133,6 +172,25 @@ function launchTunnel() {
 const server = http.createServer((req, res) => {
   res.setHeader('Cache-Control','no-store');
   res.setHeader('X-Content-Type-Options','nosniff');
+  if (req.url === '/authorize-publish' && req.method === 'POST') {
+    // Auth callback is loopback-only; the public HTTP service cannot invoke it.
+    // Do not reflect the publisher's name or stream key.
+    const remote = req.socket.remoteAddress;
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) {
+      res.writeHead(403); res.end(); return;
+    }
+    let payload = '';
+    req.on('data', chunk => {
+      payload += String(chunk);
+      if (payload.length > 4096) req.destroy();
+    });
+    req.on('end', () => {
+      const permitted = !stopped && !relayChild && authorizePublisher(payload);
+      res.writeHead(permitted ? 200 : 403); res.end();
+      if (permitted) setTimeout(startProtectedRelay, 1000);
+    });
+    return;
+  }
   if (req.url === '/' || req.url === '/status' || req.url === '/healthz') {
     res.setHeader('Content-Type','application/json; charset=utf-8');
     res.writeHead(200);
@@ -153,6 +211,7 @@ function stop() {
   console.log('RTMP_PROBE_EXPIRED');
   status.publicEndpoint = null;
   status.mediaReceiver = 'STOPPED';
+  status.relay = 'STOPPED';
   for (const child of children) child.kill('SIGTERM');
 }
 setTimeout(stop, lifetimeMs).unref();
