@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { getActiveQualityProfile, buildQualityVideoArgs } from './platform-quality.mjs';
+import { chooseVideoMode } from './backend-video-mode.mjs';
 
 export const SLEIPNIR_RTMP_SERVER = 'rtmps://ingest.sleipnir.tv:1936/live';
 
@@ -59,17 +60,20 @@ export function buildRelayArgs(env = process.env, options = {}) {
     args.push('-map','0:v:0','-map','0:a:0?');
   }
   const quality = getActiveQualityProfile(env, options);
-  if (options.testPassthrough === true && env.OBS_PUBLIC_SMOKE_TEST === 'true' && (env.OBS_1080P60_PASSTHROUGH_TEST === 'true' || env.OBS_HEAVY_MOTION_SMOKE_TEST === 'true')) {
-    // Diagnostic-only: preserve native source H264, avoid a second 1080p encoder.
+  const mode = chooseVideoMode(env,options);
+  if (mode.videoMode === 'copy') {
+    // No pixel processing here: keeps original H264 resolution/FPS and
+    // avoids the free Render instance becoming an overloaded encoder.
+    // Passthrough does NOT enforce Sleipnir's 5 Mbps limit; source must.
     args.push('-c:v','copy');
-  } else if (quality.enabled) {
-    args.push(...buildQualityVideoArgs(quality, {overlay:options.overlay === true}));
-  } else if (options.overlay === true) {
+  } else if (mode.videoMode === 'bounded-encode') {
+    args.push(...buildQualityVideoArgs(quality,{overlay:mode.overlayApplied}));
+  } else if (mode.videoMode === 'overlay-encode') {
     const label='@saevond';
     args.push('-vf',"drawbox=x=0:y=0:w=iw:h=ih:color=0xD71D8B@0.85:t=8," +
       "drawtext=text='" + label + "':fontcolor=white:fontsize=28:x=24:y=24:box=1:boxcolor=black@0.55:boxborderw=8",
-      '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-pix_fmt','yuv420p');
-  } else args.push('-c:v','copy');
+      '-c:v','libx264','-preset','ultrafast','-threads','2','-tune','zerolatency','-pix_fmt','yuv420p');
+  } else throw Error('UNSUPPORTED_VIDEO_MODE');
   args.push('-c:a','aac','-ar','48000','-b:a','128k','-f','flv',output);
   return args;
 }
