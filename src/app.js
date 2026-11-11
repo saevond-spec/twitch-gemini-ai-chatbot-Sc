@@ -56,6 +56,7 @@ import { createEncoderEventBridge } from './music/encoderBridge.js';
 import { createEncoderDiagnostics } from './music/encoderDiagnostics.js';
 import { createEncoderAdminUnlockRouter } from './security/encoderAdminUnlockRouter.js';
 import { SleipnirLiveState } from './integrations/sleipnir/liveState.js';
+import { KickChatClient, normalizeKickChatEvent } from './kick/client.js';
 
 const log = createLogger('APP');
 const app = express();
@@ -128,6 +129,12 @@ const proactiveWelcomeLimiter = new ProactiveWelcomeLimiter({
   windowMs: 60_000,
 });
 const publicUrl = config.server.publicUrl || 'http://localhost:3000';
+const kickClient = new KickChatClient({
+  clientId: config.kick.clientId,
+  clientSecret: config.kick.clientSecret,
+  publicUrl,
+  logger: createLogger('KICK'),
+});
 const sleipnirLiveState = new SleipnirLiveState({
   staleAfterMs: Math.max(15_000, Number(process.env.SLEIPNIR_LIVE_STATE_STALE_SECONDS || 90) * 1000),
 });
@@ -242,6 +249,58 @@ app.use('/api/obs-web', express.json({ limit: '4kb' }), createObsWebRouter({ con
     action === 'volume' ? handleVolumeCommand({ mod: true }, '!volume ' + volume) :
     handleMusicCommand({ mod: true }, '!music ' + action)
 }));
+app.get('/auth/kick/login', async (req, res) => {
+  try {
+    const url = await kickClient.beginOAuth();
+    res.redirect(url);
+  } catch (err) {
+    log.warn('Kick OAuth start failed', err.message);
+    res.status(503).type('text/plain').send('Kick integration is not configured yet.');
+  }
+});
+
+app.get('/auth/kick/callback', async (req, res) => {
+  const { code, state } = req.query;
+  if (!code || !state) return res.status(400).type('text/plain').send('Missing Kick OAuth code or state');
+  try {
+    const user = await kickClient.completeOAuth(code, state);
+    log.info(`Kick authorization completed for ${user?.username || user?.name || user?.user_id || 'account'}`);
+    res.type('text/plain').send('Kick authorization successful. SweatyClanker now has Kick chat access.');
+  } catch (err) {
+    log.error('Kick OAuth callback failed', err);
+    res.status(500).type('text/plain').send('Kick authorization failed. Check the service logs.');
+  }
+});
+
+app.get('/api/kick/status', requireAdmin, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(kickClient.getStatus());
+});
+
+// Kick requires the exact raw request body for RSA signature verification.
+app.post('/api/kick/webhook', express.raw({ type: 'application/json', limit: '128kb' }), async (req, res) => {
+  try {
+    const valid = await kickClient.verifyWebhook(req.headers, req.body);
+    if (!valid) return res.status(401).send('invalid signature');
+
+    const eventType = String(req.get('Kick-Event-Type') || '');
+    if (eventType !== 'chat.message.sent') return res.status(200).send('ok');
+
+    let payload;
+    try { payload = JSON.parse(req.body.toString('utf8')); }
+    catch { return res.status(400).send('invalid json'); }
+
+    const event = normalizeKickChatEvent(payload);
+    res.status(200).send('ok');
+    setImmediate(() => {
+      handleKickMessage(event).catch(err => log.warn('Kick chat handling failed', err.message));
+    });
+  } catch (err) {
+    log.warn('Kick webhook rejected', err.message);
+    res.status(401).send('invalid webhook');
+  }
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use('/public', express.static('public'));
 
@@ -1069,6 +1128,87 @@ async function handleMessage({ channel, user, message, self }) {
   }
 }
 
+async function handleKickMessage({ channel, broadcasterUserId, user, message, self }) {
+  if (self || !message?.trim() || !broadcasterUserId) return;
+  if (!ai || !moderation) {
+    log.warn('Kick message received before SweatyClanker AI/moderation initialization');
+    return;
+  }
+
+  const username = user['display-name'] || user.username || 'viewer';
+  const login = String(user.username || username).toLowerCase();
+  const memoryChannel = `kick:${channel || broadcasterUserId}`;
+  log.info(`📩 KICK IN: ${username} @ ${channel}: ${message}`);
+
+  const modResult = moderation.analyze(memoryChannel, user, message);
+  if (modResult.blocked) return;
+
+  await ConversationStore.updateLastActivity(memoryChannel);
+  const directInteraction = shouldRespond(message, 'sweatyclanker');
+  const lowerMsg = message.trim().toLowerCase();
+
+  const cmdKey = [...customCommands.keys()].find(cmd => lowerMsg === cmd || lowerMsg.startsWith(cmd + ' '));
+  if (cmdKey) {
+    const cmd = customCommands.get(cmdKey);
+    const allowed = cmd.role === 'all' || (cmd.role === 'moderator' && user.mod);
+    if (allowed && cooldown.check(`kick:${memoryChannel}:${login}`)) {
+      const response = typeof cmd.response === 'function' ? cmd.response(message, user) : cmd.response;
+      await kickClient.sendMessage(broadcasterUserId, response, user.messageId);
+      promMetrics.messagesSent.inc();
+    }
+    return;
+  }
+
+  if (!directInteraction || !cooldown.check(`kick:${memoryChannel}:${login}`)) return;
+
+  const brainName = await scoreBrains(memoryChannel, user, message);
+  const Brain = getBrain(brainName);
+  const brainConfig = Brain.getConfig();
+  const history = await ConversationStore.getHistory(memoryChannel, config.deepseek.maxHistory);
+  const systemPrompt = [
+    brainConfig.systemPrompt,
+    'You are replying in Kick chat, not Twitch.',
+    'Keep the same SweatyClanker personality: laid-back, funny, slightly sarcastic, concise.',
+    'Do not claim to have seen gameplay unless the chat context proves it.',
+  ].join(' ');
+  const userPrompt = buildUserPrompt(message, username, history);
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map(h => ({ role: h.role, content: h.content })),
+    { role: 'user', content: userPrompt },
+  ];
+
+  try {
+    const reply = await ai.chat(messages, {
+      temperature: brainConfig.temperature || 0.7,
+      maxTokens: Math.min(brainConfig.maxTokens || 1024, 220),
+    });
+    const processed = await Brain.processResponse(reply, { channel: memoryChannel, user, message });
+    if (brainName === 'moderation') return;
+    const finalReply = String(processed || reply || getFallbackResponse()).trim().slice(0, 500);
+    if (!finalReply) return;
+
+    await ConversationStore.pushMessage(memoryChannel, 'user', message, username);
+    await ConversationStore.pushMessage(memoryChannel, 'assistant', finalReply);
+    await ProfileStore.update(memoryChannel, login, {
+      platform: 'kick',
+      lastSeen: Date.now(),
+      botInteractions: Number((await ProfileStore.get(memoryChannel, login))?.botInteractions || 0) + 1,
+    });
+    await kickClient.sendMessage(broadcasterUserId, finalReply, user.messageId);
+    promMetrics.messagesSent.inc();
+  } catch (err) {
+    log.warn('Kick AI reply failed; sending local fallback', err.message);
+    const fallback = getFallbackResponse().slice(0, 500);
+    try {
+      await kickClient.sendMessage(broadcasterUserId, fallback, user.messageId);
+      promMetrics.messagesSent.inc();
+    } catch (sendErr) {
+      log.warn('Kick fallback send failed', sendErr.message);
+    }
+  }
+}
+
 // Follow/new-viewer engagement is driven by chat activity, never JOIN/lurker presence.
 async function handleUserNotice({ channel, user, msg, tags }) {
   const msgId = tags?.['msg-id'];
@@ -1145,7 +1285,7 @@ app.get('/music-player', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Chat identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize SweatyClanker bot account</a></p><p><a href="/music-player">Open the NCS music player</a></p>`);
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Twitch identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize Twitch</a></p><p><a href="/auth/kick/login">Authorize Kick chat</a></p><p><a href="/music-player">Open the NCS music player</a></p>`);
 });
 
 // ========== INITIALIZATION ==========
@@ -1326,6 +1466,16 @@ async function bootstrap() {
   log.info('🔌 Connecting to Redis...');
   await connectRedis();
   await obsWebControl.initializeRedis(getRedis());
+  try {
+    const kickAuthorized = await kickClient.init();
+    if (kickClient.configured) {
+      log.info(`Kick chat integration configured; authorized=${kickAuthorized}`);
+    } else {
+      log.info('Kick chat integration not configured; Twitch continues independently');
+    }
+  } catch (err) {
+    log.warn('Kick initialization failed; Twitch continues independently', err.message);
+  }
   const redis = getRedis();
   if (redis) log.info('✅ Redis connected');
   else log.warn('⚠️ Redis not available, using file storage fallback');
