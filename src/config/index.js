@@ -86,6 +86,8 @@ const optional = {
   ALLOWED_ORIGINS: '',
   EVENTSUB_WSS_URL: 'wss://eventsub.wss.twitch.tv/ws',
   PUBLIC_URL: '',
+  KICK_CLIENT_ID: '',
+  KICK_CLIENT_SECRET: '',
 };
 
 const env = { ...optional };
@@ -157,6 +159,10 @@ const publicUrl = env.PUBLIC_URL || (process.env.RENDER_EXTERNAL_HOSTNAME
   : `http://localhost:${env.PORT}`);
 
 export const config = {
+  kick: {
+    clientId: env.KICK_CLIENT_ID || '',
+    clientSecret: env.KICK_CLIENT_SECRET || '',
+  },
   twitch: {
     username: env.TWITCH_USERNAME,
     clientId: env.TWITCH_CLIENT_ID,
