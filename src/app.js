@@ -1285,7 +1285,7 @@ app.get('/music-player', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Twitch identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize Twitch</a></p><p><a href="/auth/kick/login">Authorize Kick chat</a></p><p><a href="/music-player">Open the NCS music player</a></p>`);
+  res.send(`<h1>SweatyClanker Bot</h1><p>Status: Running</p><p>Twitch identity required: <strong>${configuredBotLogin()}</strong></p><p><a href="/auth/login">Authorize SweatyClanker bot account</a></p><p><a href="/auth/kick/login">Authorize Kick chat</a></p><p><a href="/music-player">Open the NCS music player</a></p>`);
 });
 
 // ========== INITIALIZATION ==========
