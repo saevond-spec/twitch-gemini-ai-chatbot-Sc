@@ -10,6 +10,8 @@ process.env.REDIS_URL = '';
 
 const {
   BOT_SCOPES,
+  CORE_BOT_SCOPES,
+  OPTIONAL_BOT_SCOPES,
   configuredBotLogin,
   tokenBelongsToConfiguredBot,
 } = await import('../src/twitch/auth.js');
@@ -28,4 +30,12 @@ test('bot OAuth scopes contain chat/clip access but no broadcaster monetization 
   assert.ok(BOT_SCOPES.includes('channel:manage:clips'));
   assert.equal(BOT_SCOPES.includes('channel:read:subscriptions'), false);
   assert.equal(BOT_SCOPES.includes('bits:read'), false);
+});
+
+test('missing live-clip permission cannot block core chat bot readiness',()=>{
+ assert.ok(BOT_SCOPES.includes('clips:edit'));
+ assert.ok(CORE_BOT_SCOPES.includes('user:write:chat'));
+ assert.ok(CORE_BOT_SCOPES.includes('channel:manage:clips'));
+ assert.ok(!CORE_BOT_SCOPES.includes('clips:edit'));
+ assert.ok(OPTIONAL_BOT_SCOPES.includes('clips:edit'));
 });

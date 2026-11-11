@@ -33,12 +33,15 @@ export const CORE_BOT_SCOPES = [
   'moderation:read', 'channel:manage:moderators',
   'moderator:read:followers',
   'moderator:manage:shoutouts',
-  'clips:edit',
   'channel:manage:clips',
 ];
 
+// Twitch's live Clip endpoint requires clips:edit, but its absence must not
+// disable chat, moderation, welcomes, and the independent VOD workflow.
+// Request it on next OAuth, report capability as limited if not granted.
 export const OPTIONAL_BOT_SCOPES = [
   'moderator:read:chatters',
+  'clips:edit',
 ];
 
 export const BOT_SCOPES = [...CORE_BOT_SCOPES, ...OPTIONAL_BOT_SCOPES];
@@ -246,6 +249,10 @@ export async function validateToken() {
       return false;
     }
 
+    const missingOptional = OPTIONAL_BOT_SCOPES.filter(scope => !granted.has(scope));
+    if (missingOptional.length) {
+      log.warn(`Optional Twitch scopes unavailable (bot chat remains eligible): ${missingOptional.join(', ')}`);
+    }
     currentToken.scopes = [...granted];
     currentToken.user_id = validation.user_id || currentToken.user_id;
     currentToken.login = validation.login || currentToken.login;
@@ -326,10 +333,14 @@ export async function exchangeCodeForToken(code, redirectUri) {
   }
 
   const granted = new Set(validation.scopes || []);
-  const missingScopes = BOT_SCOPES.filter(scope => !granted.has(scope));
+  const missingScopes = CORE_BOT_SCOPES.filter(scope => !granted.has(scope));
   if (missingScopes.length) {
     await revokeAccessToken(tokenData.access_token);
-    throw new Error(`Twitch authorization missing bot scopes: ${missingScopes.join(', ')}`);
+    throw new Error(`Twitch authorization missing required bot scopes: ${missingScopes.join(', ')}`);
+  }
+  const missingOptional = OPTIONAL_BOT_SCOPES.filter(scope => !granted.has(scope));
+  if (missingOptional.length) {
+    log.warn(`Optional Twitch capabilities unavailable (bot chat stays active): ${missingOptional.join(', ')}`);
   }
 
   tokenData.expires_at = Date.now() + tokenData.expires_in * 1000;
@@ -469,9 +480,13 @@ export function isAuthorized() {
 
 
 export function getAuthPersistenceStatus() {
+  const scopes = new Set(currentToken?.scopes || []);
   return {
     ...persistenceState,
     currentGeneration: Number(currentToken?.vault_generation || 0),
     authorized: isAuthorized(),
+    // Capability flags only: never return bearer/refresh tokens.
+    liveClipAuthorization: isAuthorized() && scopes.has('clips:edit'),
+    vodClipAuthorization: isAuthorized() && (scopes.has('channel:manage:clips') || scopes.has('editor:manage:clips')),
   };
 }
