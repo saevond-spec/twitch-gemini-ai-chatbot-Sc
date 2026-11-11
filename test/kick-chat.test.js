@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeKickChatEvent } from '../src/kick/client.js';
+process.env.TWITCH_USERNAME = 'SweatyClanker';
+process.env.TWITCH_CLIENT_ID = 'test-client';
+process.env.TWITCH_CLIENT_SECRET = 'test-secret';
+process.env.JOIN_CHANNELS = 'saevond';
+process.env.DEEPSEEK_API_KEY = 'test-ai-key';
+
+const { normalizeKickChatEvent } = await import('../src/kick/client.js');
 
 test('normalizeKickChatEvent maps official Kick chat payload into SweatyClanker shape', () => {
   const event = normalizeKickChatEvent({
